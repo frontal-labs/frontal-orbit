@@ -1,0 +1,98 @@
+{
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.cargo.loadOutDirsFromCheck": true,
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.inlayHints.typeHints.enable": true,
+  "rust-analyzer.inlayHints.parameterHints.enable": true,
+  "rust-analyzer.inlayHints.chainingHints.enable": true,
+  "files.associations": {
+    "*.rs": "rust"
+  },
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": true
+  },
+  "editor.rulers": [
+    80,
+    100
+  ],
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true,
+  "files.exclude": {
+    "**/target": true,
+    "**/Cargo.lock": true,
+    "**/.orbit": true,
+    "**/.sandbox-home": true,
+    "**/*.pdb": true,
+    "**/*.exe": true,
+    "**/*.so": true,
+    "**/*.dylib": true
+  },
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/.orbit/**": true,
+    "**/.sandbox-home/**": true
+  },
+  "search.exclude": {
+    "**/target": true,
+    "**/.orbit": true,
+    "**/.sandbox-home": true,
+    "**/Cargo.lock": true
+  },
+  "terminal.integrated.env.linux": {
+    "RUST_LOG": "debug",
+    "CARGO_TERM_COLOR": "always"
+  },
+  "terminal.integrated.env.osx": {
+    "RUST_LOG": "debug",
+    "CARGO_TERM_COLOR": "always"
+  },
+  "terminal.integrated.env.windows": {
+    "RUST_LOG": "debug",
+    "CARGO_TERM_COLOR": "always"
+  },
+  "lldb.launch.expressions": "native",
+  "lldb.displayFormat": "auto",
+  "lldb.dereferencePointers": true,
+  "lldb.console.showConsoleConsole": false,
+  "cSpell.words": [
+    "anthropic",
+    "claude",
+    "clippy",
+    "crates",
+    "docker",
+    "dotenv",
+    "env",
+    "git",
+    "libc",
+    "mock",
+    "claw",
+    "postgres",
+    "postgresql",
+    "qdrant",
+    "redis",
+    "repo",
+    "repos",
+    "rust",
+    "rustc",
+    "rustfmt",
+    "serde",
+    "sqlite",
+    "struct",
+    "tokio",
+    "tracing",
+    "uuid",
+    "vec",
+    "webhook",
+    "webhooks"
+  ],
+  "cSpell.ignorePaths": [
+    "target/**",
+    ".orbit/**",
+    ".sandbox-home/**",
+    "*.lock",
+    "*.sum"
+  ],
+  "git.ignoreLimitWarning": true
+}

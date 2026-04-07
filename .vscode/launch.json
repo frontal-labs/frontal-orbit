@@ -1,0 +1,101 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Claw CLI",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/claw",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "RUST_LOG",
+          "value": "debug"
+        },
+        {
+          "name": "CARGO_TERM_COLOR",
+          "value": "always"
+        }
+      ],
+      "console": "integratedTerminal",
+      "preLaunchTask": "cargo build debug"
+    },
+    {
+      "name": "Debug Claw REPL",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/claw",
+      "args": [
+        "--model",
+        "sonnet"
+      ],
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "RUST_LOG",
+          "value": "debug"
+        }
+      ],
+      "console": "integratedTerminal",
+      "preLaunchTask": "cargo build debug"
+    },
+    {
+      "name": "Debug Claw Prompt",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/claw",
+      "args": [
+        "prompt",
+        "summarize this repository"
+      ],
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "RUST_LOG",
+          "value": "debug"
+        }
+      ],
+      "console": "integratedTerminal",
+      "preLaunchTask": "cargo build debug"
+    },
+    {
+      "name": "Debug Mock Parity Harness",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/claw",
+      "args": [
+        "--provider",
+        "mock",
+        "prompt",
+        "test streaming"
+      ],
+      "cwd": "${workspaceFolder}",
+      "environment": [
+        {
+          "name": "RUST_LOG",
+          "value": "debug"
+        },
+        {
+          "name": "MOCK_ANTHROPIC_SERVICE_URL",
+          "value": "http://127.0.0.1:8765"
+        }
+      ],
+      "console": "integratedTerminal",
+      "preLaunchTask": "cargo build debug"
+    },
+    {
+      "name": "Debug Mock Service",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/mock-anthropic-service",
+      "args": [
+        "--bind",
+        "127.0.0.1:8765"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "cargo build mock service"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "vadimcn.vscode-lldb",
+    "ms-vscode.makefile-tools",
+    "ms-vscode.cmake-tools",
+    "redhat.vscode-yaml",
+    "ms-vscode.vscode-json",
+    "streetsidesoftware.code-spell-checker",
+    "esbenp.prettier-vscode",
+    "ms-vscode.vscode-docker",
+    "ms-vscode-remote.remote-containers",
+    "github.vscode-pull-request-github",
+    "ms-vscode.vscode-git-graph",
+    "formulahendry.code-runner",
+    "ms-vscode.vscode-precommit-hook"
+  ]
+}

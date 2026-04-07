@@ -1,0 +1,8 @@
+__pycache__/
+archive/
+.omx/
+.orbit-agents/
+target/
+# Claude Code local artifacts
+.claude/settings.local.json
+.claude/sessions/

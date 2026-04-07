@@ -1,0 +1,259 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo build debug",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--workspace"
+      ],
+      "group": "build",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo build release",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--release",
+        "--workspace"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo build mock service",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build",
+        "-p",
+        "mock-anthropic-service"
+      ],
+      "group": "build",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo test",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "test",
+        "--workspace"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo test workspace",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "test",
+        "--workspace",
+        "--",
+        "--nocapture"
+      ],
+      "group": "test",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo check",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "check",
+        "--workspace"
+      ],
+      "group": "build",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo clippy",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "group": "build",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo fmt",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "fmt",
+        "--all"
+      ],
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "cargo run claw",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--bin",
+        "claw"
+      ],
+      "group": "build",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated"
+      },
+      "dependsOn": "cargo build debug"
+    },
+    {
+      "label": "claw doctor",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--bin",
+        "claw",
+        "--",
+        "doctor"
+      ],
+      "group": "build",
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "mock parity harness",
+      "type": "shell",
+      "command": "./scripts/run_mock_parity_harness.sh",
+      "options": {
+        "cwd": "${workspaceFolder}/rust"
+      },
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "docker-compose up",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "up",
+        "-d"
+      ],
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "docker-compose down",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "down"
+      ],
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "docker-compose logs",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "logs",
+        "-f"
+      ],
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated"
+      }
+    }
+  ]
+}

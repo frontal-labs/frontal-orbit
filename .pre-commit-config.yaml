@@ -1,0 +1,111 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-json
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: mixed-line-ending
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: cargo-check
+        args: ['--workspace', '--all-targets', '--all-features']
+      - id: clippy
+        args: ['--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings']
+      - id: rust-fmt
+        args: ['--']
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.6
+    hooks:
+      - id: codespell
+        args:
+          - '--ignore-words-list=crate,serde,clippy,struct,impl,fn,mut,async,await'
+          - '--skip=*.lock,*.sum,target/,Cargo.lock'
+
+  - repo: https://github.com/r0x0r/pre-commit-rustsec
+    rev: v1.0.0
+    hooks:
+      - id: cargo-audit
+        args: ['--workspace']
+
+  - repo: local
+    hooks:
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --workspace
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-doc
+        name: cargo doc
+        entry: cargo doc --workspace --no-deps --document-private-items
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: orbit-doctor
+        name: orbit doctor
+        entry: cargo run --bin orbit -- doctor
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: check-cargo-lock
+        name: check Cargo.lock
+        entry: cargo check --locked --workspace
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: deny-unsafe
+        name: deny unsafe code
+        entry: grep -r "unsafe" crates/ --include="*.rs" --exclude-dir=target
+        language: system
+        types: [file]
+        pass_filenames: false
+        always_run: true
+
+# Configuration
+default_language_version:
+  python: python3
+
+# Skip patterns
+exclude: |
+  (?x)^(
+    target/|
+    \.git/|
+    \.cargo/|
+    \.orbit/|
+    \.sandbox-home/|
+    .*\.sum|
+    .*\.lock|
+    .*\.pdb|
+    .*\.dll|
+    .*\.exe|
+    .*\.so|
+    .*\.dylib|
+  )$
+
+# CI configuration
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false
