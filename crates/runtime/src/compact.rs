@@ -676,10 +676,10 @@ mod tests {
     #[test]
     fn extracts_key_files_from_message_content() {
         let files = collect_key_files(&[ConversationMessage::user_text(
-            "Update crates/runtime/src/compact.rs and crates/orbit-cli/src/main.rs next.",
+            "Update crates/runtime/src/compact.rs and crates/cli/src/main.rs next.",
         )]);
         assert!(files.contains(&"crates/runtime/src/compact.rs".to_string()));
-        assert!(files.contains(&"crates/orbit-cli/src/main.rs".to_string()));
+        assert!(files.contains(&"crates/cli/src/main.rs".to_string()));
     }
 
     #[test]

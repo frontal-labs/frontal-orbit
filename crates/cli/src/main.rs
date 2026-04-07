@@ -3160,7 +3160,7 @@ impl LiveCli {
 ██║     ██║     ███████║██║ █╗ ██║\n\
 ██║     ██║     ██╔══██║██║███╗██║\n\
 ╚██████╗███████╗██║  ██║╚███╔███╔╝\n\
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m 🦞\n\n\
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m \n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
@@ -9308,7 +9308,7 @@ UU conflicted.rs",
             task_label: "ship plugin progress".to_string(),
             step: 3,
             phase: "running read_file".to_string(),
-            detail: Some("reading crates/orbit-cli/src/main.rs".to_string()),
+            detail: Some("reading crates/cli/src/main.rs".to_string()),
             saw_final_text: false,
         };
 

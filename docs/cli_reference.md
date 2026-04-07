@@ -1,6 +1,6 @@
 # CLI Reference
 
-Reference for the `orbit` binary built from `crates/orbit-cli`.
+Reference for the `orbit` binary built from `crates/cli`.
 
 ## Build and run
 

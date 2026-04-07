@@ -6,7 +6,7 @@ The workspace is defined in `Cargo.toml` with `members = ["crates/*"]`.
 
 | Path | Package | Purpose |
 |---|---|---|
-| `crates/orbit-cli` | `orbit-cli` | Main CLI binary package (`orbit`) and REPL entry point. |
+| `crates/cli` | `orbit-cli` | Main CLI binary package (`orbit`) and REPL entry point. |
 | `crates/runtime` | `orbit-runtime` | Runtime/session model, config loading, permissions, MCP, orchestration utilities. |
 | `crates/api` | `orbit-api` | Provider-facing client and request/response types. |
 | `crates/tools` | `orbit-tools` | Tool registry and execution surfaces used by runtime/CLI. |

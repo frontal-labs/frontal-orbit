@@ -1,4 +1,4 @@
-# 🦞 Orbit — Rust Implementation
+# Orbit — Rust Implementation
 
 A high-performance Rust rewrite of the Orbit CLI agent harness. Built for speed, safety, and native tool execution.
 
@@ -20,7 +20,7 @@ cargo run -p orbit-cli -- --model claude-opus-4-6
 cargo run -p orbit-cli -- prompt "explain this codebase"
 
 # JSON output for automation
-cargo run -p orbit-cli -- --output-format json prompt "summarize crates/orbit-cli/src/main.rs"
+cargo run -p orbit-cli -- --output-format json prompt "summarize crates/cli/src/main.rs"
 ```
 
 ## Configuration
@@ -68,7 +68,7 @@ Harness coverage:
 Primary artifacts:
 
 - `crates/mock-anthropic-service/` — reusable mock Anthropic-compatible service
-- `crates/orbit-cli/tests/mock_parity_harness.rs` — clean-env CLI harness
+- `crates/cli/tests/mock_parity_harness.rs` — clean-env CLI harness
 - `scripts/run_mock_parity_harness.sh` — reproducible wrapper
 - `scripts/run_mock_parity_diff.py` — scenario checklist + PARITY mapping runner
 - `mock_parity_scenarios.json` — scenario-to-PARITY manifest

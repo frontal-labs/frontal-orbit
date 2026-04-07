@@ -162,6 +162,6 @@ Current Rust crates:
 - `mock-anthropic-service`
 - `plugins`
 - `runtime`
-- `orbit-cli` (package in `crates/orbit-cli/`)
+- `cli` (package in `crates/cli/`)
 - `telemetry`
 - `tools`

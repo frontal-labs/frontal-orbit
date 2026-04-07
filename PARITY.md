@@ -8,12 +8,12 @@ Last updated: 2026-04-03
 - Requested 9-lane checkpoint: **All 9 lanes merged on `main`.**
 - Current `main` HEAD: `ee31e00` (fixed-response implementations replaced with real AskUserQuestion + RemoteTrigger).
 - Repository stats at this checkpoint: **292 commits on `main` / 293 across all branches**, **9 crates**, **48,599 tracked Rust LOC**, **2,568 test LOC**, **3 authors**, date range **2026-03-31 → 2026-04-03**.
-- Mock parity harness stats: **12 scripted scenarios**, **42 captured mock API requests** in `crates/orbit-cli/tests/mock_parity_harness.rs`.
+- Mock parity harness stats: **12 scripted scenarios**, **42 captured mock API requests** in `crates/cli/tests/mock_parity_harness.rs`.
 
 ## Mock parity harness — milestone 1
 
 - [x] Deterministic Anthropic-compatible mock service (`crates/mock-anthropic-service`)
-- [x] Reproducible clean-environment CLI harness (`crates/orbit-cli/tests/mock_parity_harness.rs`)
+- [x] Reproducible clean-environment CLI harness (`crates/cli/tests/mock_parity_harness.rs`)
 - [x] Scripted scenarios: `streaming_text`, `read_file_roundtrip`, `grep_chunk_assembly`, `write_file_allowed`, `write_file_denied`
 
 ## Mock parity harness — milestone 2 (behavioral expansion)
