@@ -866,6 +866,10 @@ name = "orbit-core"
 version = "0.1.0"
 
 [[package]]
+name = "orbit-embeddings"
+version = "0.1.0"
+
+[[package]]
 name = "orbit-events"
 version = "0.1.0"
 
@@ -942,6 +946,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "orbit-training"
+version = "0.1.0"
 
 [[package]]
 name = "parking_lot"
