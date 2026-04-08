@@ -1,4 +1,4 @@
-name: Release binaries
+name: Release Frontal Orbit Code binaries
 
 on:
   push:
@@ -32,6 +32,14 @@ jobs:
             os: macos-14
             bin: orbit
             artifact_name: orbit-macos-arm64
+          - name: macos-x64
+            os: macos-13
+            bin: orbit
+            artifact_name: orbit-macos-x64
+          - name: windows-x64
+            os: windows-latest
+            bin: orbit.exe
+            artifact_name: orbit-windows-x64
     defaults:
       run:
         working-directory: .

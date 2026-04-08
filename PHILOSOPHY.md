@@ -25,7 +25,7 @@ That is the philosophy: **humans set direction; orbits perform the labor.**
 ## The Three-Part System
 
 ### 1. OmX (`oh-my-codex`)
-[oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) provides the workflow layer.
+[oh-my-codex](https://github.com/frontal-labs/oh-my-codex) provides the workflow layer.
 
 It turns short directives into structured execution:
 - planning keywords
@@ -36,7 +36,7 @@ It turns short directives into structured execution:
 This is the layer that converts a sentence into a repeatable work protocol.
 
 ### 2. orbithip
-[orbithip](https://github.com/Yeachan-Heo/orbithip) is the event and notification router.
+[orbithip](https://github.com/frontal-labs/orbithip) is the event and notification router.
 
 It watches:
 - git commits
@@ -48,7 +48,7 @@ It watches:
 Its job is to keep monitoring and delivery **outside** the coding agent's context window so the agents can stay focused on implementation instead of status formatting and notification routing.
 
 ### 3. OmO (`oh-my-openagent`)
-[oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) handles multi-agent coordination.
+[oh-my-openagent](https://github.com/frontal-labs/oh-my-openagent) handles multi-agent coordination.
 
 This is where planning, handoffs, disagreement resolution, and verification loops happen across agents.
 

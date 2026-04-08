@@ -6,7 +6,7 @@
 # Frontal Orbit
 
 Orbit is the public Rust implementation of the `orbit` CLI agent harness.
-The canonical implementation now lives at the repository root, and the current source of truth for this repository is **ultraworkers/orbit**.
+The canonical implementation now lives at the repository root, and the current source of truth for this repository is **frontal-labs/orbit-code**.
 
 > [!IMPORTANT]
 > Start with [`USAGE.md`](./USAGE.md) for build, auth, CLI, session, and parity-harness workflows. Make `orbit doctor` your first health check after building, use [`RUST-README.md`](./RUST-README.md) for crate-level details, read [`PARITY.md`](./PARITY.md) for the current Rust-port checkpoint, and see [`docs/container.md`](./docs/container.md) for the container-first workflow.

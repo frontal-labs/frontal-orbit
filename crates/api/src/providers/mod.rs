@@ -10,7 +10,7 @@ use crate::types::{MessageRequest, MessageResponse};
 
 pub mod anthropic;
 pub mod ollama;
-pub mod openai_compat;
+pub mod openai;
 
 #[allow(dead_code)]
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ApiError>> + Send + 'a>>;
@@ -86,7 +86,7 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             provider: ProviderKind::Xai,
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+            default_base_url: openai::DEFAULT_XAI_BASE_URL,
         },
     ),
     (
@@ -95,7 +95,7 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             provider: ProviderKind::Xai,
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+            default_base_url: openai::DEFAULT_XAI_BASE_URL,
         },
     ),
     (
@@ -104,7 +104,7 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             provider: ProviderKind::Xai,
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+            default_base_url: openai::DEFAULT_XAI_BASE_URL,
         },
     ),
     (
@@ -113,7 +113,7 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             provider: ProviderKind::Xai,
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+            default_base_url: openai::DEFAULT_XAI_BASE_URL,
         },
     ),
     (
@@ -122,7 +122,7 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             provider: ProviderKind::Xai,
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+            default_base_url: openai::DEFAULT_XAI_BASE_URL,
         },
     ),
 ];
@@ -170,7 +170,7 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             provider: ProviderKind::Xai,
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+            default_base_url: openai::DEFAULT_XAI_BASE_URL,
         });
     }
     None
@@ -184,10 +184,10 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if anthropic::has_auth_from_env_or_saved().unwrap_or(false) {
         return ProviderKind::Anthropic;
     }
-    if openai_compat::has_api_key("OPENAI_API_KEY") {
+    if openai::has_api_key("OPENAI_API_KEY") {
         return ProviderKind::OpenAi;
     }
-    if openai_compat::has_api_key("XAI_API_KEY") {
+    if openai::has_api_key("XAI_API_KEY") {
         return ProviderKind::Xai;
     }
     // Default to Ollama if no other auth is available
@@ -206,12 +206,12 @@ pub fn create_provider_client(
                 .with_prompt_cache(PromptCache::new("default")),
         )),
         "openai" => Ok(crate::client::ProviderClient::OpenAi(
-            openai_compat::OpenAiCompatClient::from_env(
-                openai_compat::OpenAiCompatConfig::openai(),
+            openai::OpenAiCompatClient::from_env(
+                openai::OpenAiCompatConfig::openai(),
             )?,
         )),
         "xai" => Ok(crate::client::ProviderClient::Xai(
-            openai_compat::OpenAiCompatClient::from_env(openai_compat::OpenAiCompatConfig::xai())?,
+            openai::OpenAiCompatClient::from_env(openai::OpenAiCompatConfig::xai())?,
         )),
         "ollama" => Ok(crate::client::ProviderClient::Ollama(
             ollama::OllamaClient::new(

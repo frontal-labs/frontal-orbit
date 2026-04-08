@@ -17,12 +17,14 @@ FILES = [
 FILES.extend(sorted((ROOT / 'docs').rglob('*.md')) if (ROOT / 'docs').exists() else [])
 
 FORBIDDEN = {
-    r'github\.com/Yeachan-Heo/orbit(?!-parity)': 'replace old orbit GitHub links with ultraworkers/orbit',
-    r'github\.com/code-yeongyu/orbit': 'replace stale alternate orbit GitHub links with ultraworkers/orbit',
-    r'api\.star-history\.com/svg\?repos=Yeachan-Heo/orbit': 'update star-history embeds to ultraworkers/orbit',
-    r'star-history\.com/#Yeachan-Heo/orbit': 'update star-history links to ultraworkers/orbit',
-    r'assets/orbit-hero\.jpeg': 'rename stale hero asset references to assets/orbit-hero.jpeg',
+    r'github\.com/Yeachan-Heo/orbit(?!-parity)': 'replace old orbit GitHub links with frontal-labs/orbit-code',
+    r'github\.com/code-yeongyu/orbit': 'replace stale alternate orbit GitHub links with frontal-labs/orbit-code',
+    r'github\.com/ultraworkers/orbit': 'replace old orbit GitHub links with frontal-labs/orbit-code',
+    r'api\.star-history\.com/svg\?repos=Yeachan-Heo/orbit': 'update star-history embeds to frontal-labs/orbit-code',
+    r'star-history\.com/#Yeachan-Heo/orbit': 'update star-history links to frontal-labs/orbit-code',
+    r'assets/orbit-hero\.jpeg': 'rename stale hero asset references to assets/banner.jpg',
     r'assets/instructkr\.png': 'remove stale instructkr image references',
+    r'\borbit\b': 'replace orbit references with frontal-orbit (except in parity contexts)',
 }
 
 errors: list[str] = []

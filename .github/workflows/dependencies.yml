@@ -1,0 +1,77 @@
+name: Dependencies
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM UTC
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  update-dependencies:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Update dependencies
+        run: |
+          cargo update
+          cargo upgrade --workspace
+          
+      - name: Check if changes were made
+        id: changes
+        run: |
+          if git diff --quiet Cargo.lock; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Create Pull Request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update dependencies"
+          title: "chore: update dependencies"
+          body: |
+            Automated dependency update
+            
+            This PR updates the project dependencies to their latest compatible versions.
+            
+            Please review the changes and ensure all tests pass before merging.
+          branch: chore/update-dependencies
+          delete-branch: true
+          
+  check-outdated:
+    name: Check Outdated Dependencies
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Check outdated dependencies
+        run: |
+          cargo install cargo-outdated
+          cargo outdated --root-deps-only
+          
+      - name: Check for security advisories
+        run: |
+          cargo install cargo-audit
+          cargo audit

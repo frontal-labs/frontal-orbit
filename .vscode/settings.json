@@ -67,7 +67,7 @@
     "git",
     "libc",
     "mock",
-    "claw",
+    "orbit",
     "postgres",
     "postgresql",
     "qdrant",

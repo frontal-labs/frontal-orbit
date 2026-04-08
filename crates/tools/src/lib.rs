@@ -2620,7 +2620,7 @@ fn normalize_fetch_url(url: &str) -> Result<String, String> {
 }
 
 fn build_search_url(query: &str) -> Result<reqwest::Url, String> {
-    if let Ok(base) = std::env::var("CLAWD_WEB_SEARCH_BASE_URL") {
+    if let Ok(base) = std::env::var("ORBIT_WEB_SEARCH_BASE_URL") {
         let mut url = reqwest::Url::parse(&base).map_err(|error| error.to_string())?;
         url.query_pairs_mut().append_pair("q", query);
         return Ok(url);
@@ -2965,7 +2965,7 @@ fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
 }
 
 fn todo_store_path() -> Result<std::path::PathBuf, String> {
-    if let Ok(path) = std::env::var("CLAWD_TODO_STORE") {
+    if let Ok(path) = std::env::var("ORBIT_TODO_STORE") {
         return Ok(std::path::PathBuf::from(path));
     }
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
@@ -3014,7 +3014,7 @@ fn skill_lookup_roots() -> Vec<SkillLookupRoot> {
         push_project_skill_lookup_roots(&mut roots, &cwd);
     }
 
-    if let Ok(orbit_config_home) = std::env::var("CLAW_CONFIG_HOME") {
+    if let Ok(orbit_config_home) = std::env::var("ORBIT_CONFIG_HOME") {
         push_prefixed_skill_lookup_roots(&mut roots, std::path::Path::new(&orbit_config_home));
     }
     if let Ok(codex_home) = std::env::var("CODEX_HOME") {
@@ -4123,7 +4123,7 @@ fn canonical_tool_token(value: &str) -> String {
 }
 
 fn agent_store_dir() -> Result<std::path::PathBuf, String> {
-    if let Ok(path) = std::env::var("CLAWD_AGENT_STORE") {
+    if let Ok(path) = std::env::var("ORBIT_AGENT_STORE") {
         return Ok(std::path::PathBuf::from(path));
     }
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
@@ -4869,7 +4869,7 @@ fn config_file_for_scope(scope: ConfigScope) -> Result<PathBuf, String> {
 }
 
 fn config_home_dir() -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("CLAW_CONFIG_HOME") {
+    if let Ok(path) = std::env::var("ORBIT_CONFIG_HOME") {
         return Ok(PathBuf::from(path));
     }
     let home = std::env::var("HOME").map_err(|_| String::from("HOME is not set"))?;
@@ -5271,6 +5271,18 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn loopback_bind_available() -> bool {
+        static AVAILABLE: OnceLock<bool> = OnceLock::new();
+        *AVAILABLE.get_or_init(|| match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => {
+                drop(listener);
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
+            Err(error) => panic!("failed to probe loopback bind availability: {error}"),
+        })
+    }
+
     fn temp_path(name: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -5627,6 +5639,10 @@ mod tests {
 
     #[test]
     fn web_fetch_returns_prompt_aware_summary() {
+        if !loopback_bind_available() {
+            return;
+        }
+
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.starts_with("GET /page "));
             HttpResponse::html(
@@ -5667,6 +5683,10 @@ mod tests {
 
     #[test]
     fn web_fetch_supports_plain_text_and_rejects_invalid_url() {
+        if !loopback_bind_available() {
+            return;
+        }
+
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.starts_with("GET /plain "));
             HttpResponse::text(200, "OK", "plain text response")
@@ -5701,6 +5721,10 @@ mod tests {
 
     #[test]
     fn web_search_extracts_and_filters_results() {
+        if !loopback_bind_available() {
+            return;
+        }
+
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.contains("GET /search?q=rust+web+search "));
             HttpResponse::html(
@@ -5716,7 +5740,7 @@ mod tests {
         }));
 
         std::env::set_var(
-            "CLAWD_WEB_SEARCH_BASE_URL",
+            "ORBIT_WEB_SEARCH_BASE_URL",
             format!("http://{}/search", server.addr()),
         );
         let result = execute_tool(
@@ -5728,7 +5752,7 @@ mod tests {
             }),
         )
         .expect("WebSearch should succeed");
-        std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
+        std::env::remove_var("ORBIT_WEB_SEARCH_BASE_URL");
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(output["query"], "rust web search");
@@ -5745,6 +5769,10 @@ mod tests {
 
     #[test]
     fn web_search_handles_generic_links_and_invalid_base_url() {
+        if !loopback_bind_available() {
+            return;
+        }
+
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -5764,7 +5792,7 @@ mod tests {
         }));
 
         std::env::set_var(
-            "CLAWD_WEB_SEARCH_BASE_URL",
+            "ORBIT_WEB_SEARCH_BASE_URL",
             format!("http://{}/fallback", server.addr()),
         );
         let result = execute_tool(
@@ -5774,7 +5802,7 @@ mod tests {
             }),
         )
         .expect("WebSearch fallback parsing should succeed");
-        std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
+        std::env::remove_var("ORBIT_WEB_SEARCH_BASE_URL");
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         let results = output["results"].as_array().expect("results array");
@@ -5787,10 +5815,10 @@ mod tests {
         assert_eq!(content[0]["url"], "https://example.com/one");
         assert_eq!(content[1]["url"], "https://docs.rs/tokio");
 
-        std::env::set_var("CLAWD_WEB_SEARCH_BASE_URL", "://bad-base-url");
+        std::env::set_var("ORBIT_WEB_SEARCH_BASE_URL", "://bad-base-url");
         let error = execute_tool("WebSearch", &json!({ "query": "generic links" }))
             .expect_err("invalid base URL should fail");
-        std::env::remove_var("CLAWD_WEB_SEARCH_BASE_URL");
+        std::env::remove_var("ORBIT_WEB_SEARCH_BASE_URL");
         assert!(error.contains("relative URL without a base") || error.contains("empty host"));
     }
 
@@ -5857,7 +5885,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("todos.json");
-        std::env::set_var("CLAWD_TODO_STORE", &path);
+        std::env::set_var("ORBIT_TODO_STORE", &path);
 
         let first = execute_tool(
             "TodoWrite",
@@ -5883,7 +5911,7 @@ mod tests {
             }),
         )
         .expect("TodoWrite should succeed");
-        std::env::remove_var("CLAWD_TODO_STORE");
+        std::env::remove_var("ORBIT_TODO_STORE");
         let _ = std::fs::remove_file(path);
 
         let second_output: serde_json::Value = serde_json::from_str(&second).expect("valid json");
@@ -5904,7 +5932,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("todos-errors.json");
-        std::env::set_var("CLAWD_TODO_STORE", &path);
+        std::env::set_var("ORBIT_TODO_STORE", &path);
 
         let empty = execute_tool("TodoWrite", &json!({ "todos": [] }))
             .expect_err("empty todos should fail");
@@ -5944,7 +5972,7 @@ mod tests {
             }),
         )
         .expect("completed todos should succeed");
-        std::env::remove_var("CLAWD_TODO_STORE");
+        std::env::remove_var("ORBIT_TODO_STORE");
         let _ = fs::remove_file(path);
 
         let output: serde_json::Value = serde_json::from_str(&nudge).expect("valid json");
@@ -6069,11 +6097,11 @@ mod tests {
         .expect("skill file should exist");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_codex_home = std::env::var("CODEX_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::remove_var("CODEX_HOME");
         std::env::set_current_dir(&nested).expect("set cwd");
 
@@ -6093,8 +6121,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_codex_home {
             Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -6127,11 +6155,11 @@ mod tests {
         .expect("agents skill file should exist");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_codex_home = std::env::var("CODEX_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::remove_var("CODEX_HOME");
         std::env::set_current_dir(&nested).expect("set cwd");
 
@@ -6163,8 +6191,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_codex_home {
             Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -6191,11 +6219,11 @@ mod tests {
         .expect("learned skill file should exist");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_codex_home = std::env::var("CODEX_HOME").ok();
         let original_claude_config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::remove_var("CODEX_HOME");
         std::env::set_var("CLAUDE_CONFIG_DIR", &claude_config_dir);
 
@@ -6214,8 +6242,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_codex_home {
             Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -6250,11 +6278,11 @@ mod tests {
         .expect("direct command file should exist");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_codex_home = std::env::var("CODEX_HOME").ok();
         let original_claude_config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::remove_var("CODEX_HOME");
         std::env::set_var("CLAUDE_CONFIG_DIR", &claude_config_dir);
 
@@ -6286,8 +6314,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_codex_home {
             Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -6317,11 +6345,11 @@ mod tests {
         .expect("legacy command file should exist");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_codex_home = std::env::var("CODEX_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::remove_var("CODEX_HOME");
         std::env::set_current_dir(&nested).expect("set cwd");
 
@@ -6341,8 +6369,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_codex_home {
             Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -6390,7 +6418,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = temp_path("agent-store");
-        std::env::set_var("CLAWD_AGENT_STORE", &dir);
+        std::env::set_var("ORBIT_AGENT_STORE", &dir);
         let captured = Arc::new(Mutex::new(None::<AgentJob>));
         let captured_for_spawn = Arc::clone(&captured);
 
@@ -6410,7 +6438,7 @@ mod tests {
             },
         )
         .expect("Agent should succeed");
-        std::env::remove_var("CLAWD_AGENT_STORE");
+        std::env::remove_var("ORBIT_AGENT_STORE");
 
         assert_eq!(manifest.name, "ship-audit");
         assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
@@ -6473,7 +6501,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = temp_path("agent-runner");
-        std::env::set_var("CLAWD_AGENT_STORE", &dir);
+        std::env::set_var("ORBIT_AGENT_STORE", &dir);
 
         let completed = execute_agent_with_spawn(
             AgentInput {
@@ -6605,7 +6633,7 @@ mod tests {
         );
         assert_eq!(spawn_error_manifest_json["derivedState"], "truly_idle");
 
-        std::env::remove_var("CLAWD_AGENT_STORE");
+        std::env::remove_var("ORBIT_AGENT_STORE");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -7355,10 +7383,10 @@ mod tests {
         .expect("write global settings");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::set_current_dir(&cwd).expect("set cwd");
 
         let get = execute_tool("Config", &json!({"setting": "verbose"})).expect("get config");
@@ -7392,8 +7420,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -7421,10 +7449,10 @@ mod tests {
         .expect("write local settings");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::set_current_dir(&cwd).expect("set cwd");
 
         let enter = execute_tool("EnterPlanMode", &json!({})).expect("enter plan mode");
@@ -7465,8 +7493,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -7489,10 +7517,10 @@ mod tests {
         std::fs::create_dir_all(cwd.join(".orbit")).expect("cwd dir");
 
         let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         std::env::set_current_dir(&cwd).expect("set cwd");
 
         let enter = execute_tool("EnterPlanMode", &json!({})).expect("enter plan mode");
@@ -7526,8 +7554,8 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         let _ = std::fs::remove_dir_all(root);
     }

@@ -1,14 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const STARTER_CLAW_JSON: &str = concat!(
+const STARTER_ORBIT_JSON: &str = concat!(
     "{\n",
     "  \"permissions\": {\n",
     "    \"defaultMode\": \"dontAsk\"\n",
     "  }\n",
     "}\n",
 );
-const GITIGNORE_COMMENT: &str = "# Claw Code local artifacts";
+const GITIGNORE_COMMENT: &str = "# Orbit local artifacts";
 const GITIGNORE_ENTRIES: [&str; 2] = [".orbit/settings.local.json", ".orbit/sessions/"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +89,7 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
     let orbit_json = cwd.join(".orbit.json");
     artifacts.push(InitArtifact {
         name: ".orbit.json",
-        status: write_file_if_missing(&orbit_json, STARTER_CLAW_JSON)?,
+        status: write_file_if_missing(&orbit_json, STARTER_ORBIT_JSON)?,
     });
 
     let gitignore = cwd.join(".gitignore");
@@ -164,7 +164,7 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
     let mut lines = vec![
         "# ORBIT.md".to_string(),
         String::new(),
-        "This file provides guidance to Claw Code (orbitcode.dev) when working with code in this repository.".to_string(),
+        "This file provides guidance to Orbit (orbitcode.dev) when working with code in this repository.".to_string(),
         String::new(),
     ];
 

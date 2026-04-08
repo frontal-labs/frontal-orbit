@@ -2,7 +2,7 @@ use crate::error::ApiError;
 use crate::prompt_cache::{PromptCache, PromptCacheRecord, PromptCacheStats};
 use crate::providers::anthropic::{self, AnthropicClient, AuthSource};
 use crate::providers::ollama;
-use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConfig};
+use crate::providers::openai::{self, OpenAiCompatClient, OpenAiCompatConfig};
 use crate::providers::{Provider, ProviderKind};
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
@@ -120,7 +120,7 @@ impl ProviderClient {
 #[derive(Debug)]
 pub enum MessageStream {
     Anthropic(anthropic::MessageStream),
-    OpenAiCompat(openai_compat::MessageStream),
+    OpenAiCompat(openai::MessageStream),
     Ollama(ollama::MessageStream),
 }
 
@@ -153,7 +153,7 @@ pub fn read_base_url() -> String {
 
 #[must_use]
 pub fn read_xai_base_url() -> String {
-    openai_compat::read_base_url(OpenAiCompatConfig::xai())
+    openai::read_base_url(OpenAiCompatConfig::xai())
 }
 
 #[cfg(test)]

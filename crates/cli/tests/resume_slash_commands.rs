@@ -144,7 +144,7 @@ fn resumed_config_command_loads_settings_files_end_to_end() {
             "/config",
             "model",
         ],
-        &[("CLAW_CONFIG_HOME", config_home.to_str().expect("utf8 path"))],
+        &[("ORBIT_CONFIG_HOME", config_home.to_str().expect("utf8 path"))],
     );
 
     // then

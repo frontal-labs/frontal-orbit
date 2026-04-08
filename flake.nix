@@ -53,7 +53,7 @@
 
           meta = with pkgs.lib; {
             description = "Autonomous software engineering server";
-            homepage = "https://github.com/ultraworkers/orbit";
+            homepage = "https://github.com/frontal-labs/frontal-orbit";
             license = licenses.mit;
             platforms = platforms.linux ++ platforms.darwin;
           };

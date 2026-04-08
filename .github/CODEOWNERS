@@ -1,0 +1,27 @@
+# This file controls who is auto-added as reviewers for pull requests.
+
+# Global owners - will be reviewers for every PR
+* @frontal-labs
+
+# Specific file/directory owners
+
+# Core CLI and API
+crates/cli/ @frontal-labs
+crates/api/ @frontal-labs
+crates/agents/ @frontal-labs
+
+# Documentation
+docs/ @frontal-labs
+*.md @frontal-labs
+
+# GitHub workflows and configurations
+.github/ @frontal-labs
+
+# Build and release configurations
+Cargo.toml @frontal-labs
+Cargo.lock @frontal-labs
+Dockerfile* @frontal-labs
+docker-compose.yml @frontal-labs
+
+# Scripts and automation
+scripts/ @frontal-labs

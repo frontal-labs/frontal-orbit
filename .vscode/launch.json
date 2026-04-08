@@ -2,10 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Claw CLI",
+      "name": "Debug Orbit CLI",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/target/debug/claw",
+      "program": "${workspaceFolder}/target/debug/orbit",
       "args": [],
       "cwd": "${workspaceFolder}",
       "environment": [
@@ -22,10 +22,10 @@
       "preLaunchTask": "cargo build debug"
     },
     {
-      "name": "Debug Claw REPL",
+      "name": "Debug Orbit REPL",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/target/debug/claw",
+      "program": "${workspaceFolder}/target/debug/orbit",
       "args": [
         "--model",
         "sonnet"
@@ -41,10 +41,10 @@
       "preLaunchTask": "cargo build debug"
     },
     {
-      "name": "Debug Claw Prompt",
+      "name": "Debug Orbit Prompt",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/target/debug/claw",
+      "program": "${workspaceFolder}/target/debug/orbit",
       "args": [
         "prompt",
         "summarize this repository"
@@ -63,7 +63,7 @@
       "name": "Debug Mock Parity Harness",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/target/debug/claw",
+      "program": "${workspaceFolder}/target/debug/orbit",
       "args": [
         "--provider",
         "mock",

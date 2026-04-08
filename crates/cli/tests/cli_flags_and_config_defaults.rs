@@ -150,7 +150,7 @@ fn config_command_loads_defaults_from_standard_config_locations() {
 
     // when
     let output = command_in(&temp_dir)
-        .env("CLAW_CONFIG_HOME", &config_home)
+        .env("ORBIT_CONFIG_HOME", &config_home)
         .args([
             "--resume",
             session_path.to_str().expect("utf8 path"),
@@ -194,7 +194,7 @@ fn doctor_command_runs_as_a_local_shell_entrypoint() {
 
     // when
     let output = command_in(&temp_dir)
-        .env("CLAW_CONFIG_HOME", &config_home)
+        .env("ORBIT_CONFIG_HOME", &config_home)
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
@@ -222,7 +222,7 @@ fn local_subcommand_help_does_not_fall_through_to_runtime_or_provider_calls() {
     fs::create_dir_all(&config_home).expect("config home should exist");
 
     let doctor_help = command_in(&temp_dir)
-        .env("CLAW_CONFIG_HOME", &config_home)
+        .env("ORBIT_CONFIG_HOME", &config_home)
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
@@ -230,7 +230,7 @@ fn local_subcommand_help_does_not_fall_through_to_runtime_or_provider_calls() {
         .output()
         .expect("doctor help should launch");
     let status_help = command_in(&temp_dir)
-        .env("CLAW_CONFIG_HOME", &config_home)
+        .env("ORBIT_CONFIG_HOME", &config_home)
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")

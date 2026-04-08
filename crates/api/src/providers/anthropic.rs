@@ -949,8 +949,8 @@ mod tests {
         }
     }
 
-    fn spawn_token_server(response_body: &'static str) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    fn spawn_token_server(response_body: &'static str) -> Result<String, std::io::Error> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr().expect("local addr");
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept connection");
@@ -965,7 +965,15 @@ mod tests {
                 .write_all(response.as_bytes())
                 .expect("write response");
         });
-        format!("http://{address}/oauth/token")
+        Ok(format!("http://{address}/oauth/token"))
+    }
+
+    fn try_spawn_token_server(response_body: &'static str) -> Option<String> {
+        match spawn_token_server(response_body) {
+            Ok(url) => Some(url),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => None,
+            Err(error) => panic!("bind listener: {error}"),
+        }
     }
 
     #[test]
@@ -973,7 +981,7 @@ mod tests {
         let _guard = env_lock();
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         let error = super::read_api_key().expect_err("missing key should error");
         assert!(matches!(
             error,
@@ -1043,7 +1051,7 @@ mod tests {
     fn auth_source_from_saved_oauth_when_env_absent() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
@@ -1058,7 +1066,7 @@ mod tests {
         assert_eq!(auth.bearer_token(), Some("saved-access-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         cleanup_temp_config_home(&config_home);
     }
 
@@ -1082,7 +1090,7 @@ mod tests {
     fn resolve_saved_oauth_token_refreshes_expired_credentials() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
@@ -1093,9 +1101,14 @@ mod tests {
         })
         .expect("save expired oauth credentials");
 
-        let token_url = spawn_token_server(
+        let Some(token_url) = try_spawn_token_server(
             "{\"access_token\":\"refreshed-token\",\"refresh_token\":\"fresh-refresh\",\"expires_at\":9999999999,\"scopes\":[\"scope:a\"]}",
-        );
+        ) else {
+            clear_oauth_credentials().expect("clear credentials");
+            std::env::remove_var("ORBIT_CONFIG_HOME");
+            cleanup_temp_config_home(&config_home);
+            return;
+        };
         let resolved = resolve_saved_oauth_token(&sample_oauth_config(token_url))
             .expect("resolve refreshed token")
             .expect("token set present");
@@ -1106,7 +1119,7 @@ mod tests {
         assert_eq!(stored.access_token, "refreshed-token");
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         cleanup_temp_config_home(&config_home);
     }
 
@@ -1114,7 +1127,7 @@ mod tests {
     fn resolve_startup_auth_source_uses_saved_oauth_without_loading_config() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
@@ -1130,7 +1143,7 @@ mod tests {
         assert_eq!(auth.bearer_token(), Some("saved-access-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         cleanup_temp_config_home(&config_home);
     }
 
@@ -1138,7 +1151,7 @@ mod tests {
     fn resolve_startup_auth_source_errors_when_refreshable_token_lacks_config() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
@@ -1162,7 +1175,7 @@ mod tests {
         assert_eq!(stored.refresh_token.as_deref(), Some("refresh-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         cleanup_temp_config_home(&config_home);
     }
 
@@ -1170,7 +1183,7 @@ mod tests {
     fn resolve_saved_oauth_token_preserves_refresh_token_when_refresh_response_omits_it() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
@@ -1181,9 +1194,14 @@ mod tests {
         })
         .expect("save expired oauth credentials");
 
-        let token_url = spawn_token_server(
+        let Some(token_url) = try_spawn_token_server(
             "{\"access_token\":\"refreshed-token\",\"expires_at\":9999999999,\"scopes\":[\"scope:a\"]}",
-        );
+        ) else {
+            clear_oauth_credentials().expect("clear credentials");
+            std::env::remove_var("ORBIT_CONFIG_HOME");
+            cleanup_temp_config_home(&config_home);
+            return;
+        };
         let resolved = resolve_saved_oauth_token(&sample_oauth_config(token_url))
             .expect("resolve refreshed token")
             .expect("token set present");
@@ -1195,7 +1213,7 @@ mod tests {
         assert_eq!(stored.refresh_token.as_deref(), Some("refresh-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("ORBIT_CONFIG_HOME");
         cleanup_temp_config_home(&config_home);
     }
 

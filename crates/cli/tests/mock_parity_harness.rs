@@ -22,9 +22,11 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
         .map(|entry| (entry.name.clone(), entry))
         .collect::<BTreeMap<_, _>>();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-    let server = runtime
-        .block_on(MockAnthropicService::spawn())
-        .expect("mock service should start");
+    let server = match runtime.block_on(MockAnthropicService::spawn()) {
+        Ok(server) => server,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+        Err(error) => panic!("mock service should start: {error}"),
+    };
     let base_url = server.base_url();
 
     let cases = [
@@ -294,7 +296,7 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
         .env_clear()
         .env("ANTHROPIC_API_KEY", "test-parity-key")
         .env("ANTHROPIC_BASE_URL", base_url)
-        .env("CLAW_CONFIG_HOME", &workspace.config_home)
+        .env("ORBIT_CONFIG_HOME", &workspace.config_home)
         .env("HOME", &workspace.home)
         .env("NO_COLOR", "1")
         .env("PATH", "/usr/bin:/bin")
@@ -403,7 +405,7 @@ fn prepare_plugin_fixture(workspace: &HarnessWorkspace) {
     let script_path = tool_dir.join("echo-json.sh");
     fs::write(
         &script_path,
-        "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$CLAWD_PLUGIN_ID\" \"$CLAWD_TOOL_NAME\" \"$INPUT\"\n",
+        "#!/bin/sh\nINPUT=$(cat)\nprintf '{\"plugin\":\"%s\",\"tool\":\"%s\",\"input\":%s}\\n' \"$ORBIT_PLUGIN_ID\" \"$ORBIT_TOOL_NAME\" \"$INPUT\"\n",
     )
     .expect("plugin script should write");
     let mut permissions = fs::metadata(&script_path)

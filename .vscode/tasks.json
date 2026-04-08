@@ -151,13 +151,13 @@
       }
     },
     {
-      "label": "cargo run claw",
+      "label": "cargo run orbit",
       "type": "shell",
       "command": "cargo",
       "args": [
         "run",
         "--bin",
-        "claw"
+        "orbit"
       ],
       "group": "build",
       "problemMatcher": "$rustc",
@@ -170,13 +170,13 @@
       "dependsOn": "cargo build debug"
     },
     {
-      "label": "claw doctor",
+      "label": "orbit doctor",
       "type": "shell",
       "command": "cargo",
       "args": [
         "run",
         "--bin",
-        "claw",
+        "orbit",
         "--",
         "doctor"
       ],

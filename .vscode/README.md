@@ -1,13 +1,13 @@
-# VS Code Configuration for Claw Code
+# VS Code Configuration for Orbit
 
-This directory contains VS Code configuration files optimized for developing Claw Code.
+This directory contains VS Code configuration files optimized for developing Orbit.
 
 ## Files Overview
 
 ### **launch.json** - Debug Configurations
-- **Debug Claw CLI**: Main CLI debugging with environment variables
-- **Debug Claw REPL**: Interactive REPL debugging
-- **Debug Claw Prompt**: One-shot prompt debugging
+- **Debug Orbit CLI**: Main CLI debugging with environment variables
+- **Debug Orbit REPL**: Interactive REPL debugging
+- **Debug Orbit Prompt**: One-shot prompt debugging
 - **Debug Mock Parity Harness**: Testing with mock service
 - **Debug Mock Service**: Standalone mock service debugging
 
@@ -20,8 +20,8 @@ This directory contains VS Code configuration files optimized for developing Cla
 - **cargo check**: Quick syntax check
 - **cargo clippy**: Linting
 - **cargo fmt**: Code formatting
-- **cargo run claw**: Run the CLI
-- **claw doctor**: Health check
+- **cargo run orbit**: Run the CLI
+- **orbit doctor**: Health check
 - **mock parity harness**: Run parity tests
 - **docker-compose up/down/logs**: Container management
 
@@ -44,7 +44,7 @@ This directory contains VS Code configuration files optimized for developing Cla
 
 1. **Install Extensions**: VS Code will prompt to install recommended extensions
 2. **Build Project**: `Ctrl+Shift+P` > `Tasks: Run Task` > `cargo build debug`
-3. **Debug**: `F5` or use `Debug Claw CLI` configuration
+3. **Debug**: `F5` or use `Debug Orbit CLI` configuration
 4. **Test**: `Ctrl+Shift+P` > `Tasks: Run Task` > `cargo test`
 
 ## Key Features

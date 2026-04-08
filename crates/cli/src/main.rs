@@ -3154,13 +3154,7 @@ impl LiveCli {
             |path| path.display().to_string(),
         );
         format!(
-            "\x1b[38;5;196m\
- ██████╗██╗      █████╗ ██╗    ██╗\n\
-██╔════╝██║     ██╔══██╗██║    ██║\n\
-██║     ██║     ███████║██║ █╗ ██║\n\
-██║     ██║     ██╔══██║██║███╗██║\n\
-╚██████╗███████╗██║  ██║╚███╔███╔╝\n\
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m \n\n\
+            "\x1b[38;5;208mCode\x1b[0m \n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
@@ -7613,8 +7607,8 @@ mod tests {
         }
     }
 
-    fn spawn_token_server(response_body: &'static str) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    fn spawn_token_server(response_body: &'static str) -> Result<String, std::io::Error> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr().expect("local addr");
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept connection");
@@ -7629,7 +7623,7 @@ mod tests {
                 .write_all(response.as_bytes())
                 .expect("write response");
         });
-        format!("http://{address}/oauth/token")
+        Ok(format!("http://{address}/oauth/token"))
     }
 
     fn with_current_dir<T>(cwd: &Path, f: impl FnOnce() -> T) -> T {
@@ -7717,16 +7711,16 @@ mod tests {
         )
         .expect("project config should write");
 
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_permission_mode = std::env::var("RUSTY_CLAUDE_PERMISSION_MODE").ok();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
 
         let resolved = with_current_dir(&cwd, super::default_permission_mode);
 
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_permission_mode {
             Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
@@ -7751,16 +7745,16 @@ mod tests {
         )
         .expect("project config should write");
 
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_permission_mode = std::env::var("RUSTY_CLAUDE_PERMISSION_MODE").ok();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", "read-only");
 
         let resolved = with_current_dir(&cwd, super::default_permission_mode);
 
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_permission_mode {
             Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
@@ -7793,10 +7787,10 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace should exist");
         std::fs::create_dir_all(&config_home).expect("config home should exist");
 
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
         let original_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
         let original_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
-        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
 
@@ -7808,9 +7802,29 @@ mod tests {
         })
         .expect("save expired oauth credentials");
 
-        let token_url = spawn_token_server(
+        let token_url = match spawn_token_server(
             r#"{"access_token":"refreshed-access-token","refresh_token":"refreshed-refresh-token","expires_at":4102444800,"scopes":["org:create_api_key","user:profile"]}"#,
-        );
+        ) {
+            Ok(token_url) => token_url,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                match original_config_home {
+                    Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+                    None => std::env::remove_var("ORBIT_CONFIG_HOME"),
+                }
+                match original_api_key {
+                    Some(value) => std::env::set_var("ANTHROPIC_API_KEY", value),
+                    None => std::env::remove_var("ANTHROPIC_API_KEY"),
+                }
+                match original_auth_token {
+                    Some(value) => std::env::set_var("ANTHROPIC_AUTH_TOKEN", value),
+                    None => std::env::remove_var("ANTHROPIC_AUTH_TOKEN"),
+                }
+                std::fs::remove_dir_all(workspace).expect("temp workspace should clean up");
+                std::fs::remove_dir_all(config_home).expect("temp config home should clean up");
+                return;
+            }
+            Err(error) => panic!("bind listener: {error}"),
+        };
 
         let auth =
             super::resolve_cli_auth_source_for_cwd(&workspace, || sample_oauth_config(token_url))
@@ -7821,8 +7835,8 @@ mod tests {
             .expect("stored credentials should exist");
 
         match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
+            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
         }
         match original_api_key {
             Some(value) => std::env::set_var("ANTHROPIC_API_KEY", value),

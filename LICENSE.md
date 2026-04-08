@@ -84,8 +84,8 @@ responsible for compliance with all applicable export laws and regulations.
 For questions about this license or the software, please contact:
 
 Frontal Labs
-Email: legal@ultraworkers.com
-Website: https://ultraworkers.com
+Email: legal@frontal.dev
+Website: https://frontal.dev
 
 ---
 

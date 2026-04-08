@@ -824,14 +824,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbit-api-client"
-version = "0.1.0"
-
-[[package]]
-name = "orbit-brain"
-version = "0.1.0"
-
-[[package]]
 name = "orbit-cli"
 version = "0.1.0"
 dependencies = [
@@ -870,7 +862,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbit-integratins"
+name = "orbit-core"
+version = "0.1.0"
+
+[[package]]
+name = "orbit-events"
+version = "0.1.0"
+
+[[package]]
+name = "orbit-integrations"
+version = "0.1.0"
+
+[[package]]
+name = "orbit-lifecycle"
 version = "0.1.0"
 
 [[package]]
@@ -885,6 +889,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "orbit-orchestrator"
+version = "0.1.0"
 
 [[package]]
 name = "orbit-plugins"

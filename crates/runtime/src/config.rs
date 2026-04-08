@@ -7,7 +7,7 @@ use crate::json::JsonValue;
 use crate::sandbox::{FilesystemIsolationMode, SandboxConfig};
 
 /// Schema name advertised by generated settings files.
-pub const CLAW_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
+pub const ORBIT_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
 
 /// Origin of a loaded settings file in the configuration precedence chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -162,7 +162,7 @@ pub struct McpOAuthConfig {
     pub xaa: Option<bool>,
 }
 
-/// OAuth client configuration used by the main Claw runtime.
+/// OAuth client configuration used by the main Orbit runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthConfig {
     pub client_id: String,
@@ -465,7 +465,7 @@ impl RuntimePluginConfig {
 #[must_use]
 /// Returns the default per-user config directory used by the runtime.
 pub fn default_config_home() -> PathBuf {
-    std::env::var_os("CLAW_CONFIG_HOME")
+    std::env::var_os("ORBIT_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".orbit")))
         .unwrap_or_else(|| PathBuf::from(".orbit"))
@@ -1087,7 +1087,7 @@ mod tests {
     use super::{
         deep_merge_objects, parse_permission_mode_label, ConfigLoader, ConfigSource,
         McpServerConfig, McpTransport, ResolvedPermissionMode, RuntimeHookConfig,
-        RuntimePluginConfig, CLAW_SETTINGS_SCHEMA_NAME,
+        RuntimePluginConfig, ORBIT_SETTINGS_SCHEMA_NAME,
     };
     use crate::json::JsonValue;
     use crate::sandbox::FilesystemIsolationMode;
@@ -1161,7 +1161,7 @@ mod tests {
             .load()
             .expect("config should load");
 
-        assert_eq!(CLAW_SETTINGS_SCHEMA_NAME, "SettingsSchema");
+        assert_eq!(ORBIT_SETTINGS_SCHEMA_NAME, "SettingsSchema");
         assert_eq!(loaded.loaded_entries().len(), 5);
         assert_eq!(loaded.loaded_entries()[0].source, ConfigSource::User);
         assert_eq!(
