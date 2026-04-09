@@ -20,6 +20,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - crates/**
+      - extensions/orbit-slack/**
       - scripts/**
       - docs/**
   pull_request:
@@ -37,6 +38,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - crates/**
+      - extensions/orbit-slack/**
       - scripts/**
       - docs/**
   workflow_dispatch:
@@ -92,6 +94,30 @@ jobs:
           workspaces: . -> target
       - name: Run workspace tests
         run: cargo test --workspace
+
+  slack-extension-ci:
+    name: slack contract + build + lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/orbit-slack
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/orbit-slack/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Install Slack extension dependencies
+        run: npm ci
+      - name: Check generated contract freshness and Slack build
+        run: npm run build
+      - name: Run Slack extension lint checks
+        run: npm run lint
 
   clippy-workspace:
     name: cargo clippy --workspace

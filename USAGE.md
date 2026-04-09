@@ -7,70 +7,80 @@ This guide covers the current Rust workspace at the repository root and the `orb
 Run this before prompts, sessions, or automation:
 
 ```bash
-cargo build --workspace
-./target/debug/orbit
+brew install --HEAD ./homebrew/orbit.rb
+orbit
 # first command inside the REPL
 /doctor
 ```
 
-`/doctor` is the built-in setup and preflight diagnostic. Once you have a saved session, you can rerun it with `./target/debug/orbit --resume latest /doctor`.
+`/doctor` is the built-in setup and preflight diagnostic. Once you have a saved session, you can rerun it with `orbit --resume latest /doctor`.
 
 ## Prerequisites
 
-- Rust toolchain with `cargo`
+- Homebrew for CLI installation, or a Rust toolchain with `cargo` for source builds
 - One of:
   - `ANTHROPIC_API_KEY` for direct API access
-  - `ORBIT_CONFIG_HOME` for OAuth-based auth
+  - `OPENAI_API_KEY` for OpenAI
+  - `XAI_API_KEY` for xAI
+  - `FRONTAL_API_KEY` for Frontal's OpenAI-compatible gateway
+  - `BEDROCK_API_KEY` for Bedrock-compatible gateways
+  - `AZURE_OPENAI_API_KEY` for Azure OpenAI-compatible gateways
+  - or local `OLLAMA_BASE_URL` (defaults to `http://localhost:11434`)
 - Optional: `ANTHROPIC_BASE_URL` when targeting a proxy or local service
+- Optional: `FRONTAL_BASE_URL` when targeting a custom Frontal gateway URL
 
 ## Install / build the workspace
 
 ```bash
+# Install the CLI with Homebrew
+brew install --HEAD ./homebrew/orbit.rb
+
+# Or build from source
 cargo build --workspace
 ```
 
-The CLI binary is available at `target/debug/orbit` after a debug build. Make the doctor check above your first post-build step.
+The installed CLI is available as `orbit`. If you build from source instead, the debug binary is available at `target/debug/orbit`. Make the doctor check above your first post-build step.
 
 ## Quick start
 
 ### First-run doctor check
 
 ```bash
-./target/debug/orbit
+orbit
 /doctor
 ```
 
 ### Interactive REPL
 
 ```bash
-./target/debug/orbit
+orbit
 ```
 
 ### One-shot prompt
 
 ```bash
-./target/debug/orbit prompt "summarize this repository"
+orbit prompt "summarize this repository"
 ```
 
 ### Shorthand prompt mode
 
 ```bash
-./target/debug/orbit "explain crates/runtime/src/lib.rs"
+orbit "explain crates/runtime/src/lib.rs"
 ```
 
 ### JSON output for scripting
 
 ```bash
-./target/debug/orbit --output-format json prompt "status"
+orbit --output-format json prompt "status"
 ```
 
 ## Model and permission controls
 
 ```bash
-./target/debug/orbit --model sonnet prompt "review this diff"
-./target/debug/orbit --permission-mode read-only prompt "summarize Cargo.toml"
-./target/debug/orbit --permission-mode workspace-write prompt "update README.md"
-./target/debug/orbit --allowedTools read,glob "inspect the runtime crate"
+orbit --model sonnet prompt "review this diff"
+orbit --permission-mode read-only prompt "summarize Cargo.toml"
+orbit --permission-mode workspace-write prompt "update README.md"
+orbit --allowedTools read,glob "inspect the runtime crate"
 ```
 
 Supported permission modes:
@@ -91,24 +101,19 @@ Model aliases currently supported by the CLI:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### OAuth
-
-```bash
-./target/debug/orbit login
-./target/debug/orbit logout
+# or
+export FRONTAL_API_KEY="frontal-..."
 ```
 
 ## Common operational commands
 
 ```bash
-./target/debug/orbit status
-./target/debug/orbit sandbox
-./target/debug/orbit agents
-./target/debug/orbit mcp
-./target/debug/orbit skills
-./target/debug/orbit system-prompt --cwd .. --date 2026-04-04
+orbit status
+orbit sandbox
+orbit agents
+orbit mcp
+orbit skills
+orbit system-prompt --cwd .. --date 2026-04-04
 ```
 
 ## Session management
@@ -116,8 +121,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 REPL turns are persisted under `.orbit/sessions/` in the current workspace.
 
 ```bash
-./target/debug/orbit --resume latest
-./target/debug/orbit --resume latest /status /diff
+orbit --resume latest
+orbit --resume latest /status /diff
 ```
 
 Useful interactive commands include `/help`, `/status`, `/cost`, `/config`, `/session`, `/model`, `/permissions`, and `/export`.
@@ -157,6 +162,7 @@ cargo test --workspace
 Current Rust crates:
 
 - `api`
+- `providers`
 - `commands`
 - `compat-harness`
 - `mock-anthropic-service`

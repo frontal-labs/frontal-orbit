@@ -5,53 +5,215 @@
 
 # Frontal Orbit
 
-Orbit is the public Rust implementation of the `orbit` CLI agent harness.
-The canonical implementation now lives at the repository root, and the current source of truth for this repository is **frontal-labs/orbit-code**.
+A high-performance Rust rewrite of the Orbit CLI agent harness. Built for speed, safety, and native tool execution.
 
-> [!IMPORTANT]
-> Start with [`USAGE.md`](./USAGE.md) for build, auth, CLI, session, and parity-harness workflows. Make `orbit doctor` your first health check after building, use [`RUST-README.md`](./RUST-README.md) for crate-level details, read [`PARITY.md`](./PARITY.md) for the current Rust-port checkpoint, and see [`docs/container.md`](./docs/container.md) for the container-first workflow.
+For a task-oriented guide with copy/paste examples, see [`./USAGE.md`](./USAGE.md).
 
-## Current repository shape
-
-- **`Cargo.toml` + `crates/`** — canonical Rust workspace and the `orbit` CLI binary
-- **`USAGE.md`** — task-oriented usage guide for the current product surface
-- **`PARITY.md`** — Rust-port parity status and migration notes
-- **`ROADMAP.md`** — active roadmap and cleanup backlog
-- **`PHILOSOPHY.md`** — project intent and system-design framing
-
-## Quick start
+## Quick Start
 
 ```bash
-cargo build --workspace
-./target/debug/orbit --help
-./target/debug/orbit prompt "summarize this repository"
+# Install the CLI with Homebrew
+brew install --HEAD ./homebrew/orbit.rb
+
+# Inspect available commands
+orbit --help
+
+# Run the interactive REPL
+orbit --model claude-opus-4-6
+
+# One-shot prompt
+orbit prompt "explain this codebase"
+
+# JSON output for automation
+orbit --output-format json prompt "summarize crates/cli/src/main.rs"
 ```
 
-Authenticate with either an API key or the built-in OAuth flow:
+If you are developing from source instead of installing the CLI, use `cargo build --workspace` and run `cargo run -p orbit-cli -- ...`.
+
+## Configuration
+
+Set your API credentials:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-# or
-./target/debug/orbit login
+# Or use Frontal's OpenAI-compatible API gateway
+export FRONTAL_API_KEY="frontal-..."
+export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
+# Or use an Anthropic proxy
+export ANTHROPIC_BASE_URL="https://your-proxy.com"
 ```
 
-Run the workspace test suite:
+## Mock parity harness
+
+The workspace now includes a deterministic Anthropic-compatible mock service and a clean-environment CLI harness for end-to-end parity checks.
 
 ```bash
-cargo test --workspace
+
+# Run the scripted clean-environment harness
+./scripts/run_mock_parity_harness.sh
+
+# Or start the mock service manually for ad hoc CLI runs
+cargo run -p mock-anthropic-service -- --bind 127.0.0.1:0
 ```
 
-## Documentation map
+Harness coverage:
 
-- [`USAGE.md`](./USAGE.md) — quick commands, auth, sessions, config, parity harness
-- [`RUST-README.md`](./RUST-README.md) — crate map, CLI surface, features, workspace layout
-- [`PARITY.md`](./PARITY.md) — parity status for the Rust port
-- [`MOCK_PARITY_HARNESS.md`](./MOCK_PARITY_HARNESS.md) — deterministic mock-service harness details
-- [`ROADMAP.md`](./ROADMAP.md) — active roadmap and open cleanup work
-- [`PHILOSOPHY.md`](./PHILOSOPHY.md) — why the project exists and how it is operated
-- [`DEVELOPMENT.md`](./DEVELOPMENT.md) — dev environment and local infra workflow
-- [`CHANGELOG.md`](./CHANGELOG.md) — versioned change history
-- [`RELEASE.md`](./RELEASE.md) — release notes and rollout checklist
-- [`TUI-ENHANCEMENT-PLAN.md`](./TUI-ENHANCEMENT-PLAN.md) — TUI architecture and phased plan
-- [`LICENSE.md`](./LICENSE.md) — license and attribution notice
-- [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — community participation standards
+- `streaming_text`
+- `read_file_roundtrip`
+- `grep_chunk_assembly`
+- `write_file_allowed`
+- `write_file_denied`
+- `multi_tool_turn_roundtrip`
+- `bash_stdout_roundtrip`
+- `bash_permission_prompt_approved`
+- `bash_permission_prompt_denied`
+- `plugin_tool_roundtrip`
+
+Primary artifacts:
+
+- `crates/mock-anthropic-service/` — reusable mock Anthropic-compatible service
+- `crates/cli/tests/mock_parity_harness.rs` — clean-env CLI harness
+- `scripts/run_mock_parity_harness.sh` — reproducible wrapper
+- `scripts/run_mock_parity_diff.py` — scenario checklist + PARITY mapping runner
+- `mock_parity_scenarios.json` — scenario-to-PARITY manifest
+
+## Features
+
+| Feature | Status |
+|---------|--------|
+| Anthropic / OpenAI-compatible provider flows + streaming (OpenAI, xAI, Frontal, Bedrock, Azure) | ✅ |
+| Environment-variable auth (Anthropic/OpenAI/xAI/Frontal/Bedrock/Azure/Ollama) | ✅ |
+| Interactive REPL (rustyline) | ✅ |
+| Tool system (bash, read, write, edit, grep, glob) | ✅ |
+| Web tools (search, fetch) | ✅ |
+| Sub-agent / agent surfaces | ✅ |
+| Todo tracking | ✅ |
+| Notebook editing | ✅ |
+| ORBIT.md / project memory | ✅ |
+| Config file hierarchy (`.orbit.json` + merged config sections) | ✅ |
+| Permission system | ✅ |
+| MCP server lifecycle + inspection | ✅ |
+| Session persistence + resume | ✅ |
+| Cost / usage / stats surfaces | ✅ |
+| Git integration | ✅ |
+| Markdown terminal rendering (ANSI) | ✅ |
+| Model aliases (opus/sonnet/haiku) | ✅ |
+| Direct CLI subcommands (`status`, `sandbox`, `agents`, `mcp`, `skills`, `doctor`) | ✅ |
+| Slash commands (including `/skills`, `/agents`, `/mcp`, `/doctor`, `/plugin`, `/subagent`) | ✅ |
+| Hooks (`/hooks`, config-backed lifecycle hooks) | ✅ |
+| Plugin management surfaces | ✅ |
+| Skills inventory / install surfaces | ✅ |
+| Machine-readable JSON output across core CLI surfaces | ✅ |
+
+## Model Aliases
+
+Short names resolve to the latest model versions:
+
+| Alias | Resolves To |
+|-------|------------|
+| `opus` | `claude-opus-4-6` |
+| `sonnet` | `claude-sonnet-4-6` |
+| `haiku` | `claude-haiku-4-5-20251213` |
+
+## CLI Flags and Commands
+
+Representative current surface:
+
+```text
+orbit [OPTIONS] [COMMAND]
+
+Flags:
+  --model MODEL
+  --output-format text|json
+  --permission-mode MODE
+  --dangerously-skip-permissions
+  --allowedTools TOOLS
+  --resume [SESSION.jsonl|session-id|latest]
+  --version, -V
+
+Top-level commands:
+  prompt <text>
+  help
+  version
+  status
+  sandbox
+  dump-manifests
+  bootstrap-plan
+  agents
+  mcp
+  skills
+  system-prompt
+  init
+```
+
+The command surface is moving quickly. For the canonical live help text, run:
+
+```bash
+cargo run -p orbit-cli -- --help
+```
+
+## Slash Commands (REPL)
+
+Tab completion expands slash commands, model aliases, permission modes, and recent session IDs.
+
+The REPL now exposes a much broader surface than the original minimal shell:
+
+- session / visibility: `/help`, `/status`, `/sandbox`, `/cost`, `/resume`, `/session`, `/version`, `/usage`, `/stats`
+- workspace / git: `/compact`, `/clear`, `/config`, `/memory`, `/init`, `/diff`, `/commit`, `/pr`, `/issue`, `/export`, `/hooks`, `/files`, `/branch`, `/release-notes`, `/add-dir`
+- discovery / debugging: `/mcp`, `/agents`, `/skills`, `/doctor`, `/tasks`, `/context`, `/desktop`, `/ide`
+- automation / analysis: `/review`, `/advisor`, `/insights`, `/security-review`, `/subagent`, `/team`, `/telemetry`, `/providers`, `/cron`, and more
+- plugin management: `/plugin` (with aliases `/plugins`, `/marketplace`)
+
+Notable orbit-first surfaces now available directly in slash form:
+- `/skills [list|install <path>|help]`
+- `/agents [list|help]`
+- `/mcp [list|show <server>|help]`
+- `/doctor`
+- `/plugin [list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]`
+- `/subagent [list|steer <target> <msg>|kill <id>]`
+
+See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cli -- --help` for the live canonical command list.
+
+## Workspace Layout
+
+```text
+.
+├── Cargo.toml              # Workspace root
+├── Cargo.lock
+├── crates/
+    ├── api/                # Public API facade re-exporting provider/model APIs
+    ├── commands/           # Shared slash-command registry + help rendering
+    ├── compat-harness/     # TS manifest extraction harness
+    ├── providers/          # Provider clients and routing (Anthropic/OpenAI/xAI/Frontal/...)
+    ├── mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
+    ├── plugins/            # Plugin metadata, manager, install/enable/disable surfaces
+    ├── runtime/            # Session, config, permissions, MCP, prompts, auth/runtime loop
+    ├── cli/                # Main CLI binary (`orbit`)
+    ├── telemetry/          # Session tracing and usage telemetry types
+    └── tools/              # Built-in tools, skill resolution, tool search, agent runtime surfaces
+```
+
+### Crate Responsibilities
+
+- **api** — public API facade crate that re-exports provider and model APIs
+- **providers** — provider clients, routing, SSE streaming, request/response types, env-var auth, request-size/context-window preflight
+- **commands** — slash command definitions, parsing, help text generation, JSON/text command rendering
+- **compat-harness** — extracts tool/prompt manifests from upstream TS source
+- **mock-anthropic-service** — deterministic `/v1/messages` mock for CLI parity tests and local harness runs
+- **plugins** — plugin metadata, install/enable/disable/update flows, plugin tool definitions, hook integration surfaces
+- **runtime** — `ConversationRuntime`, config loading, session persistence, permission policy, MCP client lifecycle, system prompt assembly, usage tracking
+- **orbit-cli** — REPL, one-shot prompt, direct CLI subcommands, streaming display, tool call rendering, CLI argument parsing
+- **telemetry** — session trace events and supporting telemetry payloads
+- **tools** — tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, and runtime-facing tool discovery
+
+## Stats
+
+- **~20K lines** of Rust
+- **10+ crates** in workspace
+- **Binary name:** `orbit`
+- **Default model:** `claude-opus-4-6`
+- **Default permissions:** `danger-full-access`
+
+## License
+
+See repository root.

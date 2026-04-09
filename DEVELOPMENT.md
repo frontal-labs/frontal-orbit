@@ -2,39 +2,23 @@
 
 ## Quick Start
 
-### Using Nix (Recommended)
-```bash
-# Enter development environment
-nix develop
-
-# Build the project
-cargo build --workspace
-
-# Run tests
-cargo test --workspace
-
-# Start the CLI
-cargo run --bin orbit
-```
-
 ### Using Docker Compose
 ```bash
 # Start all services
-docker-compose up -d
+docker compose -f infrastructure/compose/docker-compose.yml up -d
 
 # View logs
-docker-compose logs -f orbit
+docker compose -f infrastructure/compose/docker-compose.yml logs -f orbit-server
 
 # Stop services
-docker-compose down
+docker compose -f infrastructure/compose/docker-compose.yml down
 ```
 
 ### Development with hot reload
 ```bash
 # Start development environment with hot reload
-docker-compose --profile dev up orbit-dev
-
-# This will automatically rebuild and restart when you save changes
+cargo build --workspace
+cargo run -p orbit-cli -- --help
 ```
 
 ## Environment Variables
@@ -110,7 +94,7 @@ cargo audit
 - **orbit**: Main Orbit service
 - **postgres**: PostgreSQL database for structured memory
 - **redis**: Redis for caching and session management
-- **qdrant**: Vector database for semantic search
+- **pinecone**: Managed vector database for semantic search
 - **webhook-server**: Webhook receiver for external events
 
 ### Development Services
@@ -139,13 +123,15 @@ docker-compose exec redis redis-cli -a redis_password
 KEYS *
 ```
 
-### Qdrant
+### Pinecone
 ```bash
-# View collections
-curl http://localhost:6333/collections
+# Export Pinecone settings before running memory-backed flows
+export ORBIT_MEMORY_PINECONE_URL=https://YOUR_INDEX_HOST
+export ORBIT_MEMORY_PINECONE_API_KEY=your_pinecone_api_key_here
+export ORBIT_MEMORY_PINECONE_NAMESPACE=dev
 
-# Health check
-curl http://localhost:6333/health
+# Run the focused tool integration test against a configured backend
+cargo test -p orbit-tools env_backed_memory_tools_route_requests_to_pinecone_and_neo4j -- --nocapture
 ```
 
 ## Testing

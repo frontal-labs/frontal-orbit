@@ -15,11 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - VS Code workspace configuration
 - PostgreSQL database schema for structured memory
 - Development documentation
+- Homebrew formula for installing the `orbit` CLI from source
 
 ### Changed
 - Repository structure moved to root level
 - Updated documentation references
 - Improved development workflow
+- Release assets now include Homebrew-friendly tarballs and SHA-256 checksum files
 
 ### Fixed
 - Corrected file path references in documentation
@@ -43,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interactive REPL with slash commands
 - One-shot prompt execution
 - Session persistence and resume
-- Multi-provider support (Anthropic, OpenAI, xAI)
+- Multi-provider support (Anthropic, OpenAI, xAI, Frontal, Bedrock, Azure)
 - Comprehensive tool ecosystem
 - Plugin management
 - Configuration management

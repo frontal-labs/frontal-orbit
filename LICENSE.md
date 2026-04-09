@@ -35,7 +35,7 @@ This software is based on concepts and implementations from various sources:
 This software includes and relies upon numerous open-source libraries and tools:
 - Rust ecosystem packages (crates.io)
 - Container technologies (Docker, Kubernetes)
-- Database systems (PostgreSQL, Redis, Qdrant)
+- Database systems (PostgreSQL, Redis, Pinecone)
 - AI provider APIs (Anthropic, OpenAI, xAI)
 
 ### Community Contributions

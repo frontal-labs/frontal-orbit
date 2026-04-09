@@ -18,7 +18,7 @@ Released: 2026-04-03
 
 #### Comprehensive Tool Ecosystem
 - **40+ Tools**: File operations, git, web access, testing, and more
-- **Multi-Provider Support**: Anthropic, OpenAI, xAI integration
+- **Multi-Provider Support**: Anthropic, OpenAI, xAI, Frontal, AWS Bedrock, Microsoft Azure integration
 - **Plugin System**: Extensible architecture with MCP server support
 - **Permission Framework**: Role-based access control and safety boundaries
 
@@ -26,7 +26,7 @@ Released: 2026-04-03
 - **Nix Flakes**: Reproducible development environment
 - **Pre-commit Hooks**: Automated code quality checks
 - **VS Code Integration**: Complete debugging and development setup
-- **Docker Compose**: Full stack with PostgreSQL, Redis, Qdrant
+- **Docker Compose**: Full stack with PostgreSQL, Redis, and Pinecone-ready configuration
 
 ### Core Capabilities
 
@@ -53,7 +53,7 @@ Released: 2026-04-03
 #### Database Integration
 - **PostgreSQL**: Structured memory and task management
 - **Redis**: Caching and session management
-- **Qdrant**: Vector database for semantic search
+- **Pinecone**: Managed vector database for semantic search
 - **Schema Management**: Version-controlled database migrations
 
 #### Container Deployment
