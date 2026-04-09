@@ -7,7 +7,7 @@ import type {
   OrbitGeneratedEventStatus,
   OrbitGeneratedEventTopic,
   OrbitGeneratedHostedTaskEventSummary,
-} from './generated/orbit-events';
+} from "./generated/orbit-events";
 
 // ============================================================================
 // SLACK TYPES
@@ -176,7 +176,7 @@ export interface OrbitCliResponse {
 export interface OrbitTask {
   task_id: string;
   prompt: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   created_at: number;
   updated_at: number;
   description?: string;
@@ -190,7 +190,10 @@ export interface OrbitTask {
   approval_message_ts?: string;
   orphan_policy?: OrbitAppliedOrphanPolicy;
   repository?: string;
+  repo_url?: string;
+  base_ref?: string;
   branch?: string;
+  execution_backend?: string;
   priority?: string;
   plan_id?: string;
   plan_kind?: string;
@@ -202,12 +205,14 @@ export interface OrbitTask {
 export interface OrbitCreateTaskRequest {
   prompt: string;
   repository?: string;
+  repo_url?: string;
+  base_ref?: string;
   branch?: string;
   model?: string;
   provider?: string;
   permission_mode?: string;
   allowed_tools?: string[];
-  priority?: 'low' | 'medium' | 'high';
+  priority?: "low" | "medium" | "high";
   source?: string;
   user_id?: string;
   channel_id?: string;
@@ -216,7 +221,7 @@ export interface OrbitCreateTaskRequest {
 
 export interface OrbitCreateTaskResponse {
   task_id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   message: string;
   lane_id?: string;
   plan_kind?: string;
@@ -225,7 +230,7 @@ export interface OrbitCreateTaskResponse {
 }
 
 export interface OrbitListTasksQuery {
-  status?: OrbitTask['status'] | string;
+  status?: OrbitTask["status"] | string;
   source?: string;
   user_id?: string;
   channel_id?: string;
@@ -308,7 +313,7 @@ export interface OrbitTerminalEventPayload {
 }
 
 export type OrbitEventTaskSummary = OrbitGeneratedHostedTaskEventSummary & {
-  task_status?: OrbitTask['status'];
+  task_status?: OrbitTask["status"];
   result?: string;
   error?: string;
 };
@@ -342,7 +347,7 @@ export interface OrbitTrackedTask {
 
 export interface OrbitStatusResponse {
   system: {
-    status: 'healthy' | 'degraded' | 'down';
+    status: "healthy" | "degraded" | "down";
     version: string;
     uptime: number;
   };
@@ -355,14 +360,14 @@ export interface OrbitStatusResponse {
 }
 
 export interface OrbitSandboxResponse {
-  status: 'ready' | 'busy' | 'error';
+  status: "ready" | "busy" | "error";
   workspaces: number;
   active_sessions: number;
 }
 
-export type OrbitApprovalKind = 'orphaned_hosted_agent';
+export type OrbitApprovalKind = "orphaned_hosted_agent";
 
-export type OrbitApprovalAction = 'cancel' | 'retry';
+export type OrbitApprovalAction = "cancel" | "retry";
 
 export interface OrbitResolveApprovalRequest {
   taskId: string;
@@ -381,7 +386,13 @@ export interface SlackTask {
   slack_task_id: string;
   orbit_task_id?: string;
   user_id: string;
-  status: 'pending' | 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status:
+    | "pending"
+    | "submitted"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled";
   request: OrbitPromptRequest;
   response?: OrbitCliResponse;
   created_at: Date;
@@ -391,7 +402,7 @@ export interface SlackTask {
 export interface SlackUserPreferences {
   default_model?: string;
   default_provider?: string;
-  notification_level: 'all' | 'important' | 'errors_only' | 'none';
+  notification_level: "all" | "important" | "errors_only" | "none";
   auto_merge?: boolean;
 }
 
@@ -419,7 +430,7 @@ export interface TaskCreationRequest {
   provider?: string;
   permission_mode?: string;
   allowed_tools?: string[];
-  priority?: 'low' | 'medium' | 'high';
+  priority?: "low" | "medium" | "high";
 }
 
 export interface TaskProgressUpdate {
@@ -428,7 +439,7 @@ export interface TaskProgressUpdate {
   message?: string;
   progress?: number;
   artifacts?: {
-    type: 'code' | 'log' | 'test_result' | 'error';
+    type: "code" | "log" | "test_result" | "error";
     content: string;
     filename?: string;
   }[];

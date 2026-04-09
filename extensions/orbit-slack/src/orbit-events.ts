@@ -1,6 +1,10 @@
-import WebSocket from 'ws';
-import { logger } from './log';
-import type { OrbitEventEnvelope, OrbitEventStreamQuery, OrbitTrackedTask } from './types';
+import WebSocket from "ws";
+import { logger } from "./log";
+import type {
+  OrbitEventEnvelope,
+  OrbitEventStreamQuery,
+  OrbitTrackedTask,
+} from "./types";
 
 type TrackedTaskHandler = (
   event: OrbitEventEnvelope,
@@ -49,7 +53,7 @@ export class OrbitEventsClient {
     }
 
     await new Promise<void>((resolve) => {
-      socket.once('close', () => resolve());
+      socket.once("close", () => resolve());
       socket.close();
     });
   }
@@ -81,28 +85,33 @@ export class OrbitEventsClient {
       const socket = new WebSocket(nextUrl);
       this.socket = socket;
 
-      socket.once('open', () => {
-        logger.info('Connected to Orbit hosted events stream', { url: nextUrl });
+      socket.once("open", () => {
+        logger.info("Connected to Orbit hosted events stream", {
+          url: nextUrl,
+        });
         resolve();
       });
 
-      socket.once('error', (error) => {
-        logger.error('Orbit hosted events stream error', error as Error);
+      socket.once("error", (error) => {
+        logger.error("Orbit hosted events stream error", error as Error);
         reject(error);
       });
 
-      socket.on('message', (data) => {
+      socket.on("message", (data) => {
         this.handleMessage(data.toString());
       });
 
-      socket.on('close', () => {
-        logger.warn('Orbit hosted events stream disconnected');
+      socket.on("close", () => {
+        logger.warn("Orbit hosted events stream disconnected");
         this.socket = undefined;
         if (this.shouldReconnect) {
           if (this.restartRequested) {
             this.restartRequested = false;
             this.openSocket().catch((error) => {
-              logger.error('Orbit hosted events stream restart failed', error as Error);
+              logger.error(
+                "Orbit hosted events stream restart failed",
+                error as Error
+              );
               this.scheduleReconnect();
             });
           } else {
@@ -115,7 +124,7 @@ export class OrbitEventsClient {
 
   private buildSocketUrl(): string {
     return this.urlBuilder({
-      source: 'slack',
+      source: "slack",
     });
   }
 
@@ -130,7 +139,7 @@ export class OrbitEventsClient {
         return;
       }
       this.openSocket().catch((error) => {
-        logger.error('Orbit hosted events reconnect failed', error as Error);
+        logger.error("Orbit hosted events reconnect failed", error as Error);
         this.scheduleReconnect();
       });
     }, RECONNECT_DELAY_MS);
@@ -141,7 +150,7 @@ export class OrbitEventsClient {
     try {
       event = JSON.parse(payload) as OrbitEventEnvelope;
     } catch (_error) {
-      logger.warn('Ignoring malformed Orbit hosted event payload', { payload });
+      logger.warn("Ignoring malformed Orbit hosted event payload", { payload });
       return;
     }
 
@@ -159,18 +168,24 @@ export class OrbitEventsClient {
     this.dispatchEvent(event);
   }
 
-  private dispatchEvent(event: OrbitEventEnvelope, hintedTask?: OrbitTrackedTask): void {
+  private dispatchEvent(
+    event: OrbitEventEnvelope,
+    hintedTask?: OrbitTrackedTask
+  ): void {
     const taskId = event.task_id;
     if (!taskId) {
       return;
     }
 
-    const task = hintedTask || this.taskHints.get(taskId) || this.readTrackedTaskFromEvent(event);
+    const task =
+      hintedTask ||
+      this.taskHints.get(taskId) ||
+      this.readTrackedTaskFromEvent(event);
     if (task && !this.taskHints.has(taskId)) {
       this.taskHints.set(taskId, task);
     }
 
-    const eventKey = `${event.event}:${event.status}:${event.emittedAt}:${event.task_id ?? ''}:${event.lane_id ?? ''}`;
+    const eventKey = `${event.event}:${event.status}:${event.emittedAt}:${event.task_id ?? ""}:${event.lane_id ?? ""}`;
     if (this.seenEventKeys.has(eventKey)) {
       return;
     }
@@ -186,7 +201,7 @@ export class OrbitEventsClient {
 
     for (const handler of this.handlers) {
       void Promise.resolve(handler(event, task)).catch((error) => {
-        logger.error('Orbit hosted event handler failed', error as Error, {
+        logger.error("Orbit hosted event handler failed", error as Error, {
           event: event.event,
           taskId,
         });
@@ -194,7 +209,9 @@ export class OrbitEventsClient {
     }
   }
 
-  private readTrackedTaskFromEvent(event: OrbitEventEnvelope): OrbitTrackedTask | undefined {
+  private readTrackedTaskFromEvent(
+    event: OrbitEventEnvelope
+  ): OrbitTrackedTask | undefined {
     const payload = event.payload;
     if (!payload) {
       return undefined;

@@ -25,6 +25,7 @@ The configuration is split into:
 - `compose/docker-compose.yml`: opinionated hosted stack
 - `compose/.env.example`: environment template for Compose deployments
 - `docker/orbit-server.Dockerfile`: builds the `orbit-server` image
+- `docker/orbit-worker.Dockerfile`: builds the worker image used by server-side `local-docker` lanes
 - `docker/orbit-slack.Dockerfile`: builds the Slack connector image
 - `kubernetes/base/`: namespace, config, secrets template, PVCs, Deployments, Services, and Ingress
 
@@ -39,6 +40,30 @@ docker compose --env-file infrastructure/compose/.env -f infrastructure/compose/
 ```
 
 The main API will be exposed on `http://localhost:8788`.
+
+### Local Docker Worker Mode
+
+To run hosted tasks inside sibling Docker worker containers:
+
+1. Set `ORBIT_SERVER_LANE_TRANSPORT=local-docker` in `compose/.env`.
+2. Build the worker image:
+
+```bash
+docker compose --env-file infrastructure/compose/.env -f infrastructure/compose/docker-compose.yml --profile worker-image build orbit-worker-image
+```
+
+3. Start the main stack:
+
+```bash
+docker compose --env-file infrastructure/compose/.env -f infrastructure/compose/docker-compose.yml up --build
+```
+
+In this mode:
+
+- `orbit-server` uses `/var/run/docker.sock` to launch worker containers
+- workers default to `ORBIT_SERVER_DOCKER_IMAGE=orbit-worker:latest`
+- workers call back to the server through `ORBIT_SERVER_CALLBACK_URL`
+- per-task repo checkouts live under `ORBIT_SERVER_WORKSPACE_ROOT`
 
 ## Kubernetes
 

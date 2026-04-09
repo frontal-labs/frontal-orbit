@@ -1153,6 +1153,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-github"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "orbit-integrations"
 version = "0.1.0"
 dependencies = [
@@ -1226,6 +1235,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-repo"
+version = "0.1.0"
+
+[[package]]
 name = "orbit-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1256,7 +1269,9 @@ dependencies = [
  "axum",
  "futures-util",
  "orbit-events",
+ "orbit-github",
  "orbit-orchestrator",
+ "orbit-repo",
  "orbit-runtime",
  "orbit-tools",
  "serde",

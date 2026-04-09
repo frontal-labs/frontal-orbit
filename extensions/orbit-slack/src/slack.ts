@@ -1,8 +1,8 @@
-import { App } from '@slack/bolt';
-import { OrbitApiClient } from './api-client';
-import { config } from './config';
-import { logger } from './log';
-import { OrbitEventsClient } from './orbit-events';
+import { App } from "@slack/bolt";
+import { OrbitApiClient } from "./api-client";
+import { config } from "./config";
+import { logger } from "./log";
+import { OrbitEventsClient } from "./orbit-events";
 import type {
   OrbitAppliedOrphanPolicy,
   OrbitApprovalAction,
@@ -16,7 +16,7 @@ import type {
   OrbitTrackedTask,
   SlackBlock,
   SlackBody,
-} from './types';
+} from "./types";
 
 // Type definitions for Slack Bolt handlers
 interface SlackMessage {
@@ -60,7 +60,9 @@ export class SlackInterface {
     });
 
     this.orbitApi = new OrbitApiClient();
-    this.orbitEvents = new OrbitEventsClient((query) => this.orbitApi.getEventsWebSocketUrl(query));
+    this.orbitEvents = new OrbitEventsClient((query) =>
+      this.orbitApi.getEventsWebSocketUrl(query)
+    );
     this.orbitEvents.onTrackedTaskEvent(async (event, task) => {
       await this.handleOrbitTaskEvent(event, task);
     });
@@ -72,7 +74,12 @@ export class SlackInterface {
     this.app.message(async ({ message }) => {
       // Forward messages to Orbit AI
       const slackMessage = message as SlackMessage;
-      if (!slackMessage.text || !slackMessage.user || slackMessage.bot_id || slackMessage.subtype) {
+      if (
+        !slackMessage.text ||
+        !slackMessage.user ||
+        slackMessage.bot_id ||
+        slackMessage.subtype
+      ) {
         return;
       }
 
@@ -82,7 +89,7 @@ export class SlackInterface {
         user_id: slackMessage.user,
         channel_id: slackMessage.channel,
         thread_ts: threadTs,
-        source: 'slack',
+        source: "slack",
       });
 
       await this.registerTask(
@@ -98,7 +105,7 @@ export class SlackInterface {
     });
 
     // Handle slash commands
-    this.app.command('/ai', async ({ command, ack }) => {
+    this.app.command("/ai", async ({ command, ack }) => {
       const policyQuery = this.parseOrphanPolicyCommand(command.text);
       if (policyQuery) {
         try {
@@ -106,7 +113,7 @@ export class SlackInterface {
           await ack(this.buildOrphanPolicyCommandResponse(policy));
         } catch (error) {
           await ack({
-            response_type: 'ephemeral',
+            response_type: "ephemeral",
             text: `Failed to load orphan policy: ${(error as Error).message}`,
           });
         }
@@ -119,7 +126,7 @@ export class SlackInterface {
         prompt: command.text,
         user_id: command.user_id,
         channel_id: command.channel_id,
-        source: 'slack',
+        source: "slack",
       });
 
       await this.registerTask(
@@ -136,16 +143,19 @@ export class SlackInterface {
     // Handle interactions (buttons, modals, etc.)
     this.app.action({ action_id: /^.*$/ }, async ({ action, ack, body }) => {
       await ack();
-      await this.handleSlackAction(action as SlackAction, body as unknown as SlackBody);
+      await this.handleSlackAction(
+        action as SlackAction,
+        body as unknown as SlackBody
+      );
     });
 
     // Handle events (user joins, reactions, etc.)
     this.app.event(/.*/, async ({ event }) => {
       // Forward events to Orbit AI for processing
       const slackEvent = event as { type: string; user?: string };
-      await this.orbitApi.sendConnectorEvent('slack', {
+      await this.orbitApi.sendConnectorEvent("slack", {
         type: slackEvent.type,
-        userId: slackEvent.user || '',
+        userId: slackEvent.user || "",
         data: event,
       });
     });
@@ -157,9 +167,9 @@ export class SlackInterface {
       await this.syncTrackedTasksFromOrbit();
       await this.app.start();
       await this.orbitEvents.connect();
-      logger.info('Slack WebSocket interface connected');
+      logger.info("Slack WebSocket interface connected");
     } catch (error) {
-      logger.error('Failed to connect to Slack', error as Error);
+      logger.error("Failed to connect to Slack", error as Error);
       throw error;
     }
   }
@@ -169,9 +179,9 @@ export class SlackInterface {
     try {
       await this.orbitEvents.disconnect();
       await this.app.stop();
-      logger.info('Slack WebSocket interface disconnected');
+      logger.info("Slack WebSocket interface disconnected");
     } catch (error) {
-      logger.error('Failed to disconnect from Slack', error as Error);
+      logger.error("Failed to disconnect from Slack", error as Error);
       throw error;
     }
   }
@@ -180,7 +190,9 @@ export class SlackInterface {
   async healthCheck(): Promise<{ slack: boolean; orbit: boolean }> {
     try {
       const slackConnected =
-        (this.app as unknown as { isListening?: () => boolean }).isListening?.() || false;
+        (
+          this.app as unknown as { isListening?: () => boolean }
+        ).isListening?.() || false;
       const orbitConnected = await this.orbitApi.healthCheck();
 
       return {
@@ -188,7 +200,7 @@ export class SlackInterface {
         orbit: orbitConnected,
       };
     } catch (error) {
-      logger.error('Health check failed', error as Error);
+      logger.error("Health check failed", error as Error);
       return {
         slack: false,
         orbit: false,
@@ -216,13 +228,13 @@ export class SlackInterface {
     try {
       await this.orbitApi.updateTaskContext({
         taskId: nextTask.taskId,
-        source: 'slack',
+        source: "slack",
         user_id: nextTask.userId,
         channel_id: nextTask.channelId,
         thread_ts: nextTask.threadTs,
       });
     } catch (error) {
-      logger.warn('Failed to persist Slack task thread anchor to Orbit', {
+      logger.warn("Failed to persist Slack task thread anchor to Orbit", {
         taskId: nextTask.taskId,
         error: (error as Error).message,
       });
@@ -230,13 +242,16 @@ export class SlackInterface {
     this.orbitEvents.trackTask(nextTask);
   }
 
-  private async handleSlackAction(action: SlackAction, body: SlackBody): Promise<void> {
+  private async handleSlackAction(
+    action: SlackAction,
+    body: SlackBody
+  ): Promise<void> {
     if (this.isOrphanApprovalAction(action)) {
       await this.handleOrphanApprovalAction(action, body);
       return;
     }
 
-    const response = await this.orbitApi.sendConnectorInteraction('slack', {
+    const response = await this.orbitApi.sendConnectorInteraction("slack", {
       action: action.action_id,
       value: action.value,
       userId: body.user.id,
@@ -253,28 +268,32 @@ export class SlackInterface {
   private isOrphanApprovalAction(action: SlackAction): boolean {
     return (
       Boolean(action.value) &&
-      (action.action_id === 'orphaned_hosted_agent.retry' ||
-        action.action_id === 'orphaned_hosted_agent.cancel')
+      (action.action_id === "orphaned_hosted_agent.retry" ||
+        action.action_id === "orphaned_hosted_agent.cancel")
     );
   }
 
-  private async handleOrphanApprovalAction(action: SlackAction, body: SlackBody): Promise<void> {
+  private async handleOrphanApprovalAction(
+    action: SlackAction,
+    body: SlackBody
+  ): Promise<void> {
     const taskId = action.value;
     if (!taskId) {
       return;
     }
 
-    const actionName: OrbitApprovalAction = action.action_id.endsWith('.retry')
-      ? 'retry'
-      : 'cancel';
-    const approvalTs = this.approvalMessageTsByTask.get(taskId) || body.message.ts;
+    const actionName: OrbitApprovalAction = action.action_id.endsWith(".retry")
+      ? "retry"
+      : "cancel";
+    const approvalTs =
+      this.approvalMessageTsByTask.get(taskId) || body.message.ts;
 
     if (this.approvalResolved.has(taskId)) {
       await this.updateApprovalMessage(
         body.channel.id,
         approvalTs,
         `Approval for task ${taskId} was already resolved.`,
-        this.buildApprovalResolvedBlocks(taskId, 'already_resolved')
+        this.buildApprovalResolvedBlocks(taskId, "already_resolved")
       );
       return;
     }
@@ -302,10 +321,10 @@ export class SlackInterface {
     try {
       const task = await this.orbitApi.resolveTaskApproval({
         taskId,
-        approvalKind: 'orphaned_hosted_agent',
+        approvalKind: "orphaned_hosted_agent",
         action: actionName,
         resolvedBy: body.user.id,
-        reason: 'resolved from Slack approval action',
+        reason: "resolved from Slack approval action",
       });
 
       this.approvalInFlight.delete(taskId);
@@ -363,11 +382,14 @@ export class SlackInterface {
       return;
     }
 
-    if (event.event === 'approval.requested' && this.approvalResolved.has(nextTask.taskId)) {
+    if (
+      event.event === "approval.requested" &&
+      this.approvalResolved.has(nextTask.taskId)
+    ) {
       return;
     }
 
-    if (event.event === 'approval.resolved') {
+    if (event.event === "approval.resolved") {
       this.approvalInFlight.delete(nextTask.taskId);
       this.approvalResolved.add(nextTask.taskId);
       const approvalTs = this.approvalMessageTsByTask.get(nextTask.taskId);
@@ -392,22 +414,25 @@ export class SlackInterface {
       thread_ts: nextTask.threadTs,
     });
 
-    if (event.event === 'approval.requested') {
+    if (event.event === "approval.requested") {
       this.approvalMessageTsByTask.set(nextTask.taskId, response.ts as string);
       try {
         await this.orbitApi.updateTaskContext({
           taskId: nextTask.taskId,
-          source: 'slack',
+          source: "slack",
           user_id: nextTask.userId,
           channel_id: nextTask.channelId,
           thread_ts: nextTask.threadTs,
           approval_message_ts: response.ts as string,
         });
       } catch (error) {
-        logger.warn('Failed to persist Slack approval message linkage to Orbit', {
-          taskId: nextTask.taskId,
-          error: (error as Error).message,
-        });
+        logger.warn(
+          "Failed to persist Slack approval message linkage to Orbit",
+          {
+            taskId: nextTask.taskId,
+            error: (error as Error).message,
+          }
+        );
       }
     }
 
@@ -447,13 +472,16 @@ export class SlackInterface {
       }
       this.syncDerivedApprovalState(snapshot);
       if (snapshot.approval_message_ts) {
-        this.approvalMessageTsByTask.set(snapshotTask.taskId, snapshot.approval_message_ts);
+        this.approvalMessageTsByTask.set(
+          snapshotTask.taskId,
+          snapshot.approval_message_ts
+        );
       }
       this.upsertTrackedTask(snapshotTask);
       this.orbitEvents.trackTask(snapshotTask);
       return snapshotTask;
     } catch (error) {
-      logger.warn('Failed to resolve Slack task routing from Orbit event', {
+      logger.warn("Failed to resolve Slack task routing from Orbit event", {
         taskId,
         error: (error as Error).message,
       });
@@ -461,17 +489,22 @@ export class SlackInterface {
     }
   }
 
-  private formatTaskCreatedMessage(task: OrbitCreateTaskResponse, prompt: string): string {
+  private formatTaskCreatedMessage(
+    task: OrbitCreateTaskResponse,
+    prompt: string
+  ): string {
     const parts = [`Task created: ${task.task_id}`, `Prompt: ${prompt}`];
 
     if (task.plan_kind) {
       parts.push(`Lane: ${task.plan_kind}`);
     }
     if (task.worker_status) {
-      parts.push(`Worker: ${task.worker_status}${task.worker_id ? ` (${task.worker_id})` : ''}`);
+      parts.push(
+        `Worker: ${task.worker_status}${task.worker_id ? ` (${task.worker_id})` : ""}`
+      );
     }
 
-    return parts.join('\n');
+    return parts.join("\n");
   }
 
   private formatOrbitEvent(
@@ -482,27 +515,32 @@ export class SlackInterface {
     const taskLabel = this.describeTask(task.taskId, summary);
 
     switch (event.event) {
-      case 'task.created':
+      case "task.created":
         return null;
-      case 'task.routed':
+      case "task.routed":
         return this.formatTaskRoutedEvent(taskLabel, event, summary);
-      case 'task.cancelled':
+      case "task.cancelled":
         return this.formatTaskCancelledEvent(taskLabel, event);
-      case 'lane.started':
+      case "lane.started":
         return this.formatLaneStartedEvent(taskLabel, event, summary);
-      case 'lane.failed':
+      case "lane.failed":
         return this.formatLaneFailedEvent(taskLabel, event, summary);
-      case 'lane.blocked':
+      case "lane.blocked":
         return this.formatLaneBlockedEvent(taskLabel, event);
-      case 'lane.green':
+      case "lane.green":
         return { text: `${taskLabel} reported a green lane.` };
-      case 'approval.requested':
+      case "approval.requested":
         return this.formatApprovalRequestedEvent(event, task);
-      case 'approval.resolved':
-        return this.formatApprovalResolvedEvent(task, taskLabel, event, summary);
-      case 'memory.captured':
+      case "approval.resolved":
+        return this.formatApprovalResolvedEvent(
+          task,
+          taskLabel,
+          event,
+          summary
+        );
+      case "memory.captured":
         return { text: `Memory captured for ${taskLabel.toLowerCase()}.` };
-      case 'connector.event.received':
+      case "connector.event.received":
         return null;
       default:
         return { text: `${taskLabel} updated: ${event.event}` };
@@ -514,10 +552,11 @@ export class SlackInterface {
     event: OrbitEventEnvelope,
     summary: OrbitEventTaskSummary
   ): SlackMessagePayload {
-    const planKind = summary.plan_kind || event.payload?.plan_kind || 'assigned';
+    const planKind =
+      summary.plan_kind || event.payload?.plan_kind || "assigned";
     const laneCount = event.payload?.lane_count;
     return {
-      text: `${taskLabel} routed to ${planKind}${laneCount ? ` (${laneCount} lanes)` : ''}.`,
+      text: `${taskLabel} routed to ${planKind}${laneCount ? ` (${laneCount} lanes)` : ""}.`,
     };
   }
 
@@ -525,9 +564,11 @@ export class SlackInterface {
     taskLabel: string,
     event: OrbitEventEnvelope
   ): SlackMessagePayload {
-    const policyText = this.describeOrphanPolicy(this.readOrphanPolicy(event.payload));
+    const policyText = this.describeOrphanPolicy(
+      this.readOrphanPolicy(event.payload)
+    );
     return {
-      text: `${taskLabel} was cancelled.${policyText ? ` ${policyText}` : ''}`,
+      text: `${taskLabel} was cancelled.${policyText ? ` ${policyText}` : ""}`,
     };
   }
 
@@ -536,11 +577,12 @@ export class SlackInterface {
     event: OrbitEventEnvelope,
     summary: OrbitEventTaskSummary
   ): SlackMessagePayload {
-    const role = event.payload?.role || 'lane';
-    const workerStatus = summary.worker_status || event.payload?.worker_status || event.status;
+    const role = event.payload?.role || "lane";
+    const workerStatus =
+      summary.worker_status || event.payload?.worker_status || event.status;
     const workerId = summary.worker_id || event.payload?.worker_id;
     return {
-      text: `${taskLabel} ${role} started with worker ${workerStatus}${workerId ? ` (${workerId})` : ''}.`,
+      text: `${taskLabel} ${role} started with worker ${workerStatus}${workerId ? ` (${workerId})` : ""}.`,
     };
   }
 
@@ -549,7 +591,8 @@ export class SlackInterface {
     event: OrbitEventEnvelope,
     summary: OrbitEventTaskSummary
   ): SlackMessagePayload {
-    const error = summary.error || event.payload?.error || 'lane execution failed';
+    const error =
+      summary.error || event.payload?.error || "lane execution failed";
     return {
       text: `${taskLabel} failed: ${error}`,
     };
@@ -559,10 +602,13 @@ export class SlackInterface {
     taskLabel: string,
     event: OrbitEventEnvelope
   ): SlackMessagePayload {
-    const reason = event.payload?.reason || event.payload?.detail || 'waiting for input';
-    const policyText = this.describeOrphanPolicy(this.readOrphanPolicy(event.payload));
+    const reason =
+      event.payload?.reason || event.payload?.detail || "waiting for input";
+    const policyText = this.describeOrphanPolicy(
+      this.readOrphanPolicy(event.payload)
+    );
     return {
-      text: `${taskLabel} is blocked: ${reason}${policyText ? ` ${policyText}` : ''}`,
+      text: `${taskLabel} is blocked: ${reason}${policyText ? ` ${policyText}` : ""}`,
     };
   }
 
@@ -572,12 +618,17 @@ export class SlackInterface {
     event: OrbitEventEnvelope,
     summary: OrbitEventTaskSummary
   ): SlackMessagePayload {
-    const action = event.payload?.action || 'updated';
+    const action = event.payload?.action || "updated";
     const workerStatus = summary.worker_status || event.payload?.worker_status;
     const workerId = summary.worker_id || event.payload?.worker_id;
     return {
       text: `Approval resolved for ${taskLabel.toLowerCase()}: ${action}.`,
-      blocks: this.buildApprovalResolvedBlocks(task.taskId, action, workerStatus, workerId),
+      blocks: this.buildApprovalResolvedBlocks(
+        task.taskId,
+        action,
+        workerStatus,
+        workerId
+      ),
     };
   }
 
@@ -589,43 +640,45 @@ export class SlackInterface {
     const payload = event.payload;
     const taskLabel = this.describeTask(task.taskId, summary);
     const approvalKind = payload?.approval_kind;
-    const reason = payload?.reason || 'Task requires approval.';
-    const policyText = this.describeOrphanPolicy(this.readOrphanPolicy(payload));
+    const reason = payload?.reason || "Task requires approval.";
+    const policyText = this.describeOrphanPolicy(
+      this.readOrphanPolicy(payload)
+    );
 
-    if (approvalKind === 'orphaned_hosted_agent') {
+    if (approvalKind === "orphaned_hosted_agent") {
       return {
         text: `${taskLabel} needs approval: ${reason}`,
         blocks: [
           {
-            type: 'section',
+            type: "section",
             text: {
-              type: 'mrkdwn',
-              text: `*${taskLabel} needs approval*\n${reason}${policyText ? `\n${policyText}` : ''}`,
+              type: "mrkdwn",
+              text: `*${taskLabel} needs approval*\n${reason}${policyText ? `\n${policyText}` : ""}`,
             },
           },
           {
-            type: 'actions',
+            type: "actions",
             elements: [
               {
-                type: 'button',
+                type: "button",
                 text: {
-                  type: 'plain_text',
-                  text: 'Retry Lane',
+                  type: "plain_text",
+                  text: "Retry Lane",
                   emoji: true,
                 },
-                style: 'primary',
-                action_id: 'orphaned_hosted_agent.retry',
+                style: "primary",
+                action_id: "orphaned_hosted_agent.retry",
                 value: task.taskId,
               },
               {
-                type: 'button',
+                type: "button",
                 text: {
-                  type: 'plain_text',
-                  text: 'Cancel Task',
+                  type: "plain_text",
+                  text: "Cancel Task",
                   emoji: true,
                 },
-                style: 'danger',
-                action_id: 'orphaned_hosted_agent.cancel',
+                style: "danger",
+                action_id: "orphaned_hosted_agent.cancel",
                 value: task.taskId,
               },
             ],
@@ -639,7 +692,9 @@ export class SlackInterface {
     };
   }
 
-  private readEventTaskSummary(event: OrbitEventEnvelope): OrbitEventTaskSummary {
+  private readEventTaskSummary(
+    event: OrbitEventEnvelope
+  ): OrbitEventTaskSummary {
     const payload = event.payload;
     if (!payload) {
       return {};
@@ -648,11 +703,11 @@ export class SlackInterface {
     const taskStatus = payload.task_status;
     return {
       task_status:
-        taskStatus === 'pending' ||
-        taskStatus === 'running' ||
-        taskStatus === 'completed' ||
-        taskStatus === 'failed' ||
-        taskStatus === 'cancelled'
+        taskStatus === "pending" ||
+        taskStatus === "running" ||
+        taskStatus === "completed" ||
+        taskStatus === "failed" ||
+        taskStatus === "cancelled"
           ? taskStatus
           : undefined,
       source: payload.source,
@@ -722,31 +777,33 @@ export class SlackInterface {
     return `Task ${taskId}`;
   }
 
-  private parseOrphanPolicyCommand(text: string): OrbitOrphanPolicyQuery | null {
+  private parseOrphanPolicyCommand(
+    text: string
+  ): OrbitOrphanPolicyQuery | null {
     const trimmed = text.trim();
     if (!trimmed) {
       return null;
     }
 
     const parts = trimmed.split(/\s+/);
-    if (parts.length < 2 || parts[0] !== 'policy' || parts[1] !== 'orphans') {
+    if (parts.length < 2 || parts[0] !== "policy" || parts[1] !== "orphans") {
       return null;
     }
 
     const query: OrbitOrphanPolicyQuery = {};
     for (const token of parts.slice(2)) {
-      const [rawKey, ...rest] = token.split('=');
-      const rawValue = rest.join('=').trim();
+      const [rawKey, ...rest] = token.split("=");
+      const rawValue = rest.join("=").trim();
       if (!rawKey || !rawValue) {
         continue;
       }
 
       const key = rawKey.trim().toLowerCase();
-      if (key === 'repository' || key === 'repo') {
+      if (key === "repository" || key === "repo") {
         query.repository = rawValue;
-      } else if (key === 'source') {
+      } else if (key === "source") {
         query.source = rawValue;
-      } else if (key === 'priority') {
+      } else if (key === "priority") {
         query.priority = rawValue;
       }
     }
@@ -755,54 +812,63 @@ export class SlackInterface {
   }
 
   private buildOrphanPolicyCommandResponse(policy: OrbitOrphanPolicyResponse): {
-    response_type: 'ephemeral';
+    response_type: "ephemeral";
     text: string;
     blocks: SlackBlock[];
   } {
     const preview = policy.preview
       ? [
-          policy.preview.repository ? `repo=${policy.preview.repository}` : undefined,
+          policy.preview.repository
+            ? `repo=${policy.preview.repository}`
+            : undefined,
           policy.preview.source ? `source=${policy.preview.source}` : undefined,
-          policy.preview.priority ? `priority=${policy.preview.priority}` : undefined,
+          policy.preview.priority
+            ? `priority=${policy.preview.priority}`
+            : undefined,
         ]
           .filter((value): value is string => Boolean(value))
-          .join(', ')
+          .join(", ")
       : undefined;
 
     const ruleLines = this.formatOrphanPolicyRuleLines(policy);
 
     const effectivePolicyText =
-      this.describeOrphanPolicy(policy.effective_policy) || 'Policy unavailable.';
+      this.describeOrphanPolicy(policy.effective_policy) ||
+      "Policy unavailable.";
     const defaultPolicyText =
-      this.describeOrphanPolicy(policy.default_policy) || 'Policy unavailable.';
+      this.describeOrphanPolicy(policy.default_policy) || "Policy unavailable.";
 
     return {
-      response_type: 'ephemeral',
-      text: `Orphan policy${preview ? ` preview for ${preview}` : ''}: ${effectivePolicyText}`,
+      response_type: "ephemeral",
+      text: `Orphan policy${preview ? ` preview for ${preview}` : ""}: ${effectivePolicyText}`,
       blocks: [
         {
-          type: 'section',
+          type: "section",
           text: {
-            type: 'mrkdwn',
-            text: `*Orphan policy${preview ? ' preview' : ''}*\n${preview ? `Selectors: ${preview}\n` : ''}Effective: ${effectivePolicyText}\nDefault: ${defaultPolicyText}`,
+            type: "mrkdwn",
+            text: `*Orphan policy${preview ? " preview" : ""}*\n${preview ? `Selectors: ${preview}\n` : ""}Effective: ${effectivePolicyText}\nDefault: ${defaultPolicyText}`,
           },
         },
         {
-          type: 'section',
+          type: "section",
           text: {
-            type: 'mrkdwn',
-            text: `*Configured rules*\n${ruleLines.join('\n')}`,
+            type: "mrkdwn",
+            text: `*Configured rules*\n${ruleLines.join("\n")}`,
           },
         },
       ],
     };
   }
 
-  private readOrphanPolicy(payload?: OrbitEventPayload): OrbitAppliedOrphanPolicy | undefined {
+  private readOrphanPolicy(
+    payload?: OrbitEventPayload
+  ): OrbitAppliedOrphanPolicy | undefined {
     return payload?.orphan_policy;
   }
 
-  private describeOrphanPolicy(policy?: OrbitAppliedOrphanPolicy): string | undefined {
+  private describeOrphanPolicy(
+    policy?: OrbitAppliedOrphanPolicy
+  ): string | undefined {
     if (!policy) {
       return undefined;
     }
@@ -813,7 +879,9 @@ export class SlackInterface {
       policy.match_priority ? `priority=${policy.match_priority}` : undefined,
     ].filter((value): value is string => Boolean(value));
     const policyScope =
-      selectors.length > 0 ? `${policy.source} (${selectors.join(', ')})` : policy.source;
+      selectors.length > 0
+        ? `${policy.source} (${selectors.join(", ")})`
+        : policy.source;
     const steps = [
       `approval ${policy.approval_delay_secs}s`,
       policy.auto_retry_after_secs !== undefined
@@ -824,12 +892,14 @@ export class SlackInterface {
         : undefined,
     ].filter((value): value is string => Boolean(value));
 
-    return `Policy: ${policyScope}; ${steps.join(', ')}.`;
+    return `Policy: ${policyScope}; ${steps.join(", ")}.`;
   }
 
-  private formatOrphanPolicyRuleLines(policy: OrbitOrphanPolicyResponse): string[] {
+  private formatOrphanPolicyRuleLines(
+    policy: OrbitOrphanPolicyResponse
+  ): string[] {
     if (policy.configured_rules.length === 0) {
-      return ['No scoped rules configured.'];
+      return ["No scoped rules configured."];
     }
 
     return policy.configured_rules
@@ -838,7 +908,7 @@ export class SlackInterface {
   }
 
   private formatOrphanPolicyRuleLine(
-    rule: OrbitOrphanPolicyResponse['configured_rules'][number],
+    rule: OrbitOrphanPolicyResponse["configured_rules"][number],
     index: number
   ): string {
     const selectors = [
@@ -847,26 +917,33 @@ export class SlackInterface {
       rule.priority ? `priority=${rule.priority}` : undefined,
     ]
       .filter((value): value is string => Boolean(value))
-      .join(', ');
+      .join(", ");
     const timing = [
-      rule.approval_delay_secs !== undefined ? `approval ${rule.approval_delay_secs}s` : undefined,
-      rule.auto_retry_after_secs !== undefined ? `retry ${rule.auto_retry_after_secs}s` : undefined,
+      rule.approval_delay_secs !== undefined
+        ? `approval ${rule.approval_delay_secs}s`
+        : undefined,
+      rule.auto_retry_after_secs !== undefined
+        ? `retry ${rule.auto_retry_after_secs}s`
+        : undefined,
       rule.auto_cancel_after_secs !== undefined
         ? `cancel ${rule.auto_cancel_after_secs}s`
         : undefined,
     ]
       .filter((value): value is string => Boolean(value))
-      .join(', ');
+      .join(", ");
 
-    return `${index + 1}. ${selectors || 'match any'} -> ${timing || 'inherit defaults'}`;
+    return `${index + 1}. ${selectors || "match any"} -> ${timing || "inherit defaults"}`;
   }
 
-  private buildApprovalProcessingBlocks(taskId: string, action: OrbitApprovalAction): SlackBlock[] {
+  private buildApprovalProcessingBlocks(
+    taskId: string,
+    action: OrbitApprovalAction
+  ): SlackBlock[] {
     return [
       {
-        type: 'section',
+        type: "section",
         text: {
-          type: 'mrkdwn',
+          type: "mrkdwn",
           text: `*Processing approval for task ${taskId}*\nSelected action: \`${action}\``,
         },
       },
@@ -888,10 +965,10 @@ export class SlackInterface {
 
     return [
       {
-        type: 'section',
+        type: "section",
         text: {
-          type: 'mrkdwn',
-          text: `*Approval resolved for task ${taskId}*\nAction: \`${action}\`${detail ? `\n${detail}` : ''}`,
+          type: "mrkdwn",
+          text: `*Approval resolved for task ${taskId}*\nAction: \`${action}\`${detail ? `\n${detail}` : ""}`,
         },
       },
     ];
@@ -900,35 +977,35 @@ export class SlackInterface {
   private buildApprovalErrorBlocks(taskId: string, error: Error): SlackBlock[] {
     return [
       {
-        type: 'section',
+        type: "section",
         text: {
-          type: 'mrkdwn',
+          type: "mrkdwn",
           text: `*Approval failed for task ${taskId}*\n${error.message}`,
         },
       },
       {
-        type: 'actions',
+        type: "actions",
         elements: [
           {
-            type: 'button',
+            type: "button",
             text: {
-              type: 'plain_text',
-              text: 'Retry Lane',
+              type: "plain_text",
+              text: "Retry Lane",
               emoji: true,
             },
-            style: 'primary',
-            action_id: 'orphaned_hosted_agent.retry',
+            style: "primary",
+            action_id: "orphaned_hosted_agent.retry",
             value: taskId,
           },
           {
-            type: 'button',
+            type: "button",
             text: {
-              type: 'plain_text',
-              text: 'Cancel Task',
+              type: "plain_text",
+              text: "Cancel Task",
               emoji: true,
             },
-            style: 'danger',
-            action_id: 'orphaned_hosted_agent.cancel',
+            style: "danger",
+            action_id: "orphaned_hosted_agent.cancel",
             value: taskId,
           },
         ],
@@ -939,8 +1016,8 @@ export class SlackInterface {
   private async syncTrackedTasksFromOrbit(): Promise<void> {
     try {
       const activeTasks = await this.orbitApi.listTasks({
-        source: 'slack',
-        status: 'pending,running',
+        source: "slack",
+        status: "pending,running",
       });
 
       let merged = 0;
@@ -955,19 +1032,22 @@ export class SlackInterface {
         }
         this.upsertTrackedTask(trackedTask);
         if (task.approval_message_ts) {
-          this.approvalMessageTsByTask.set(trackedTask.taskId, task.approval_message_ts);
+          this.approvalMessageTsByTask.set(
+            trackedTask.taskId,
+            task.approval_message_ts
+          );
         }
         this.syncDerivedApprovalState(task);
         this.orbitEvents.trackTask(trackedTask);
       }
 
-      logger.info('Synchronized Slack tasks from Orbit', {
+      logger.info("Synchronized Slack tasks from Orbit", {
         discoveredTasks: activeTasks.length,
         mergedTasks: merged,
         trackedTasks: this.trackedTasks.size,
       });
     } catch (error) {
-      logger.warn('Failed to synchronize Slack tasks from Orbit', {
+      logger.warn("Failed to synchronize Slack tasks from Orbit", {
         error: (error as Error).message,
       });
     }
@@ -988,9 +1068,9 @@ export class SlackInterface {
 
   private isTerminalOrbitEvent(event: OrbitEventEnvelope): boolean {
     return (
-      event.event === 'task.cancelled' ||
-      event.event === 'lane.green' ||
-      event.event === 'lane.failed'
+      event.event === "task.cancelled" ||
+      event.event === "lane.green" ||
+      event.event === "lane.failed"
     );
   }
 
@@ -1015,7 +1095,7 @@ export class SlackInterface {
 
   private syncDerivedApprovalState(task: OrbitTask): void {
     const hasApprovalMessage = Boolean(task.approval_message_ts);
-    const awaitingApproval = task.worker_status === 'orphaned';
+    const awaitingApproval = task.worker_status === "orphaned";
 
     if (hasApprovalMessage && !awaitingApproval) {
       this.approvalResolved.add(task.task_id);

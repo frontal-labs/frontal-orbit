@@ -187,6 +187,7 @@ For security vulnerabilities, please email security@frontal.dev instead of openi
 
 Current maintainers:
 - @frontal-labs
+- @gabrielvfonseca
 
 Maintainer responsibilities:
 - Review and merge pull requests

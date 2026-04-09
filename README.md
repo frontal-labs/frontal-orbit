@@ -214,6 +214,10 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 - **Default model:** `claude-opus-4-6`
 - **Default permissions:** `danger-full-access`
 
+## Attribution
+
+Originally based on [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code), a high-performance Rust rewrite of AI agent tooling. This fork has been significantly modified and rebranded as "Frontal Orbit" by Frontal Labs.
+
 ## License
 
 See repository root.

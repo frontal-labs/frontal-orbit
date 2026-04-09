@@ -40,6 +40,9 @@ use orbit_commands::{
 };
 use orbit_compat_harness::{extract_manifest, UpstreamPaths};
 use orbit_events::{EventEnvelope, HostedEventName, HostedEventStatus, HostedEventTopic};
+use orbit_github::{
+    parse_github_repo_url, GitHubClient, GitHubClientConfig, GitHubPullRequestDraft,
+};
 use orbit_integrations::ide::{
     collect_status as collect_ide_status, install_extension as install_ide_extension,
     install_packaged_extension as install_packaged_ide_extension,
@@ -49,6 +52,7 @@ use orbit_integrations::ide::{
 };
 use orbit_integrations::mcp::config as integrations_mcp_config;
 use orbit_plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
+use orbit_repo::{push_branch, repo_status, stage_and_commit, RepoCommitRequest};
 use orbit_runtime::{
     format_usd, load_system_prompt, permission_enforcer::PermissionEnforcer, pricing_for_model,
     resolve_sandbox_status, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
@@ -404,6 +408,9 @@ enum HostedCommand {
     TaskReconcile {
         task_id: String,
     },
+    TaskRun {
+        task_id: String,
+    },
     TaskCancel {
         task_id: String,
     },
@@ -572,6 +579,52 @@ struct HostedTaskRuntimeResponse {
     orphan_policy: Option<HostedAppliedOrphanPolicy>,
     #[serde(rename = "hostedAgent", skip_serializing_if = "Option::is_none")]
     hosted_agent: Option<HostedAgentRuntimeSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct HostedTaskWorkerPayload {
+    task_id: String,
+    prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allowed_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+struct HostedTaskGithubResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_head_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_base_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1083,7 +1136,7 @@ fn parse_hosted_task_cli_action(
 ) -> Result<CliAction, String> {
     let Some(action) = args.first().map(String::as_str) else {
         return Err(
-            "hosted task requires a subcommand. Use get, runtime, reconcile, cancel, or approval."
+            "hosted task requires a subcommand. Use get, runtime, reconcile, run, cancel, or approval."
                 .to_string(),
         );
     };
@@ -1126,6 +1179,20 @@ fn parse_hosted_task_cli_action(
             }
             Ok(CliAction::Hosted {
                 command: HostedCommand::TaskReconcile {
+                    task_id: task_id.clone(),
+                },
+                output_format,
+            })
+        }
+        "run" => {
+            let Some(task_id) = args.get(1) else {
+                return Err("hosted task run requires a task id".to_string());
+            };
+            if args.len() != 2 {
+                return Err("hosted task run accepts exactly one task id".to_string());
+            }
+            Ok(CliAction::Hosted {
+                command: HostedCommand::TaskRun {
                     task_id: task_id.clone(),
                 },
                 output_format,
@@ -1196,7 +1263,7 @@ fn parse_hosted_task_cli_action(
             })
         }
         other => Err(format!(
-            "unsupported hosted task subcommand: {other} (expected get, runtime, reconcile, cancel, or approval)"
+            "unsupported hosted task subcommand: {other} (expected get, runtime, reconcile, run, cancel, or approval)"
         )),
     }
 }
@@ -2717,6 +2784,9 @@ fn run_hosted_command(
                 CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
             }
         }
+        HostedCommand::TaskRun { task_id } => {
+            run_hosted_task_worker(&client, &server_url, &task_id, output_format)?;
+        }
         HostedCommand::TaskCancel { task_id } => {
             let response = cancel_hosted_task(&client, &server_url, &task_id)?;
             match output_format {
@@ -2889,6 +2959,307 @@ fn resolve_hosted_task_approval(
         .send()?
         .error_for_status()?;
     Ok(response.json()?)
+}
+
+fn complete_hosted_task(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+    finish_reason: &str,
+    tokens_output: u64,
+    result: Option<String>,
+    error: Option<String>,
+) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
+    let response = client
+        .post(format!("{server_url}/v1/tasks/{task_id}/complete"))
+        .json(&json!({
+            "finish_reason": finish_reason,
+            "tokens_output": tokens_output,
+            "result": result,
+            "error": error,
+        }))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn update_hosted_task_github(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+    github: &HostedTaskGithubResponse,
+) -> Result<HostedTaskGithubResponse, Box<dyn std::error::Error>> {
+    let response = client
+        .post(format!("{server_url}/v1/tasks/{task_id}/github"))
+        .json(github)
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn hosted_git_author_name() -> String {
+    env::var("ORBIT_GIT_AUTHOR_NAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Orbit".to_string())
+}
+
+fn hosted_git_author_email() -> String {
+    env::var("ORBIT_GIT_AUTHOR_EMAIL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "orbit@localhost".to_string())
+}
+
+fn hosted_github_api_base() -> String {
+    env::var("ORBIT_GITHUB_API_BASE")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://api.github.com".to_string())
+}
+
+fn summarize_hosted_prompt(prompt: &str) -> String {
+    let first_line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("complete hosted task");
+    let mut summary = first_line
+        .chars()
+        .take(72)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if summary.is_empty() {
+        summary = "complete hosted task".to_string();
+    }
+    summary
+}
+
+fn default_hosted_commit_message(task_id: &str, prompt: &str) -> String {
+    format!("orbit: {} ({task_id})", summarize_hosted_prompt(prompt))
+}
+
+fn default_hosted_pr_draft(
+    payload: &HostedTaskWorkerPayload,
+    published_branch: &str,
+    commit_sha: &str,
+) -> Option<GitHubPullRequestDraft> {
+    let repo_url = payload.repo_url.as_deref()?;
+    parse_github_repo_url(repo_url).ok()?;
+    let base = payload.base_ref.as_deref()?.trim();
+    if base.is_empty() || base == published_branch {
+        return None;
+    }
+
+    Some(GitHubPullRequestDraft {
+        title: summarize_hosted_prompt(&payload.prompt),
+        body: format!(
+            "Automated by Orbit hosted task `{}`.\n\nRepository: {}\nBranch: {}\nCommit: {}\n\nPrompt:\n{}\n",
+            payload.task_id,
+            payload
+                .repository
+                .as_deref()
+                .or(payload.repo_url.as_deref())
+                .unwrap_or("unknown"),
+            published_branch,
+            commit_sha,
+            payload.prompt.trim()
+        ),
+        head: published_branch.to_string(),
+        base: base.to_string(),
+        draft: true,
+    })
+}
+
+fn publish_hosted_repo_changes(
+    checkout_root: &Path,
+    payload: &HostedTaskWorkerPayload,
+) -> Result<Option<HostedTaskGithubResponse>, Box<dyn std::error::Error>> {
+    let status = match repo_status(checkout_root) {
+        Ok(status) => status,
+        Err(error) => {
+            let message = error.to_string();
+            if message.contains("not a git repository") {
+                return Ok(None);
+            }
+            return Err(error.into());
+        }
+    };
+    if !status.dirty {
+        return Ok(None);
+    }
+
+    let published_branch = payload
+        .branch
+        .clone()
+        .or(status.branch.clone())
+        .ok_or_else(|| {
+            format!(
+                "cannot publish hosted task {} from detached HEAD without a target branch",
+                payload.task_id
+            )
+        })?;
+    let commit = stage_and_commit(
+        checkout_root,
+        &RepoCommitRequest {
+            message: default_hosted_commit_message(&payload.task_id, &payload.prompt),
+            author_name: Some(hosted_git_author_name()),
+            author_email: Some(hosted_git_author_email()),
+        },
+    )?;
+    push_branch(checkout_root, "origin", &published_branch)?;
+
+    let mut github = HostedTaskGithubResponse {
+        published_remote: Some("origin".to_string()),
+        published_branch: Some(published_branch.clone()),
+        published_commit_sha: Some(commit.commit_sha.clone()),
+        ..HostedTaskGithubResponse::default()
+    };
+
+    if let (Some(repo_url), Some(token), Some(draft)) = (
+        payload.repo_url.as_deref(),
+        env::var("GITHUB_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        default_hosted_pr_draft(payload, &published_branch, &commit.commit_sha),
+    ) {
+        let repo = parse_github_repo_url(repo_url)?;
+        let client = GitHubClient::new(GitHubClientConfig {
+            api_base: hosted_github_api_base(),
+            token,
+        });
+        let pr = client.create_pull_request(&repo, &draft)?;
+        github.owner = Some(repo.owner);
+        github.repo = Some(repo.repo);
+        github.pr_number = Some(pr.number);
+        github.pr_url = Some(pr.html_url);
+        github.pr_api_url = Some(pr.api_url);
+        github.pr_head_ref = Some(pr.head_ref);
+        github.pr_base_ref = Some(pr.base_ref);
+    }
+
+    Ok(Some(github))
+}
+
+fn augment_hosted_result_with_publication(
+    result: Option<String>,
+    github: &HostedTaskGithubResponse,
+) -> Option<String> {
+    if github.published_branch.is_none() && github.pr_url.is_none() {
+        return result;
+    }
+
+    let mut value = result.unwrap_or_default();
+    if !value.trim().is_empty() {
+        value.push_str("\n\n");
+    }
+    value.push_str("Publication\n");
+    if let Some(branch) = github.published_branch.as_deref() {
+        value.push_str(&format!("Branch: {branch}\n"));
+    }
+    if let Some(commit_sha) = github.published_commit_sha.as_deref() {
+        value.push_str(&format!("Commit: {commit_sha}\n"));
+    }
+    if let Some(pr_url) = github.pr_url.as_deref() {
+        value.push_str(&format!("PR: {pr_url}\n"));
+    }
+    Some(value.trim_end().to_string())
+}
+
+fn run_hosted_task_worker(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let payload = load_hosted_task_worker_payload(task_id)?;
+    let model = payload
+        .model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let permission_mode = payload
+        .permission_mode
+        .as_deref()
+        .map(parse_permission_mode_arg)
+        .transpose()?
+        .unwrap_or_else(default_permission_mode);
+    let allowed_tools = normalize_allowed_tools(&payload.allowed_tools)?;
+    let mut cli = LiveCli::new_with_provider(
+        model,
+        payload.provider.clone(),
+        true,
+        allowed_tools,
+        permission_mode,
+    )?;
+
+    match cli.run_prompt_json_value(&payload.prompt) {
+        Ok(summary) => {
+            let tokens_output = summary
+                .get("usage")
+                .and_then(|usage| usage.get("output_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let mut result = summary
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if let Some(github) = publish_hosted_repo_changes(Path::new("."), &payload)? {
+                let github = update_hosted_task_github(client, server_url, task_id, &github)?;
+                result = augment_hosted_result_with_publication(result, &github);
+            }
+            let response = complete_hosted_task(
+                client,
+                server_url,
+                task_id,
+                "stop",
+                tokens_output,
+                result,
+                None,
+            )?;
+            match output_format {
+                CliOutputFormat::Text => println!(
+                    "{}",
+                    render_hosted_task_report("Hosted task run", server_url, &response)
+                ),
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&summary)?),
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let error_message = error.to_string();
+            let _ = complete_hosted_task(
+                client,
+                server_url,
+                task_id,
+                "error",
+                0,
+                None,
+                Some(error_message.clone()),
+            );
+            Err(error)
+        }
+    }
+}
+
+fn load_hosted_task_worker_payload(
+    task_id: &str,
+) -> Result<HostedTaskWorkerPayload, Box<dyn std::error::Error>> {
+    let task_file = env::var("ORBIT_HOSTED_TASK_FILE")
+        .map_err(|_| "ORBIT_HOSTED_TASK_FILE must be set for hosted task runs")?;
+    let payload: HostedTaskWorkerPayload = serde_json::from_slice(&fs::read(task_file)?)?;
+    if payload.task_id != task_id {
+        return Err(format!(
+            "hosted task payload task id mismatch: expected {task_id}, got {}",
+            payload.task_id
+        )
+        .into());
+    }
+    Ok(payload)
 }
 
 async fn watch_hosted_events(
@@ -5327,6 +5698,12 @@ impl LiveCli {
     }
 
     fn run_prompt_json(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let summary = self.run_prompt_json_value(input)?;
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        Ok(())
+    }
+
+    fn run_prompt_json_value(&mut self, input: &str) -> Result<Value, Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(false)?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = runtime.run_turn(input, Some(&mut permission_prompter));
@@ -5334,34 +5711,30 @@ impl LiveCli {
         let summary = result?;
         self.replace_runtime(runtime)?;
         self.persist_session()?;
-        println!(
-            "{}",
-            json!({
-                "message": final_assistant_text(&summary),
-                "model": self.model,
-                "iterations": summary.iterations,
-                "auto_compaction": summary.auto_compaction.map(|event| json!({
-                    "removed_messages": event.removed_message_count,
-                    "notice": format_auto_compaction_notice(event.removed_message_count),
-                })),
-                "tool_uses": collect_tool_uses(&summary),
-                "tool_results": collect_tool_results(&summary),
-                "prompt_cache_events": collect_prompt_cache_events(&summary),
-                "usage": {
-                    "input_tokens": summary.usage.input_tokens,
-                    "output_tokens": summary.usage.output_tokens,
-                    "cache_creation_input_tokens": summary.usage.cache_creation_input_tokens,
-                    "cache_read_input_tokens": summary.usage.cache_read_input_tokens,
-                },
-                "estimated_cost": format_usd(
-                    summary.usage.estimate_cost_usd_with_pricing(
-                        pricing_for_model(&self.model)
-                            .unwrap_or_else(orbit_runtime::ModelPricing::default_sonnet_tier)
-                    ).total_cost_usd()
-                )
-            })
-        );
-        Ok(())
+        Ok(json!({
+            "message": final_assistant_text(&summary),
+            "model": self.model,
+            "iterations": summary.iterations,
+            "auto_compaction": summary.auto_compaction.map(|event| json!({
+                "removed_messages": event.removed_message_count,
+                "notice": format_auto_compaction_notice(event.removed_message_count),
+            })),
+            "tool_uses": collect_tool_uses(&summary),
+            "tool_results": collect_tool_results(&summary),
+            "prompt_cache_events": collect_prompt_cache_events(&summary),
+            "usage": {
+                "input_tokens": summary.usage.input_tokens,
+                "output_tokens": summary.usage.output_tokens,
+                "cache_creation_input_tokens": summary.usage.cache_creation_input_tokens,
+                "cache_read_input_tokens": summary.usage.cache_read_input_tokens,
+            },
+            "estimated_cost": format_usd(
+                summary.usage.estimate_cost_usd_with_pricing(
+                    pricing_for_model(&self.model)
+                        .unwrap_or_else(orbit_runtime::ModelPricing::default_sonnet_tier)
+                ).total_cost_usd()
+            )
+        }))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -10035,20 +10408,20 @@ mod tests {
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, format_user_visible_api_error, hosted_server_url,
-        hosted_task_snapshot_from_event, normalize_permission_mode, parse_args,
-        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
-        permission_policy, print_help_to, push_output_block, render_config_report,
-        render_diff_report, render_diff_report_for, render_memory_report, render_repl_help,
-        render_resume_usage, render_telemetry_report, report_row, resolve_model_alias,
-        resolve_session_reference, resolve_telemetry_config, response_to_events,
-        resume_supported_slash_commands, run_resume_command,
-        slash_command_completion_candidates_with_sessions, status_context,
+        hosted_task_snapshot_from_event, load_hosted_task_worker_payload,
+        normalize_permission_mode, parse_args, parse_git_status_branch,
+        parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
+        print_help_to, push_output_block, render_config_report, render_diff_report,
+        render_diff_report_for, render_memory_report, render_repl_help, render_resume_usage,
+        render_telemetry_report, report_row, resolve_model_alias, resolve_session_reference,
+        resolve_telemetry_config, response_to_events, resume_supported_slash_commands,
+        run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
         telemetry_status_json_value, update_project_telemetry_settings, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, EventEnvelope,
         GitWorkspaceSummary, HostedApprovalAction, HostedCommand, HostedEventName,
         HostedEventStatus, HostedEventTopic, HostedEventWatchQuery, HostedTaskListQuery,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, LocalHelpTopic,
-        SlashCommand, StatusUsage, DEFAULT_MODEL, ORBIT_TELEMETRY_PATH,
+        HostedTaskWorkerPayload, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
+        LocalHelpTopic, SlashCommand, StatusUsage, DEFAULT_MODEL, ORBIT_TELEMETRY_PATH,
     };
     use orbit_api::{ApiError, MessageResponse, OutputContentBlock, Usage};
     use orbit_events::EventIdentifiers;
@@ -10932,6 +11305,21 @@ mod tests {
             parse_args(&[
                 "hosted".to_string(),
                 "task".to_string(),
+                "run".to_string(),
+                "task_123".to_string(),
+            ])
+            .expect("hosted run should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskRun {
+                    task_id: "task_123".to_string(),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
                 "cancel".to_string(),
                 "task_123".to_string(),
             ])
@@ -10979,6 +11367,46 @@ mod tests {
         std::env::set_var("ORBIT_SERVER_BASE_URL", "http://fallback.orbit.test/");
         assert_eq!(hosted_server_url(), "http://fallback.orbit.test");
         std::env::remove_var("ORBIT_SERVER_BASE_URL");
+    }
+
+    #[test]
+    fn load_hosted_task_worker_payload_reads_json_file_from_env() {
+        let _guard = env_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "orbit-cli-hosted-task-payload-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let payload_path = dir.join("task.json");
+        fs::write(
+            &payload_path,
+            serde_json::to_vec(&HostedTaskWorkerPayload {
+                task_id: "task_123".to_string(),
+                prompt: "Investigate failure".to_string(),
+                model: Some("gpt-5.4".to_string()),
+                provider: Some("openai".to_string()),
+                permission_mode: Some("workspace-write".to_string()),
+                allowed_tools: vec!["git".to_string()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        std::env::set_var("ORBIT_HOSTED_TASK_FILE", &payload_path);
+
+        let payload =
+            load_hosted_task_worker_payload("task_123").expect("payload should load successfully");
+        assert_eq!(payload.task_id, "task_123");
+        assert_eq!(payload.prompt, "Investigate failure");
+        assert_eq!(payload.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(payload.provider.as_deref(), Some("openai"));
+        assert_eq!(payload.permission_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(payload.allowed_tools, vec!["git".to_string()]);
+
+        std::env::remove_var("ORBIT_HOSTED_TASK_FILE");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

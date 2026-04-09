@@ -80,18 +80,18 @@ GITHUB_PRIVATE_KEY_PATH=/path/to/github/private/key.pem
 
 ```bash
 cd extensions/orbit-slack
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ### 5. Start the Slack Bot
 
 ```bash
 # Development
-npm run dev
+bun run dev
 
 # Production
-npm start
+bun start
 ```
 
 ## Slash Commands
@@ -197,14 +197,14 @@ git clone <your-repo>
 cd extensions/orbit-slack
 
 # Install dependencies
-npm install
+bun install
 
 # Configure environment
 cp .env.example .env
 # Edit .env with your tokens
 
 # Start development server
-npm run dev
+bun run dev
 ```
 
 The bot will connect to your Slack workspace and be ready for testing.

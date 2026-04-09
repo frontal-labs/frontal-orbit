@@ -82,22 +82,22 @@ Prerequisites:
 Typical loop:
 
 ```bash
-npm install
+bun install
 cp .env.example .env
-npm run dev
+bun run dev
 ```
 
 Useful commands:
 
 ```bash
-npm run sync:orbit-events
-npm run build
-npm test
-npm run lint
-npm run format
+bun run sync:orbit-events
+bun run build
+bun test
+bun run lint
+bun run format
 ```
 
-`npm run build` now checks that `src/generated/orbit-events.ts` matches the Rust event contract generator. If the file is stale, run `npm run sync:orbit-events` and rebuild.
+`bun run build` now checks that `src/generated/orbit-events.ts` matches the Rust event contract generator. If the file is stale, run `bun run sync:orbit-events` and rebuild.
 
 ## Slack App Setup
 
@@ -131,7 +131,7 @@ When Orbit emits `approval.requested` for an orphaned hosted agent, the connecto
 ## Verification
 
 ```bash
-npm run build
+bun run build
 ```
 
 For an end-to-end operator runbook covering hosted task inspection, orphan recovery, approvals, and policy tuning, see `docs/hosted-task-operations.md`.

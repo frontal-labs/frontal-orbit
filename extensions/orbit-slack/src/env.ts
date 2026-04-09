@@ -1,8 +1,8 @@
-import { createEnv } from '@t3-oss/env-core';
-import { z } from 'zod';
+import { createEnv } from "@t3-oss/env-core";
+import { z } from "zod";
 
 export const env = createEnv({
-  clientPrefix: '',
+  clientPrefix: "",
   /**
    * Specify your server-side environment variables schema here. This way you can ensure the app
    * isn't built with invalid env vars.
@@ -11,21 +11,32 @@ export const env = createEnv({
     // Slack Configuration
     SLACK_BOT_TOKEN: z
       .string()
-      .min(1, 'Slack bot token is required')
-      .startsWith('xoxb-', 'Slack bot token must start with xoxb-'),
+      .min(1, "Slack bot token is required")
+      .startsWith("xoxb-", "Slack bot token must start with xoxb-"),
     SLACK_APP_TOKEN: z
       .string()
-      .min(1, 'Slack app token is required')
-      .startsWith('xapp-', 'Slack app token must start with xapp-'),
-    SLACK_SIGNING_SECRET: z.string().min(32, 'Slack signing secret must be at least 32 characters'),
+      .min(1, "Slack app token is required")
+      .startsWith("xapp-", "Slack app token must start with xapp-"),
+    SLACK_SIGNING_SECRET: z
+      .string()
+      .min(32, "Slack signing secret must be at least 32 characters"),
 
     // Orbit API Configuration
-    ORBIT_API_URL: z.string().url().default('http://orbit-api:8787'),
-    ORBIT_API_TIMEOUT: z.coerce.number().int().min(1000).max(300000).default(30000),
+    ORBIT_API_URL: z.string().url().default("http://orbit-api:8787"),
+    ORBIT_API_TIMEOUT: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .max(300000)
+      .default(30000),
 
     // Application Configuration
-    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-    LOG_LEVEL: z.enum(['error', 'warn', 'info', 'http', 'debug']).default('info'),
+    NODE_ENV: z
+      .enum(["development", "production", "test"])
+      .default("development"),
+    LOG_LEVEL: z
+      .enum(["error", "warn", "info", "http", "debug"])
+      .default("info"),
     PORT: z.coerce.number().int().min(1000).max(65535).default(3000),
 
     // GitHub Configuration (Optional)
@@ -36,8 +47,18 @@ export const env = createEnv({
 
     // Advanced Configuration
     MAX_CONCURRENT_TASKS: z.coerce.number().int().min(1).max(100).default(10),
-    TASK_TIMEOUT: z.coerce.number().int().min(60000).max(7200000).default(3600000), // 1 min to 2 hours
-    HEALTH_CHECK_INTERVAL: z.coerce.number().int().min(5000).max(300000).default(30000), // 5s to 5min
+    TASK_TIMEOUT: z.coerce
+      .number()
+      .int()
+      .min(60000)
+      .max(7200000)
+      .default(3600000), // 1 min to 2 hours
+    HEALTH_CHECK_INTERVAL: z.coerce
+      .number()
+      .int()
+      .min(5000)
+      .max(300000)
+      .default(30000), // 5s to 5min
   },
 
   /**
@@ -71,7 +92,9 @@ export const env = createEnv({
     MAX_CONCURRENT_TASKS: process.env.MAX_CONCURRENT_TASKS
       ? Number(process.env.MAX_CONCURRENT_TASKS)
       : undefined,
-    TASK_TIMEOUT: process.env.TASK_TIMEOUT ? Number(process.env.TASK_TIMEOUT) : undefined,
+    TASK_TIMEOUT: process.env.TASK_TIMEOUT
+      ? Number(process.env.TASK_TIMEOUT)
+      : undefined,
     HEALTH_CHECK_INTERVAL: process.env.HEALTH_CHECK_INTERVAL
       ? Number(process.env.HEALTH_CHECK_INTERVAL)
       : undefined,
@@ -88,11 +111,13 @@ export const env = createEnv({
    * You can customize the error message or throw a different error.
    */
   onValidationError: (error: z.ZodError) => {
-    console.error('Environment variable validation failed:');
+    console.error("Environment variable validation failed:");
     console.error(
-      error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('\n')
+      error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("\n")
     );
-    throw new Error('Environment variable validation failed');
+    throw new Error("Environment variable validation failed");
   },
 
   /**
@@ -154,7 +179,7 @@ export function getEnvConfig() {
 export function validateEnvConfig(): void {
   // The t3-oss/env-core library handles validation automatically
   // This function is kept for backward compatibility
-  console.log('Environment variables validated successfully');
+  console.log("Environment variables validated successfully");
 }
 
 export default env;

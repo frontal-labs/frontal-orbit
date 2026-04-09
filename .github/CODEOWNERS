@@ -2,11 +2,12 @@
 
 # Global owners - will be reviewers for every PR
 * @frontal-labs
+* @gabrielvfonseca
 
 # Specific file/directory owners
 
 # Core CLI and API
-crates/cli/ @frontal-labs
+crates/cli/ @frontal-labs @gabrielvfonseca
 crates/api/ @frontal-labs
 crates/agents/ @frontal-labs
 

@@ -4,6 +4,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+bun-debug.log*
 lerna-debug.log*
 
 # Build outputs
@@ -41,8 +42,9 @@ jspm_packages/
 # TypeScript cache
 *.tsbuildinfo
 
-# Optional npm cache directory
+# Optional package manager cache directories
 .npm
+.bun
 
 # Optional eslint cache
 .eslintcache
@@ -62,8 +64,9 @@ jspm_packages/
 # Output of 'npm pack'
 *.tgz
 
-# Yarn Integrity file
+# Package manager integrity files
 .yarn-integrity
+bun.lockb
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

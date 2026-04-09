@@ -1,11 +1,11 @@
-import * as Sentry from '@sentry/node';
-import winston from 'winston';
-import { config } from './config';
+import * as Sentry from "@sentry/node";
+import winston from "winston";
+import { config } from "./config";
 
 type LogMeta = Record<string, unknown>;
 
 // Initialize Sentry
-if (config.app.nodeEnv === 'production') {
+if (config.app.nodeEnv === "production") {
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
     environment: config.app.nodeEnv,
@@ -19,9 +19,12 @@ const winstonLogger = winston.createLogger({
   level: config.app.logLevel,
   format: winston.format.combine(
     winston.format.timestamp(),
-    config.app.nodeEnv === 'production'
+    config.app.nodeEnv === "production"
       ? winston.format.json()
-      : winston.format.combine(winston.format.colorize(), winston.format.simple())
+      : winston.format.combine(
+          winston.format.colorize(),
+          winston.format.simple()
+        )
   ),
   transports: [new winston.transports.Console()],
 });
@@ -47,43 +50,55 @@ export const logger: Logger = {
   warn: (message: string, meta?: LogMeta) => {
     winstonLogger.warn(message, meta);
     // Send warnings to Sentry in production
-    if (config.app.nodeEnv === 'production') {
-      Sentry.captureMessage(message, 'warning');
+    if (config.app.nodeEnv === "production") {
+      Sentry.captureMessage(message, "warning");
     }
   },
 
   error: (message: string, error?: Error, meta?: LogMeta) => {
-    winstonLogger.error(message, { ...meta, error: error?.message, stack: error?.stack });
+    winstonLogger.error(message, {
+      ...meta,
+      error: error?.message,
+      stack: error?.stack,
+    });
 
     // Send errors to Sentry in production
-    if (config.app.nodeEnv === 'production') {
+    if (config.app.nodeEnv === "production") {
       if (error) {
         Sentry.captureException(error);
       } else {
-        Sentry.captureMessage(message, 'error');
+        Sentry.captureMessage(message, "error");
       }
     }
   },
 };
 
 // Structured logging helpers
-export const logTaskCreation = (taskId: string, userId: string, prompt: string): void => {
-  logger.info('Task created', {
+export const logTaskCreation = (
+  taskId: string,
+  userId: string,
+  prompt: string
+): void => {
+  logger.info("Task created", {
     taskId,
     userId,
     prompt: prompt.substring(0, 100),
-    category: 'task',
-    action: 'created',
+    category: "task",
+    action: "created",
   });
 };
 
-export const logTaskStatusChange = (taskId: string, oldStatus: string, newStatus: string): void => {
-  logger.info('Task status changed', {
+export const logTaskStatusChange = (
+  taskId: string,
+  oldStatus: string,
+  newStatus: string
+): void => {
+  logger.info("Task status changed", {
     taskId,
     oldStatus,
     newStatus,
-    category: 'task',
-    action: 'status_change',
+    category: "task",
+    action: "status_change",
   });
 };
 
@@ -93,87 +108,103 @@ export const logApiCall = (
   duration: number,
   success: boolean
 ): void => {
-  logger.info('API call', {
+  logger.info("API call", {
     endpoint,
     method,
     duration,
     success,
-    category: 'api',
-    action: 'call',
+    category: "api",
+    action: "call",
   });
 };
 
-export const logSlackEvent = (eventType: string, userId: string, channelId: string): void => {
-  logger.info('Slack event', {
+export const logSlackEvent = (
+  eventType: string,
+  userId: string,
+  channelId: string
+): void => {
+  logger.info("Slack event", {
     eventType,
     userId,
     channelId,
-    category: 'slack',
-    action: 'event',
+    category: "slack",
+    action: "event",
   });
 };
 
-export const logUserAction = (userId: string, userAction: string, details?: LogMeta): void => {
-  logger.info('User action', {
+export const logUserAction = (
+  userId: string,
+  userAction: string,
+  details?: LogMeta
+): void => {
+  logger.info("User action", {
     userId,
     action: userAction,
     ...details,
-    category: 'user',
-    event_type: 'action',
+    category: "user",
+    event_type: "action",
   });
 };
 
 export const logSystemEvent = (event: string, details?: LogMeta): void => {
-  logger.info('System event', {
+  logger.info("System event", {
     event,
     ...details,
-    category: 'system',
-    action: 'event',
+    category: "system",
+    action: "event",
   });
 };
 
-export const logSecurityEvent = (event: string, userId: string, details?: LogMeta): void => {
-  logger.warn('Security event', {
+export const logSecurityEvent = (
+  event: string,
+  userId: string,
+  details?: LogMeta
+): void => {
+  logger.warn("Security event", {
     event,
     userId,
     ...details,
-    category: 'security',
-    action: 'event',
+    category: "security",
+    action: "event",
   });
 };
 
 // Performance logging
-export const logPerformance = (operation: string, duration: number, details?: LogMeta): void => {
-  logger.info('Performance metric', {
+export const logPerformance = (
+  operation: string,
+  duration: number,
+  details?: LogMeta
+): void => {
+  logger.info("Performance metric", {
     operation,
     duration,
     ...details,
-    category: 'performance',
-    action: 'metric',
+    category: "performance",
+    action: "metric",
   });
 };
 
 // Health check logging
 export const logHealthCheck = (
   service: string,
-  status: 'healthy' | 'unhealthy',
+  status: "healthy" | "unhealthy",
   details?: LogMeta
 ): void => {
-  if (status === 'healthy') {
+  if (status === "healthy") {
     logger.info(`Health check - ${service}`, {
       service,
       status,
       ...details,
-      category: 'health',
-      action: 'check',
+      category: "health",
+      action: "check",
     });
   } else {
     logger.error(`Health check - ${service}`, undefined, {
       service,
       status,
       ...details,
-      category: 'health',
-      action: 'check',
+      category: "health",
+      action: "check",
     });
   }
 };
@@ -185,12 +216,12 @@ export const logDatabaseOperation = (
   duration?: number,
   details?: LogMeta
 ): void => {
-  logger.info('Database operation', {
+  logger.info("Database operation", {
     operation,
     table,
     duration,
     ...details,
-    category: 'database',
+    category: "database",
     action: operation,
   });
 };
@@ -202,12 +233,12 @@ export const logRedisOperation = (
   duration?: number,
   details?: LogMeta
 ): void => {
-  logger.info('Redis operation', {
+  logger.info("Redis operation", {
     operation,
     key,
     duration,
     ...details,
-    category: 'redis',
+    category: "redis",
     action: operation,
   });
 };
@@ -220,9 +251,15 @@ export const createErrorContext = (
 ): LogMeta => {
   const context: LogMeta = {};
 
-  if (userId) context.userId = userId;
-  if (taskId) context.taskId = taskId;
-  if (channelId) context.channelId = channelId;
+  if (userId) {
+    context.userId = userId;
+  }
+  if (taskId) {
+    context.taskId = taskId;
+  }
+  if (channelId) {
+    context.channelId = channelId;
+  }
 
   return context;
 };
@@ -241,12 +278,18 @@ export class PerformanceTimer {
 
   end(additionalDetails?: LogMeta): void {
     const duration = Date.now() - this.startTime;
-    logPerformance(this.operation, duration, { ...this.details, ...additionalDetails });
+    logPerformance(this.operation, duration, {
+      ...this.details,
+      ...additionalDetails,
+    });
   }
 }
 
 // Create a performance timer
-export const startTimer = (operation: string, details?: LogMeta): PerformanceTimer => {
+export const startTimer = (
+  operation: string,
+  details?: LogMeta
+): PerformanceTimer => {
   return new PerformanceTimer(operation, details);
 };
 

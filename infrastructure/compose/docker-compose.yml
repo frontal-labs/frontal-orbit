@@ -9,6 +9,9 @@ services:
       ORBIT_SERVER_HOST: ${ORBIT_SERVER_HOST:-0.0.0.0}
       ORBIT_SERVER_PORT: ${ORBIT_SERVER_PORT:-8788}
       ORBIT_SERVER_LANE_TRANSPORT: ${ORBIT_SERVER_LANE_TRANSPORT:-tools-agent}
+      ORBIT_SERVER_WORKSPACE_ROOT: ${ORBIT_SERVER_WORKSPACE_ROOT:-/workspace/workspaces}
+      ORBIT_SERVER_DOCKER_IMAGE: ${ORBIT_SERVER_DOCKER_IMAGE:-orbit-worker:latest}
+      ORBIT_SERVER_CALLBACK_URL: ${ORBIT_SERVER_CALLBACK_URL:-http://host.docker.internal:8788}
       ORBIT_SERVER_RECONCILE_INTERVAL_SECS: ${ORBIT_SERVER_RECONCILE_INTERVAL_SECS:-15}
       ORBIT_SERVER_ORPHAN_APPROVAL_DELAY_SECS: ${ORBIT_SERVER_ORPHAN_APPROVAL_DELAY_SECS:-0}
       ORBIT_SERVER_ORPHAN_AUTO_RETRY_SECS: ${ORBIT_SERVER_ORPHAN_AUTO_RETRY_SECS:-0}
@@ -35,6 +38,7 @@ services:
       - orbit_workspace:/workspace
       - orbit_server_state:/var/lib/orbit/server
       - orbit_agent_store:/var/lib/orbit/agents
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8788:8788"
     healthcheck:
@@ -43,6 +47,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+
+  orbit-worker-image:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/orbit-worker.Dockerfile
+    image: orbit-worker:latest
+    command: ["orbit", "--version"]
+    restart: "no"
+    profiles: ["worker-image"]
 
   orbit-slack:
     build:

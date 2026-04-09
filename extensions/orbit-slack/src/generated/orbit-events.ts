@@ -47,7 +47,13 @@ export interface OrbitGeneratedHostedTaskEventSummary {
   thread_ts?: string;
   approval_message_ts?: string;
   repository?: string;
+  repo_url?: string;
+  base_ref?: string;
   branch?: string;
+  published_branch?: string;
+  pr_url?: string;
+  pr_number?: number;
+  execution_backend?: string;
   priority?: string;
   plan_id?: string;
   plan_kind?: string;

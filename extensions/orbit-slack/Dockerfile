@@ -1,5 +1,8 @@
-# Use Node.js 18 LTS
+# Use Node.js 18 LTS with Bun
 FROM node:18-alpine AS builder
+
+# Install Bun
+RUN npm install -g bun
 
 # Set working directory
 WORKDIR /app
@@ -8,13 +11,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN bun install --frozen-lockfile --production
 
 # Copy source code
 COPY . .
 
 # Build the application
-RUN npm run build
+RUN bun run build
 
 # Production stage
 FROM node:18-alpine AS production
@@ -33,7 +36,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --only=production && npm cache clean --force
+RUN bun install --frozen-lockfile --production && bun pm cache rm
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist

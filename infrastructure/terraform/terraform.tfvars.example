@@ -1,0 +1,50 @@
+# AWS Configuration
+aws_region = "us-east-1"
+environment = "development"
+aws_account_id = "123456789012"
+
+# EKS Cluster
+eks_cluster_name = "orbit-dev-cluster"
+eks_cluster_auth_name = "orbit-dev-cluster"
+
+# Networking
+vpc_id = "vpc-xxxxxxxxx"
+
+# SSL Certificate (must exist in ACM)
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Kubernetes
+orbit_service_namespace = "orbit"
+
+# Deployment Configuration
+deploy_orbit_server = true
+deploy_orbit_slack = true
+
+# Container Images
+orbit_server_image = "orbit-server:latest"
+orbit_slack_image = "orbit-slack:latest"
+
+# Slack Configuration
+slack_bot_token = "xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx"
+slack_app_token = "xapp-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx"
+slack_signing_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Optional Integrations
+github_token = ""  # GitHub token for Slack integration
+sentry_dsn = ""    # Sentry DSN for error tracking
+
+# API Keys (optional)
+api_keys = {
+  anthropic = "sk-ant-xxxxxxxxxxxx"
+  openai = "sk-xxxxxxxxxxxx"
+  xai = "xxxxxxxxxxxx"
+  azure = "xxxxxxxxxxxx"
+  bedrock = "xxxxxxxxxxxx"
+  ollama = ""
+}
+
+# Storage Configuration
+storage_class = "gp3"
+workspace_storage_size = "100Gi"
+server_state_storage_size = "10Gi"
+agent_store_storage_size = "50Gi"

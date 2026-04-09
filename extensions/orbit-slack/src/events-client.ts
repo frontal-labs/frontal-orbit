@@ -1,7 +1,7 @@
-import WebSocket from 'ws';
-import { config } from './config';
-import { logger } from './log';
-import type { OrbitEventEnvelope } from './types';
+import WebSocket from "ws";
+import { config } from "./config";
+import { logger } from "./log";
+import type { OrbitEventEnvelope } from "./types";
 
 type EventHandler = (event: OrbitEventEnvelope) => void;
 
@@ -20,25 +20,28 @@ export class OrbitEventsClient {
       return;
     }
     this.ws = new WebSocket(this.url);
-    this.ws.on('open', () => {
-      logger.info('Connected to Orbit event stream', { url: this.url });
+    this.ws.on("open", () => {
+      logger.info("Connected to Orbit event stream", { url: this.url });
     });
-    this.ws.on('message', (payload) => {
+    this.ws.on("message", (payload) => {
       try {
         const event = JSON.parse(payload.toString()) as OrbitEventEnvelope;
         for (const handler of this.handlers) {
           handler(event);
         }
       } catch (error) {
-        logger.error('Failed to parse Orbit event', error as Error);
+        logger.error("Failed to parse Orbit event", error as Error);
       }
     });
-    this.ws.on('close', (code, reason) => {
-      logger.warn('Orbit event stream closed', { code, reason: reason.toString() });
+    this.ws.on("close", (code, reason) => {
+      logger.warn("Orbit event stream closed", {
+        code,
+        reason: reason.toString(),
+      });
       this.scheduleReconnect();
     });
-    this.ws.on('error', (error) => {
-      logger.error('Orbit event stream error', error as Error);
+    this.ws.on("error", (error) => {
+      logger.error("Orbit event stream error", error as Error);
       this.scheduleReconnect();
     });
   }
@@ -68,8 +71,10 @@ export class OrbitEventsClient {
   }
 
   private buildWsUrl(): string {
-    const base = config.orbit.apiUrl.replace(/\/+$/, '');
-    const wsBase = base.replace(/^http/, (match) => (match === 'https' ? 'wss' : 'ws'));
+    const base = config.orbit.apiUrl.replace(/\/+$/, "");
+    const wsBase = base.replace(/^http/, (match) =>
+      match === "https" ? "wss" : "ws"
+    );
     return `${wsBase}/v1/events/ws`;
   }
 }

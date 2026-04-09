@@ -16,6 +16,8 @@ orbit-compat-harness = { path = "../compat-harness" }
 crossterm = "0.28"
 futures-util = "0.3"
 orbit-events = { path = "../events" }
+orbit-github = { path = "../github" }
+orbit-repo = { path = "../repo" }
 pulldown-cmark = "0.13"
 rustyline = "15"
 orbit-runtime = { path = "../runtime" }

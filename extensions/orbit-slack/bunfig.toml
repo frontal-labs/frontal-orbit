@@ -1,0 +1,123 @@
+# Bun configuration for orbit-slack extension
+
+[install]
+# Use production dependencies only in production
+production = false
+
+# Automatically install dependencies when running scripts
+auto = true
+
+# Prefer exact versions in lockfile
+frozenLockfile = true
+
+# Use workspaces (monorepo) if needed
+workspace = false
+
+# Cache directory
+cache = ".bun-cache"
+
+# Registry configuration
+registry = "https://registry.npmjs.org/"
+
+[install.scopes]
+# Configure scope-specific registries if needed
+# "@your-org" = "https://npm.your-org.com"
+
+[run]
+# Preload modules for faster startup
+preload = []
+
+# Environment variables for scripts
+env = {}
+
+[build]
+# Target environment
+target = "node"
+
+# Output directory for builds
+outdir = "dist"
+
+# Minify builds (will be overridden by script flags)
+minify = false
+
+# Source maps
+sourcemap = true
+
+# Platform
+platform = "node"
+
+# Entry point
+entrypoints = ["src/index.ts"]
+
+# External dependencies (don't bundle)
+external = ["@sentry/node", "@slack/bolt", "@slack/web-api", "winston", "ws", "axios", "zod"]
+
+# Define global constants
+define = {}
+
+# Splitting strategy
+splitting = false
+
+# Generate types alongside build
+dts = false
+
+[bun]
+# Enable TypeScript support
+typescript = true
+
+# Hot module replacement for development
+hmr = false
+
+# Port for development server (if applicable)
+port = 3000
+
+# Log level
+logLevel = "info"
+
+[test]
+# Test runner configuration
+coverage = true
+
+# Coverage output directory
+coverageDir = "coverage"
+
+# Coverage reporters
+coverageReporters = ["text", "html", "json"]
+
+# Test files pattern
+testMatch = ["**/*.test.ts", "**/*.spec.ts"]
+
+# Test timeout in milliseconds
+testTimeout = 5000
+
+# Watch mode for tests
+watch = false
+
+[lockfile]
+# Save lockfile after install
+save = true
+
+# Print lockfile path
+print = false
+
+# Path to lockfile
+path = "bun.lockb"
+
+[pkg]
+# Package.json fields to include/exclude
+# This section can be used to customize package.json generation
+
+[define]
+# Global constants for compilation
+# For example:
+# "process.env.NODE_ENV" = "\"development\""
+
+[loader]
+# Custom loaders for file extensions
+# For example:
+# ".toml" = "toml"
+
+[debug]
+# Debug configuration
+port = 9229
+host = "localhost"

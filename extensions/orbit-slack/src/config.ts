@@ -1,4 +1,4 @@
-import { getEnvConfig } from './env';
+import { getEnvConfig } from "./env";
 
 export interface Config {
   // Slack Configuration

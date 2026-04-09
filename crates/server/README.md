@@ -9,6 +9,7 @@ The server currently provides:
 - hosted task APIs for create, list, inspect, cancel, reconcile, approve, and complete flows
 - a filterable WebSocket event stream at `/v1/events/ws`
 - persisted task and event state for restart recovery
+- local-Docker lane execution that prepares per-task repo checkouts and launches `orbit hosted task run TASK_ID` inside worker containers
 - hosted-agent runtime inspection and reconciliation from manifest artifacts
 - orphaned hosted-agent policy with timed retry, approval, and cancel behavior
 - a read-only orphan policy inspection endpoint at `/v1/policies/orphans`
@@ -89,6 +90,24 @@ curl "http://127.0.0.1:8788/v1/policies/orphans"
 curl "http://127.0.0.1:8788/v1/policies/orphans?repository=repo-fast-policy&source=api"
 curl "http://127.0.0.1:8788/v1/policies/orphans?repository=repo-prod&priority=high"
 ```
+
+## Local Docker Worker Mode
+
+The server can run hosted lanes in sibling Docker containers by setting:
+
+- `ORBIT_SERVER_LANE_TRANSPORT=local-docker`
+- `ORBIT_SERVER_WORKSPACE_ROOT=/path/to/server/workspaces`
+- `ORBIT_SERVER_DOCKER_IMAGE=orbit-worker:latest`
+- `ORBIT_SERVER_CALLBACK_URL=http://host.docker.internal:8788`
+
+In that mode, the control plane:
+
+1. prepares an isolated repo checkout under `ORBIT_SERVER_WORKSPACE_ROOT`
+2. writes `.orbit-hosted/task.json` into the checkout
+3. launches `orbit hosted task run TASK_ID` inside the worker image
+4. expects the worker container to call `POST /v1/tasks/:task_id/complete` back to the server
+
+For the local hosted stack and worker-image build flow, see `infrastructure/README.md`.
 
 ## Development
 

@@ -24,6 +24,7 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        docker.io \
         git \
         libssl3 \
     && rm -rf /var/lib/apt/lists/*

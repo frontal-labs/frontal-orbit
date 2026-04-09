@@ -2,11 +2,13 @@
 //!
 //! Hosted HTTP and WebSocket control-plane surface for Orbit.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path as FsPath;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -24,9 +26,11 @@ use orbit_events::{
     HostedEventStatus, HostedEventTopic, HostedTaskEventSummary, LaneSignalEventPayload,
     TaskRoutedEventPayload, TerminalEventPayload,
 };
+use orbit_github::{parse_github_repo_url, GitHubRepoRef};
 use orbit_orchestrator::{
     plan_work_item, LaneRole, WorkItem, WorkItemContext, WorkItemPriority, WorkItemSource,
 };
+use orbit_repo::{prepare_checkout, RepoCheckoutRequest, RepoSource};
 use orbit_runtime::task_registry::{Task, TaskRegistry, TaskRegistrySnapshot, TaskStatus};
 use orbit_runtime::worker_boot::{
     WorkerEventKind, WorkerEventPayload, WorkerRegistry, WorkerStatus,
@@ -112,6 +116,9 @@ pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub event_replay_limit: usize,
     pub lane_transport_kind: LaneTransportKind,
+    pub workspace_root: PathBuf,
+    pub docker_image: String,
+    pub docker_server_url: String,
     pub reconcile_interval: Option<Duration>,
     pub state_file: Option<PathBuf>,
     pub orphan_approval_delay: Duration,
@@ -123,6 +130,7 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneTransportKind {
     InMemory,
+    LocalDocker,
     ToolsAgent,
 }
 
@@ -132,6 +140,9 @@ impl Default for ServerConfig {
             bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8788),
             event_replay_limit: DEFAULT_EVENT_REPLAY_LIMIT,
             lane_transport_kind: LaneTransportKind::InMemory,
+            workspace_root: default_server_workspace_root(),
+            docker_image: default_server_docker_image(),
+            docker_server_url: default_server_docker_server_url(),
             reconcile_interval: Some(Duration::from_secs(15)),
             state_file: default_server_state_file(),
             orphan_approval_delay: DEFAULT_ORPHAN_APPROVAL_DELAY,
@@ -163,9 +174,31 @@ impl ServerConfig {
 
         if let Ok(kind) = env::var("ORBIT_SERVER_LANE_TRANSPORT") {
             config.lane_transport_kind = match kind.trim().to_ascii_lowercase().as_str() {
+                "docker" | "local-docker" | "local_docker" => LaneTransportKind::LocalDocker,
                 "tools-agent" | "tools_agent" | "agent" => LaneTransportKind::ToolsAgent,
                 _ => LaneTransportKind::InMemory,
             };
+        }
+
+        if let Ok(path) = env::var("ORBIT_SERVER_WORKSPACE_ROOT") {
+            let path = path.trim();
+            if !path.is_empty() {
+                config.workspace_root = PathBuf::from(path);
+            }
+        }
+
+        if let Ok(image) = env::var("ORBIT_SERVER_DOCKER_IMAGE") {
+            let image = image.trim();
+            if !image.is_empty() {
+                config.docker_image = image.to_string();
+            }
+        }
+
+        if let Ok(url) = env::var("ORBIT_SERVER_CALLBACK_URL") {
+            let url = url.trim().trim_end_matches('/');
+            if !url.is_empty() {
+                config.docker_server_url = url.to_string();
+            }
         }
 
         if let Ok(interval) = env::var("ORBIT_SERVER_RECONCILE_INTERVAL_SECS") {
@@ -210,6 +243,7 @@ impl ServerConfig {
 pub struct ServerState {
     started_at: Instant,
     tasks: TaskRegistry,
+    lane_transport_kind: LaneTransportKind,
     lane_transport: Arc<dyn LaneWorkerTransport>,
     contexts: Arc<Mutex<HashMap<String, HostedTaskContext>>>,
     persistence: Option<Arc<ServerStatePersistence>>,
@@ -252,23 +286,22 @@ impl ServerState {
         lane_transport_kind: LaneTransportKind,
         state_file: Option<PathBuf>,
     ) -> Self {
-        let lane_transport: Arc<dyn LaneWorkerTransport> = match lane_transport_kind {
-            LaneTransportKind::InMemory => Arc::new(InMemoryLaneWorkerTransport::new()),
-            LaneTransportKind::ToolsAgent => Arc::new(HostedAgentLaneWorkerTransport),
-        };
-        Self::build(
+        Self::new_with_transport_kind_state_file_policy_and_workspace_root(
             event_replay_limit,
-            lane_transport,
+            lane_transport_kind,
             state_file,
             DEFAULT_ORPHAN_APPROVAL_DELAY,
             None,
             None,
             Vec::new(),
+            default_server_workspace_root(),
+            default_server_docker_image(),
+            default_server_docker_server_url(),
         )
     }
 
     #[must_use]
-    fn new_with_transport_kind_state_file_and_policy(
+    fn new_with_transport_kind_state_file_policy_and_workspace_root(
         event_replay_limit: usize,
         lane_transport_kind: LaneTransportKind,
         state_file: Option<PathBuf>,
@@ -276,13 +309,22 @@ impl ServerState {
         orphan_auto_retry_after: Option<Duration>,
         orphan_auto_cancel_after: Option<Duration>,
         orphan_policy_rules: Vec<OrphanPolicyRule>,
+        workspace_root: PathBuf,
+        docker_image: String,
+        docker_server_url: String,
     ) -> Self {
         let lane_transport: Arc<dyn LaneWorkerTransport> = match lane_transport_kind {
             LaneTransportKind::InMemory => Arc::new(InMemoryLaneWorkerTransport::new()),
+            LaneTransportKind::LocalDocker => Arc::new(LocalDockerLaneWorkerTransport::new(
+                workspace_root,
+                docker_image,
+                docker_server_url,
+            )),
             LaneTransportKind::ToolsAgent => Arc::new(HostedAgentLaneWorkerTransport),
         };
         Self::build(
             event_replay_limit,
+            lane_transport_kind,
             lane_transport,
             state_file,
             orphan_approval_delay,
@@ -295,6 +337,7 @@ impl ServerState {
     #[must_use]
     fn build(
         event_replay_limit: usize,
+        lane_transport_kind: LaneTransportKind,
         lane_transport: Arc<dyn LaneWorkerTransport>,
         state_file: Option<PathBuf>,
         orphan_approval_delay: Duration,
@@ -324,6 +367,7 @@ impl ServerState {
         let state = Self {
             started_at: Instant::now(),
             tasks,
+            lane_transport_kind,
             lane_transport,
             contexts: Arc::new(Mutex::new(contexts)),
             persistence,
@@ -345,8 +389,23 @@ impl ServerState {
         event_replay_limit: usize,
         lane_transport: Arc<dyn LaneWorkerTransport>,
     ) -> Self {
+        Self::with_lane_transport_kind(
+            event_replay_limit,
+            LaneTransportKind::InMemory,
+            lane_transport,
+        )
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    fn with_lane_transport_kind(
+        event_replay_limit: usize,
+        lane_transport_kind: LaneTransportKind,
+        lane_transport: Arc<dyn LaneWorkerTransport>,
+    ) -> Self {
         Self::build(
             event_replay_limit,
+            lane_transport_kind,
             lane_transport,
             None,
             DEFAULT_ORPHAN_APPROVAL_DELAY,
@@ -365,6 +424,7 @@ impl ServerState {
     ) -> Self {
         Self::build(
             event_replay_limit,
+            LaneTransportKind::InMemory,
             lane_transport,
             Some(state_file),
             DEFAULT_ORPHAN_APPROVAL_DELAY,
@@ -385,6 +445,7 @@ impl ServerState {
     ) -> Self {
         Self::build(
             event_replay_limit,
+            LaneTransportKind::InMemory,
             lane_transport,
             None,
             orphan_approval_delay,
@@ -406,6 +467,7 @@ impl ServerState {
     ) -> Self {
         Self::build(
             event_replay_limit,
+            LaneTransportKind::InMemory,
             lane_transport,
             None,
             orphan_approval_delay,
@@ -560,6 +622,20 @@ impl ServerStatePersistence {
 fn default_server_state_file() -> Option<PathBuf> {
     let cwd = env::current_dir().ok()?;
     Some(cwd.join(".orbit-server").join("state.json"))
+}
+
+fn default_server_workspace_root() -> PathBuf {
+    env::current_dir()
+        .map(|cwd| cwd.join(".orbit-server").join("workspaces"))
+        .unwrap_or_else(|_| env::temp_dir().join("orbit-server-workspaces"))
+}
+
+fn default_server_docker_image() -> String {
+    "orbit-worker:latest".to_string()
+}
+
+fn default_server_docker_server_url() -> String {
+    "http://host.docker.internal:8788".to_string()
 }
 
 fn current_unix_timestamp_secs() -> u64 {
@@ -734,7 +810,13 @@ fn build_event_payload(
         thread_ts: context.thread_ts.clone(),
         approval_message_ts: context.approval_message_ts.clone(),
         repository: context.repository.clone(),
+        repo_url: context.repo_url.clone(),
+        base_ref: context.base_ref.clone(),
         branch: context.branch.clone(),
+        published_branch: context.published_branch.clone(),
+        pr_url: context.pr_url.clone(),
+        pr_number: context.pr_number,
+        execution_backend: context.execution_backend.clone(),
         priority: context.priority.clone(),
         plan_id: context.plan_id.clone(),
         plan_kind: context.plan_kind.clone(),
@@ -841,7 +923,31 @@ pub struct HostedTaskContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_head_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkout_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -868,6 +974,32 @@ pub struct HostedTaskContext {
     pub permission_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+}
+
+impl HostedTaskContext {
+    #[must_use]
+    pub fn repo_checkout_request(
+        &self,
+        workspace_root: impl Into<PathBuf>,
+        checkout_id: impl Into<String>,
+    ) -> Option<RepoCheckoutRequest> {
+        let repo_url = self.repo_url.clone()?;
+        let repo_path = PathBuf::from(&repo_url);
+        let source = if repo_path.exists() {
+            RepoSource::LocalPath(repo_path)
+        } else {
+            RepoSource::RemoteUrl(repo_url)
+        };
+
+        Some(RepoCheckoutRequest {
+            workspace_root: workspace_root.into(),
+            checkout_id: checkout_id.into(),
+            source,
+            repository: self.repository.clone(),
+            base_ref: self.base_ref.clone(),
+            branch: self.branch.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -922,7 +1054,29 @@ pub struct HostedTaskSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_head_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -961,7 +1115,18 @@ impl HostedTaskSnapshot {
             approval_message_ts: context.approval_message_ts,
             orphan_policy: context.applied_orphan_policy,
             repository: context.repository,
+            repo_url: context.repo_url,
+            base_ref: context.base_ref,
             branch: context.branch,
+            published_branch: context.published_branch,
+            published_commit_sha: context.published_commit_sha,
+            published_remote: context.published_remote,
+            pr_number: context.pr_number,
+            pr_url: context.pr_url,
+            pr_api_url: context.pr_api_url,
+            pr_head_ref: context.pr_head_ref,
+            pr_base_ref: context.pr_base_ref,
+            execution_backend: context.execution_backend,
             priority: context.priority,
             plan_id: context.plan_id,
             plan_kind: context.plan_kind,
@@ -976,6 +1141,8 @@ impl HostedTaskSnapshot {
 pub struct CreateTaskRequest {
     pub prompt: String,
     pub repository: Option<String>,
+    pub repo_url: Option<String>,
+    pub base_ref: Option<String>,
     pub branch: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
@@ -1045,6 +1212,63 @@ pub struct UpdateTaskContextRequest {
     pub channel_id: Option<String>,
     pub thread_ts: Option<String>,
     pub approval_message_ts: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateTaskGithubRequest {
+    pub published_branch: Option<String>,
+    pub published_commit_sha: Option<String>,
+    pub published_remote: Option<String>,
+    pub pr_number: Option<u64>,
+    pub pr_url: Option<String>,
+    pub pr_api_url: Option<String>,
+    pub pr_head_ref: Option<String>,
+    pub pr_base_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TaskGithubResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_head_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_base_ref: Option<String>,
+}
+
+fn github_repo_ref_for_context(context: &HostedTaskContext) -> Option<GitHubRepoRef> {
+    let repo_url = context.repo_url.as_deref()?;
+    parse_github_repo_url(repo_url).ok()
+}
+
+fn task_github_response_for_context(context: &HostedTaskContext) -> TaskGithubResponse {
+    let repo_ref = github_repo_ref_for_context(context);
+    TaskGithubResponse {
+        owner: repo_ref.as_ref().map(|repo| repo.owner.clone()),
+        repo: repo_ref.as_ref().map(|repo| repo.repo.clone()),
+        published_remote: context.published_remote.clone(),
+        published_branch: context.published_branch.clone(),
+        published_commit_sha: context.published_commit_sha.clone(),
+        pr_number: context.pr_number,
+        pr_url: context.pr_url.clone(),
+        pr_api_url: context.pr_api_url.clone(),
+        pr_head_ref: context.pr_head_ref.clone(),
+        pr_base_ref: context.pr_base_ref.clone(),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1151,6 +1375,10 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/tasks/:task_id", get(get_task))
         .route("/v1/tasks/:task_id/context", post(update_task_context))
+        .route(
+            "/v1/tasks/:task_id/github",
+            get(get_task_github).post(update_task_github),
+        )
         .route("/v1/tasks/:task_id/runtime", get(get_task_runtime))
         .route("/v1/tasks/:task_id/cancel", post(cancel_task))
         .route("/v1/tasks/:task_id/approval", post(resolve_approval))
@@ -1166,15 +1394,20 @@ pub fn app(state: Arc<ServerState>) -> Router {
 }
 
 pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let state = Arc::new(ServerState::new_with_transport_kind_state_file_and_policy(
-        config.event_replay_limit,
-        config.lane_transport_kind,
-        config.state_file.clone(),
-        config.orphan_approval_delay,
-        config.orphan_auto_retry_after,
-        config.orphan_auto_cancel_after,
-        config.orphan_policy_rules.clone(),
-    ));
+    let state = Arc::new(
+        ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
+            config.event_replay_limit,
+            config.lane_transport_kind,
+            config.state_file.clone(),
+            config.orphan_approval_delay,
+            config.orphan_auto_retry_after,
+            config.orphan_auto_cancel_after,
+            config.orphan_policy_rules.clone(),
+            config.workspace_root.clone(),
+            config.docker_image.clone(),
+            config.docker_server_url.clone(),
+        ),
+    );
     if let Some(interval) = config.reconcile_interval {
         let reconcile_state = state.clone();
         tokio::spawn(async move {
@@ -1342,6 +1575,60 @@ async fn update_task_context(
     state.record_context(&task_id, context);
     state.persist_state().map_err(AppError::internal)?;
     Ok(Json(state.task_snapshot(task)))
+}
+
+async fn get_task_github(
+    Path(task_id): Path<String>,
+    State(state): State<Arc<ServerState>>,
+) -> Result<Json<TaskGithubResponse>, AppError> {
+    state
+        .tasks
+        .get(&task_id)
+        .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+    let context = state.context_for(&task_id).unwrap_or_default();
+    Ok(Json(task_github_response_for_context(&context)))
+}
+
+async fn update_task_github(
+    Path(task_id): Path<String>,
+    State(state): State<Arc<ServerState>>,
+    Json(request): Json<UpdateTaskGithubRequest>,
+) -> Result<Json<TaskGithubResponse>, AppError> {
+    state
+        .tasks
+        .get(&task_id)
+        .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+    let mut context = state.context_for(&task_id).unwrap_or_default();
+
+    if let Some(published_branch) = request.published_branch {
+        context.published_branch = Some(published_branch);
+    }
+    if let Some(published_commit_sha) = request.published_commit_sha {
+        context.published_commit_sha = Some(published_commit_sha);
+    }
+    if let Some(published_remote) = request.published_remote {
+        context.published_remote = Some(published_remote);
+    }
+    if let Some(pr_number) = request.pr_number {
+        context.pr_number = Some(pr_number);
+    }
+    if let Some(pr_url) = request.pr_url {
+        context.pr_url = Some(pr_url);
+    }
+    if let Some(pr_api_url) = request.pr_api_url {
+        context.pr_api_url = Some(pr_api_url);
+    }
+    if let Some(pr_head_ref) = request.pr_head_ref {
+        context.pr_head_ref = Some(pr_head_ref);
+    }
+    if let Some(pr_base_ref) = request.pr_base_ref {
+        context.pr_base_ref = Some(pr_base_ref);
+    }
+
+    let response = task_github_response_for_context(&context);
+    state.record_context(&task_id, context);
+    state.persist_state().map_err(AppError::internal)?;
+    Ok(Json(response))
 }
 
 async fn reconcile_task(
@@ -2203,6 +2490,7 @@ struct LaneBootstrapResult {
     worker_status: WorkerStatus,
     signals: Vec<LaneTransportSignal>,
     artifacts: Option<LaneWorkerArtifacts>,
+    checkout_root: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2210,8 +2498,14 @@ struct LaneExecutionRequest {
     task_id: String,
     prompt: String,
     repository: Option<String>,
+    repo_url: Option<String>,
+    base_ref: Option<String>,
+    branch: Option<String>,
     lane_role: Option<LaneRole>,
     model: Option<String>,
+    provider: Option<String>,
+    permission_mode: Option<String>,
+    allowed_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2247,6 +2541,92 @@ enum LaneTransportSignalKind {
     Failed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DockerLaunchSpec {
+    image: String,
+    checkout_root: PathBuf,
+    task_id: String,
+    command: Vec<String>,
+    env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct HostedDockerTaskPayload {
+    task_id: String,
+    prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allowed_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DockerLaunchResult {
+    container_id: String,
+}
+
+trait DockerRunner: Send + Sync + fmt::Debug {
+    fn launch(&self, spec: &DockerLaunchSpec) -> Result<DockerLaunchResult, String>;
+
+    fn stop(&self, container_id: &str) -> Result<(), String>;
+}
+
+#[derive(Debug)]
+struct CliDockerRunner;
+
+impl DockerRunner for CliDockerRunner {
+    fn launch(&self, spec: &DockerLaunchSpec) -> Result<DockerLaunchResult, String> {
+        let mut command = Command::new("docker");
+        command
+            .args(["run", "-d", "--rm", "--workdir", "/workspace", "--volume"])
+            .arg(format!("{}:/workspace", spec.checkout_root.display()))
+            .args(["--add-host", "host.docker.internal:host-gateway"])
+            .args(["--label", &format!("orbit.task_id={}", spec.task_id)]);
+        for (key, value) in &spec.env {
+            command.arg("--env").arg(format!("{key}={value}"));
+        }
+        command.arg(&spec.image).args(&spec.command);
+
+        let output = command
+            .output()
+            .map_err(|error| format!("failed to spawn docker: {error}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "docker run failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if container_id.is_empty() {
+            return Err("docker run returned an empty container id".to_string());
+        }
+
+        Ok(DockerLaunchResult { container_id })
+    }
+
+    fn stop(&self, container_id: &str) -> Result<(), String> {
+        let output = Command::new("docker")
+            .args(["stop", container_id])
+            .output()
+            .map_err(|error| format!("failed to stop docker container: {error}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        Err(format!(
+            "docker stop failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 trait LaneWorkerTransport: Send + Sync + fmt::Debug {
     fn bootstrap(&self, request: &LaneExecutionRequest) -> Result<LaneBootstrapResult, String>;
 
@@ -2279,7 +2659,11 @@ impl InMemoryLaneWorkerTransport {
 
 impl LaneWorkerTransport for InMemoryLaneWorkerTransport {
     fn bootstrap(&self, request: &LaneExecutionRequest) -> Result<LaneBootstrapResult, String> {
-        let cwd = request.repository.as_deref().unwrap_or(".");
+        let cwd = request
+            .repository
+            .as_deref()
+            .or(request.repo_url.as_deref())
+            .unwrap_or(".");
         let worker = self.workers.create(cwd, &[], true);
         let worker_id = worker.worker_id.clone();
 
@@ -2304,6 +2688,7 @@ impl LaneWorkerTransport for InMemoryLaneWorkerTransport {
                 .filter_map(signal_from_worker_event)
                 .collect(),
             artifacts: None,
+            checkout_root: None,
         })
     }
 
@@ -2344,12 +2729,27 @@ struct HostedAgentLaneWorkerTransport;
 
 impl LaneWorkerTransport for HostedAgentLaneWorkerTransport {
     fn bootstrap(&self, request: &LaneExecutionRequest) -> Result<LaneBootstrapResult, String> {
+        let repo_hint = request
+            .repository
+            .clone()
+            .or_else(|| request.repo_url.clone());
+        let ref_hint = request.branch.clone().or_else(|| request.base_ref.clone());
         let handle = launch_hosted_agent(HostedAgentLaunchRequest {
-            description: request
-                .repository
-                .as_ref()
-                .map(|repository| format!("Hosted task {} for {}", request.task_id, repository))
-                .unwrap_or_else(|| format!("Hosted task {}", request.task_id)),
+            description: match (repo_hint, ref_hint) {
+                (Some(repository), Some(reference)) => {
+                    format!(
+                        "Hosted task {} for {} @ {}",
+                        request.task_id, repository, reference
+                    )
+                }
+                (Some(repository), None) => {
+                    format!("Hosted task {} for {}", request.task_id, repository)
+                }
+                (None, Some(reference)) => {
+                    format!("Hosted task {} @ {}", request.task_id, reference)
+                }
+                (None, None) => format!("Hosted task {}", request.task_id),
+            },
             prompt: request.prompt.clone(),
             subagent_type: Some(hosted_subagent_type(request.lane_role).to_string()),
             name: Some(format!("lane-{}", request.task_id)),
@@ -2375,6 +2775,7 @@ impl LaneWorkerTransport for HostedAgentLaneWorkerTransport {
                 manifest_file: handle.manifest_file,
                 output_file: handle.output_file,
             }),
+            checkout_root: None,
         })
     }
 
@@ -2417,6 +2818,175 @@ impl LaneWorkerTransport for HostedAgentLaneWorkerTransport {
     }
 }
 
+#[derive(Debug)]
+struct LocalDockerLaneWorkerTransport {
+    workspace_root: PathBuf,
+    image: String,
+    server_url: String,
+    docker: Arc<dyn DockerRunner>,
+}
+
+impl LocalDockerLaneWorkerTransport {
+    fn new(workspace_root: PathBuf, image: String, server_url: String) -> Self {
+        Self {
+            workspace_root,
+            image,
+            server_url,
+            docker: Arc::new(CliDockerRunner),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_runner(
+        workspace_root: PathBuf,
+        image: String,
+        server_url: String,
+        docker: Arc<dyn DockerRunner>,
+    ) -> Self {
+        Self {
+            workspace_root,
+            image,
+            server_url,
+            docker,
+        }
+    }
+}
+
+impl LaneWorkerTransport for LocalDockerLaneWorkerTransport {
+    fn bootstrap(&self, request: &LaneExecutionRequest) -> Result<LaneBootstrapResult, String> {
+        let source = lane_repo_source(request).ok_or_else(|| {
+            "local docker transport requires repo_url or a local repository path".to_string()
+        })?;
+        let prepared = prepare_checkout(&RepoCheckoutRequest {
+            workspace_root: self.workspace_root.clone(),
+            checkout_id: request.task_id.clone(),
+            source,
+            repository: request.repository.clone(),
+            base_ref: request.base_ref.clone(),
+            branch: request.branch.clone(),
+        })
+        .map_err(|error| format!("failed to prepare repo checkout: {error}"))?;
+        let task_file = write_local_docker_task_payload(&prepared.checkout_root, request)
+            .map_err(|error| format!("failed to write hosted docker task payload: {error}"))?;
+        let image = self.image.clone();
+        let launch = self.docker.launch(&DockerLaunchSpec {
+            image: image.clone(),
+            checkout_root: prepared.checkout_root.clone(),
+            task_id: request.task_id.clone(),
+            command: vec![
+                "orbit".to_string(),
+                "hosted".to_string(),
+                "task".to_string(),
+                "run".to_string(),
+                request.task_id.clone(),
+            ],
+            env: BTreeMap::from([
+                ("ORBIT_SERVER_URL".to_string(), self.server_url.clone()),
+                (
+                    "ORBIT_HOSTED_TASK_FILE".to_string(),
+                    "/workspace/.orbit-hosted/task.json".to_string(),
+                ),
+            ]),
+        })?;
+
+        Ok(LaneBootstrapResult {
+            worker_id: launch.container_id.clone(),
+            worker_status: WorkerStatus::Running,
+            signals: vec![LaneTransportSignal {
+                kind: LaneTransportSignalKind::Running,
+                detail: Some(format!(
+                    "local docker container {} prepared checkout at {}",
+                    launch.container_id,
+                    prepared.checkout_root.display()
+                )),
+                payload: Some(json!({
+                    "container_id": launch.container_id,
+                    "image": image,
+                    "checkout_root": prepared.checkout_root.display().to_string(),
+                    "task_file": task_file.display().to_string(),
+                    "command": ["orbit", "hosted", "task", "run", request.task_id.as_str()],
+                    "active_ref": prepared.active_ref,
+                    "branch": prepared.branch,
+                    "source": prepared.source.display(),
+                })),
+            }],
+            artifacts: None,
+            checkout_root: Some(prepared.checkout_root.display().to_string()),
+        })
+    }
+
+    fn observe_completion(
+        &self,
+        _worker_id: &str,
+        finish_reason: &str,
+        _tokens_output: u64,
+    ) -> Result<LaneCompletionResult, String> {
+        let worker_status = if finish_reason.eq_ignore_ascii_case("error")
+            || finish_reason.eq_ignore_ascii_case("failed")
+        {
+            WorkerStatus::Failed
+        } else {
+            WorkerStatus::Finished
+        };
+        Ok(LaneCompletionResult {
+            worker_status,
+            error: None,
+        })
+    }
+
+    fn cancel(
+        &self,
+        worker_id: &str,
+        _locator: Option<&HostedAgentLocator>,
+    ) -> Result<LaneCancellationResult, String> {
+        self.docker.stop(worker_id)?;
+        Ok(LaneCancellationResult {
+            worker_status: Some(WorkerStatus::Finished),
+            clear_worker_status: false,
+            detail: Some(format!("local docker container {worker_id} stopped")),
+        })
+    }
+}
+
+fn lane_repo_source(request: &LaneExecutionRequest) -> Option<RepoSource> {
+    if let Some(repo_url) = request.repo_url.as_deref() {
+        let repo_path = PathBuf::from(repo_url);
+        return Some(if repo_path.exists() {
+            RepoSource::LocalPath(repo_path)
+        } else {
+            RepoSource::RemoteUrl(repo_url.to_string())
+        });
+    }
+
+    let repository = request.repository.as_deref()?;
+    let repo_path = PathBuf::from(repository);
+    repo_path
+        .exists()
+        .then_some(RepoSource::LocalPath(repo_path))
+}
+
+fn write_local_docker_task_payload(
+    checkout_root: &FsPath,
+    request: &LaneExecutionRequest,
+) -> Result<PathBuf, std::io::Error> {
+    let payload_dir = checkout_root.join(".orbit-hosted");
+    std::fs::create_dir_all(&payload_dir)?;
+    let payload_path = payload_dir.join("task.json");
+    std::fs::write(
+        &payload_path,
+        serde_json::to_vec_pretty(&HostedDockerTaskPayload {
+            task_id: request.task_id.clone(),
+            prompt: request.prompt.clone(),
+            model: request.model.clone(),
+            provider: request.provider.clone(),
+            permission_mode: request.permission_mode.clone(),
+            allowed_tools: request.allowed_tools.clone(),
+        })
+        .map_err(std::io::Error::other)?,
+    )?;
+    Ok(payload_path)
+}
+
 fn create_task_internal(state: &ServerState, request: CreateTaskRequest) -> Result<Task, AppError> {
     if request.prompt.trim().is_empty() {
         return Err(AppError::bad_request("prompt must not be empty"));
@@ -2452,7 +3022,19 @@ fn create_task_internal(state: &ServerState, request: CreateTaskRequest) -> Resu
         orphan_auto_retry_attempted_at: None,
         applied_orphan_policy: None,
         repository: request.repository,
+        repo_url: request.repo_url,
+        base_ref: request.base_ref,
         branch: request.branch,
+        published_branch: None,
+        published_commit_sha: None,
+        published_remote: None,
+        pr_number: None,
+        pr_url: None,
+        pr_api_url: None,
+        pr_head_ref: None,
+        pr_base_ref: None,
+        execution_backend: Some(lane_transport_kind_label(state.lane_transport_kind).to_string()),
+        checkout_root: None,
         priority: request.priority,
         plan_id: Some(plan.plan_id.clone()),
         plan_kind: plan_kind.clone(),
@@ -2545,8 +3127,14 @@ fn bootstrap_task_lane(
         task_id: task.task_id.clone(),
         prompt: task.prompt.clone(),
         repository: context.repository.clone(),
+        repo_url: context.repo_url.clone(),
+        base_ref: context.base_ref.clone(),
+        branch: context.branch.clone(),
         lane_role: primary_role,
         model: context.model.clone(),
+        provider: context.provider.clone(),
+        permission_mode: context.permission_mode.clone(),
+        allowed_tools: context.allowed_tools.clone(),
     };
 
     match state
@@ -2557,6 +3145,7 @@ fn bootstrap_task_lane(
         Ok(bootstrap) => {
             context.worker_id = Some(bootstrap.worker_id.clone());
             context.worker_status = Some(bootstrap.worker_status.to_string());
+            context.checkout_root = bootstrap.checkout_root.clone();
             context.worker_manifest_file = bootstrap
                 .artifacts
                 .as_ref()
@@ -2713,6 +3302,10 @@ fn emit_lane_transport_signals(
 
 fn build_work_item_context(request: &CreateTaskRequest) -> WorkItemContext {
     let mut metadata = std::collections::HashMap::new();
+    insert_metadata(&mut metadata, "repository", request.repository.clone());
+    insert_metadata(&mut metadata, "repo_url", request.repo_url.clone());
+    insert_metadata(&mut metadata, "base_ref", request.base_ref.clone());
+    insert_metadata(&mut metadata, "branch", request.branch.clone());
     insert_metadata(&mut metadata, "source", request.source.clone());
     insert_metadata(&mut metadata, "user_id", request.user_id.clone());
     insert_metadata(&mut metadata, "channel_id", request.channel_id.clone());
@@ -2771,6 +3364,14 @@ fn lane_role_label(role: LaneRole) -> &'static str {
         LaneRole::Verifier => "verification",
         LaneRole::Release => "release",
         LaneRole::Maintenance => "maintenance",
+    }
+}
+
+fn lane_transport_kind_label(kind: LaneTransportKind) -> &'static str {
+    match kind {
+        LaneTransportKind::InMemory => "in_memory",
+        LaneTransportKind::LocalDocker => "local_docker",
+        LaneTransportKind::ToolsAgent => "tools_agent",
     }
 }
 
@@ -2898,6 +3499,7 @@ mod tests {
                     })),
                 }],
                 artifacts: None,
+                checkout_root: None,
             })
         }
 
@@ -2950,6 +3552,7 @@ mod tests {
                     manifest_file: self.manifest_file.clone(),
                     output_file: self.output_file.clone(),
                 }),
+                checkout_root: None,
             })
         }
 
@@ -2999,6 +3602,7 @@ mod tests {
                     manifest_file: self.manifest_file.clone(),
                     output_file: self.output_file.clone(),
                 }),
+                checkout_root: None,
             })
         }
 
@@ -3062,6 +3666,7 @@ mod tests {
                     manifest_file: format!("{worker_id}.json"),
                     output_file: format!("{worker_id}.md"),
                 }),
+                checkout_root: None,
             })
         }
 
@@ -3087,6 +3692,36 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct MockDockerRunner {
+        launched: Mutex<Vec<DockerLaunchSpec>>,
+        stopped: Mutex<Vec<String>>,
+        fail_launch: Option<String>,
+    }
+
+    impl DockerRunner for MockDockerRunner {
+        fn launch(&self, spec: &DockerLaunchSpec) -> Result<DockerLaunchResult, String> {
+            if let Some(error) = &self.fail_launch {
+                return Err(error.clone());
+            }
+            self.launched
+                .lock()
+                .expect("mock docker launch lock poisoned")
+                .push(spec.clone());
+            Ok(DockerLaunchResult {
+                container_id: "container-localdocker-1".to_string(),
+            })
+        }
+
+        fn stop(&self, container_id: &str) -> Result<(), String> {
+            self.stopped
+                .lock()
+                .expect("mock docker stop lock poisoned")
+                .push(container_id.to_string());
+            Ok(())
+        }
+    }
+
     fn temp_test_dir(prefix: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3095,6 +3730,43 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("{prefix}-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn init_git_repo(path: PathBuf) -> PathBuf {
+        fs::create_dir_all(&path).unwrap();
+        run_git(&path, ["init", "-b", "main"]);
+        run_git(&path, ["config", "user.name", "Orbit Server Tests"]);
+        run_git(
+            &path,
+            ["config", "user.email", "orbit-server-tests@example.com"],
+        );
+        path
+    }
+
+    fn commit_file(repo: &std::path::Path, relative_path: &str, contents: &str, message: &str) {
+        let file_path = repo.join(relative_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(file_path, contents).unwrap();
+        run_git(repo, ["add", relative_path]);
+        run_git(repo, ["commit", "-m", message]);
+    }
+
+    fn run_git<const N: usize>(repo: &std::path::Path, args: [&str; N]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git command failed: git -C {} {}: {}",
+            repo.display(),
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn write_hosted_agent_manifest(
@@ -3187,6 +3859,9 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "prompt": "Investigate flaky test",
                             "repository": "repo-a",
+                            "repo_url": "https://github.com/acme/repo-a.git",
+                            "base_ref": "main",
+                            "branch": "orbit/investigate-flake",
                             "source": "slack",
                             "user_id": "U123",
                             "channel_id": "C456"
@@ -3204,6 +3879,7 @@ mod tests {
 
         let task_id = created[0].task_id.clone();
         let get_response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/v1/tasks/{task_id}"))
@@ -3219,6 +3895,11 @@ mod tests {
             .unwrap();
         let snapshot: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(snapshot["status"], "running");
+        assert_eq!(snapshot["repository"], "repo-a");
+        assert_eq!(snapshot["repo_url"], "https://github.com/acme/repo-a.git");
+        assert_eq!(snapshot["base_ref"], "main");
+        assert_eq!(snapshot["branch"], "orbit/investigate-flake");
+        assert_eq!(snapshot["execution_backend"], "in_memory");
         assert_eq!(snapshot["lane_id"].as_str().map(str::is_empty), Some(false));
         assert_eq!(
             snapshot["plan_kind"].as_str().map(str::is_empty),
@@ -3241,6 +3922,41 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload.get("task_status")),
             Some(&json!("pending"))
+        );
+        assert_eq!(
+            created_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("repository")),
+            Some(&json!("repo-a"))
+        );
+        assert_eq!(
+            created_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("repo_url")),
+            Some(&json!("https://github.com/acme/repo-a.git"))
+        );
+        assert_eq!(
+            created_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("base_ref")),
+            Some(&json!("main"))
+        );
+        assert_eq!(
+            created_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("branch")),
+            Some(&json!("orbit/investigate-flake"))
+        );
+        assert_eq!(
+            created_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("execution_backend")),
+            Some(&json!("in_memory"))
         );
         assert_eq!(
             created_event
@@ -3275,12 +3991,273 @@ mod tests {
                 .and_then(|payload| payload.get("repository")),
             Some(&json!("repo-a"))
         );
+        assert_eq!(
+            started_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("base_ref")),
+            Some(&json!("main"))
+        );
+        assert_eq!(
+            started_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("branch")),
+            Some(&json!("orbit/investigate-flake"))
+        );
         assert!(started_event
             .payload
             .as_ref()
             .and_then(|payload| payload.get("plan_kind"))
             .and_then(|value| value.as_str())
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn local_docker_transport_prepares_checkout_workspace_for_task() {
+        let dir = temp_test_dir("orbit-server-local-docker");
+        let source_repo = init_git_repo(dir.join("source"));
+        commit_file(
+            &source_repo,
+            "README.md",
+            "hello from local docker transport\n",
+            "initial commit",
+        );
+        let workspace_root = dir.join("workspaces");
+        let docker = Arc::new(MockDockerRunner::default());
+        let state = Arc::new(ServerState::with_lane_transport_kind(
+            DEFAULT_EVENT_REPLAY_LIMIT,
+            LaneTransportKind::LocalDocker,
+            Arc::new(LocalDockerLaneWorkerTransport::with_runner(
+                workspace_root.clone(),
+                "orbit-worker:test".to_string(),
+                "http://host.docker.internal:8788".to_string(),
+                docker.clone(),
+            )),
+        ));
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Prepare checkout before running",
+                            "repository": "acme/local-docker",
+                            "repo_url": source_repo.display().to_string(),
+                            "base_ref": "main",
+                            "branch": "orbit/task-123",
+                            "source": "api"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let context = state
+            .context_for(&task_id)
+            .expect("context should be recorded for local docker task");
+        let checkout_root = PathBuf::from(
+            context
+                .checkout_root
+                .clone()
+                .expect("local docker task should record checkout root"),
+        );
+        assert!(checkout_root.starts_with(&workspace_root));
+        assert!(checkout_root.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(checkout_root.join("README.md")).unwrap(),
+            "hello from local docker transport\n"
+        );
+        assert_eq!(context.execution_backend.as_deref(), Some("local_docker"));
+
+        let get_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/tasks/{task_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(get_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let snapshot: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(snapshot["execution_backend"], "local_docker");
+        assert_eq!(snapshot["worker_id"], "container-localdocker-1");
+
+        let started_event = state
+            .replay_events()
+            .into_iter()
+            .find(|event| event.event == HostedEventName::LaneStarted)
+            .expect("lane started event should be emitted");
+        assert_eq!(
+            started_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("transport"))
+                .and_then(|transport| transport.get("checkout_root")),
+            Some(&json!(checkout_root.display().to_string()))
+        );
+        assert_eq!(
+            started_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("transport"))
+                .and_then(|transport| transport.get("container_id")),
+            Some(&json!("container-localdocker-1"))
+        );
+
+        let launched = docker
+            .launched
+            .lock()
+            .expect("mock docker launch lock poisoned");
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].image, "orbit-worker:test");
+        assert_eq!(launched[0].task_id, task_id);
+        assert_eq!(launched[0].checkout_root, checkout_root);
+        assert_eq!(
+            launched[0].command,
+            vec![
+                "orbit".to_string(),
+                "hosted".to_string(),
+                "task".to_string(),
+                "run".to_string(),
+                task_id.clone(),
+            ]
+        );
+        assert_eq!(
+            launched[0].env.get("ORBIT_SERVER_URL").map(String::as_str),
+            Some("http://host.docker.internal:8788")
+        );
+        assert_eq!(
+            launched[0]
+                .env
+                .get("ORBIT_HOSTED_TASK_FILE")
+                .map(String::as_str),
+            Some("/workspace/.orbit-hosted/task.json")
+        );
+
+        let task_payload: HostedDockerTaskPayload = serde_json::from_slice(
+            &fs::read(checkout_root.join(".orbit-hosted").join("task.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(task_payload.task_id, task_id);
+        assert_eq!(task_payload.prompt, "Prepare checkout before running");
+        assert_eq!(task_payload.allowed_tools, Vec::<String>::new());
+
+        let complete_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tasks/{task_id}/complete"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "finish_reason": "stop",
+                            "tokens_output": 64,
+                            "result": "local docker run completed"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(complete_response.status(), StatusCode::OK);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn local_docker_transport_launch_failure_marks_task_failed() {
+        let dir = temp_test_dir("orbit-server-local-docker-fail");
+        let source_repo = init_git_repo(dir.join("source"));
+        commit_file(
+            &source_repo,
+            "README.md",
+            "failure path\n",
+            "initial commit",
+        );
+        let workspace_root = dir.join("workspaces");
+        let docker = Arc::new(MockDockerRunner {
+            fail_launch: Some("docker launch spec rejected".to_string()),
+            ..MockDockerRunner::default()
+        });
+        let state = Arc::new(ServerState::with_lane_transport_kind(
+            DEFAULT_EVENT_REPLAY_LIMIT,
+            LaneTransportKind::LocalDocker,
+            Arc::new(LocalDockerLaneWorkerTransport::with_runner(
+                workspace_root,
+                "orbit-worker:test".to_string(),
+                "http://host.docker.internal:8788".to_string(),
+                docker,
+            )),
+        ));
+        let router = app(state.clone());
+
+        let create_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Prepare checkout before running",
+                            "repository": "acme/local-docker",
+                            "repo_url": source_repo.display().to_string(),
+                            "base_ref": "main",
+                            "branch": "orbit/task-123",
+                            "source": "api"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let snapshot: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(snapshot["status"], "failed");
+        assert_eq!(snapshot["worker_status"], "failed");
+        let task = state
+            .tasks
+            .list(None)
+            .into_iter()
+            .next()
+            .expect("task should still exist after launch failure");
+        assert_eq!(task.status, TaskStatus::Failed);
+        assert!(task.output.contains("docker launch spec rejected"));
+
+        let failed_event = state
+            .replay_events()
+            .into_iter()
+            .find(|event| event.event == HostedEventName::LaneFailed)
+            .expect("lane failed event should be emitted");
+        assert_eq!(failed_event.status, HostedEventStatus::Failed);
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
@@ -3368,6 +4345,138 @@ mod tests {
             restored_context.approval_message_ts.as_deref(),
             Some("1712345679.111111")
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn update_task_github_persists_pr_metadata() {
+        let dir = temp_test_dir("orbit-server-github-update");
+        let state_file = dir.join("state.json");
+        let state = Arc::new(ServerState::with_lane_transport_and_state_file(
+            DEFAULT_EVENT_REPLAY_LIMIT,
+            Arc::new(InMemoryLaneWorkerTransport::new()),
+            state_file.clone(),
+        ));
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Publish repo changes and open a PR",
+                            "repository": "acme/payments",
+                            "repo_url": "https://github.com/acme/payments.git",
+                            "base_ref": "main",
+                            "branch": "orbit/fix-flake"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let update_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "published_remote": "origin",
+                            "published_branch": "orbit/fix-flake",
+                            "published_commit_sha": "abc123def456",
+                            "pr_number": 42,
+                            "pr_url": "https://github.com/acme/payments/pull/42",
+                            "pr_api_url": "https://api.github.com/repos/acme/payments/pulls/42",
+                            "pr_head_ref": "orbit/fix-flake",
+                            "pr_base_ref": "main"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let update_body = to_bytes(update_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: serde_json::Value = serde_json::from_slice(&update_body).unwrap();
+        assert_eq!(updated["owner"], "acme");
+        assert_eq!(updated["repo"], "payments");
+        assert_eq!(updated["published_remote"], "origin");
+        assert_eq!(updated["published_branch"], "orbit/fix-flake");
+        assert_eq!(updated["published_commit_sha"], "abc123def456");
+        assert_eq!(updated["pr_number"], 42);
+        assert_eq!(
+            updated["pr_url"],
+            "https://github.com/acme/payments/pull/42"
+        );
+        assert_eq!(updated["pr_head_ref"], "orbit/fix-flake");
+        assert_eq!(updated["pr_base_ref"], "main");
+
+        let get_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+        let get_body = to_bytes(get_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let fetched: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
+        assert_eq!(fetched, updated);
+
+        let restored = Arc::new(ServerState::with_lane_transport_and_state_file(
+            DEFAULT_EVENT_REPLAY_LIMIT,
+            Arc::new(InMemoryLaneWorkerTransport::new()),
+            state_file.clone(),
+        ));
+        let restored_context = restored
+            .context_for(&task_id)
+            .expect("github context should reload from state file");
+        assert_eq!(restored_context.published_remote.as_deref(), Some("origin"));
+        assert_eq!(
+            restored_context.published_branch.as_deref(),
+            Some("orbit/fix-flake")
+        );
+        assert_eq!(
+            restored_context.published_commit_sha.as_deref(),
+            Some("abc123def456")
+        );
+        assert_eq!(restored_context.pr_number, Some(42));
+        assert_eq!(
+            restored_context.pr_url.as_deref(),
+            Some("https://github.com/acme/payments/pull/42")
+        );
+        assert_eq!(
+            restored_context.pr_head_ref.as_deref(),
+            Some("orbit/fix-flake")
+        );
+        assert_eq!(restored_context.pr_base_ref.as_deref(), Some("main"));
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -5303,6 +6412,9 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "prompt": "Persist me across restart",
                             "repository": "repo-persisted",
+                            "repo_url": "https://github.com/acme/repo-persisted.git",
+                            "base_ref": "develop",
+                            "branch": "orbit/persisted-work",
                             "source": "api"
                         }))
                         .unwrap(),
@@ -5369,6 +6481,9 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "prompt": "Persist me across restart",
                             "repository": "repo-persisted",
+                            "repo_url": "https://github.com/acme/repo-persisted.git",
+                            "base_ref": "develop",
+                            "branch": "orbit/persisted-work",
                             "source": "api"
                         }))
                         .unwrap(),
@@ -5404,6 +6519,19 @@ mod tests {
             restored_context.repository.as_deref(),
             Some("repo-persisted")
         );
+        assert_eq!(
+            restored_context.repo_url.as_deref(),
+            Some("https://github.com/acme/repo-persisted.git")
+        );
+        assert_eq!(restored_context.base_ref.as_deref(), Some("develop"));
+        assert_eq!(
+            restored_context.branch.as_deref(),
+            Some("orbit/persisted-work")
+        );
+        assert_eq!(
+            restored_context.execution_backend.as_deref(),
+            Some("in_memory")
+        );
         assert_eq!(restored_context.source.as_deref(), Some("api"));
         assert_eq!(restored_context.worker_status.as_deref(), Some("running"));
 
@@ -5425,6 +6553,13 @@ mod tests {
         let snapshot: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(snapshot["status"], "running");
         assert_eq!(snapshot["repository"], "repo-persisted");
+        assert_eq!(
+            snapshot["repo_url"],
+            "https://github.com/acme/repo-persisted.git"
+        );
+        assert_eq!(snapshot["base_ref"], "develop");
+        assert_eq!(snapshot["branch"], "orbit/persisted-work");
+        assert_eq!(snapshot["execution_backend"], "in_memory");
         assert_eq!(snapshot["worker_status"], "running");
 
         let _ = fs::remove_dir_all(dir);
@@ -5897,6 +7032,9 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "prompt": "Reconcile hosted task during startup",
                             "repository": "repo-startup-reconcile",
+                            "repo_url": "https://github.com/acme/repo-startup-reconcile.git",
+                            "base_ref": "release/2026.04",
+                            "branch": "orbit/reconcile-startup",
                             "source": "api"
                         }))
                         .unwrap(),
@@ -5934,6 +7072,18 @@ mod tests {
         let restored_context = restored_state
             .context_for(&task_id)
             .expect("context should still exist after restart");
+        assert_eq!(
+            restored_context.repo_url.as_deref(),
+            Some("https://github.com/acme/repo-startup-reconcile.git")
+        );
+        assert_eq!(
+            restored_context.base_ref.as_deref(),
+            Some("release/2026.04")
+        );
+        assert_eq!(
+            restored_context.branch.as_deref(),
+            Some("orbit/reconcile-startup")
+        );
         assert_eq!(restored_context.worker_status.as_deref(), Some("finished"));
 
         let green_event = restored_state
@@ -5951,6 +7101,34 @@ mod tests {
             })
             .expect("startup reconcile lane green event should be replayable");
         assert_eq!(green_event.status, HostedEventStatus::Completed);
+        assert_eq!(
+            green_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("repository")),
+            Some(&json!("repo-startup-reconcile"))
+        );
+        assert_eq!(
+            green_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("repo_url")),
+            Some(&json!("https://github.com/acme/repo-startup-reconcile.git"))
+        );
+        assert_eq!(
+            green_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("base_ref")),
+            Some(&json!("release/2026.04"))
+        );
+        assert_eq!(
+            green_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("branch")),
+            Some(&json!("orbit/reconcile-startup"))
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -6206,5 +7384,157 @@ mod tests {
             .unwrap();
 
         assert_eq!(cancel_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn build_work_item_context_includes_repo_execution_fields() {
+        let context = build_work_item_context(&CreateTaskRequest {
+            prompt: "Prepare repo-aware task".to_string(),
+            repository: Some("acme/payments".to_string()),
+            repo_url: Some("https://github.com/acme/payments.git".to_string()),
+            base_ref: Some("main".to_string()),
+            branch: Some("orbit/repo-aware".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            provider: Some("openai".to_string()),
+            permission_mode: Some("workspace-write".to_string()),
+            allowed_tools: Some(vec!["git".to_string(), "cargo".to_string()]),
+            priority: Some("high".to_string()),
+            source: Some("slack".to_string()),
+            user_id: Some("U123".to_string()),
+            channel_id: Some("C123".to_string()),
+            thread_ts: Some("1712345678.000100".to_string()),
+        });
+
+        assert_eq!(
+            context.metadata.get("repository").map(String::as_str),
+            Some("acme/payments")
+        );
+        assert_eq!(
+            context.metadata.get("repo_url").map(String::as_str),
+            Some("https://github.com/acme/payments.git")
+        );
+        assert_eq!(
+            context.metadata.get("base_ref").map(String::as_str),
+            Some("main")
+        );
+        assert_eq!(
+            context.metadata.get("branch").map(String::as_str),
+            Some("orbit/repo-aware")
+        );
+    }
+
+    #[test]
+    fn server_config_parses_local_docker_lane_transport_kind() {
+        let previous = env::var_os("ORBIT_SERVER_LANE_TRANSPORT");
+        let previous_workspace_root = env::var_os("ORBIT_SERVER_WORKSPACE_ROOT");
+        let previous_docker_image = env::var_os("ORBIT_SERVER_DOCKER_IMAGE");
+        let previous_callback_url = env::var_os("ORBIT_SERVER_CALLBACK_URL");
+        env::set_var("ORBIT_SERVER_LANE_TRANSPORT", "local-docker");
+        env::set_var(
+            "ORBIT_SERVER_WORKSPACE_ROOT",
+            "/tmp/orbit-server-workspaces",
+        );
+        env::set_var("ORBIT_SERVER_DOCKER_IMAGE", "orbit-worker:test");
+        env::set_var(
+            "ORBIT_SERVER_CALLBACK_URL",
+            "http://docker.internal.test:8788/",
+        );
+
+        let config = ServerConfig::from_env().expect("env config should parse");
+        assert_eq!(config.lane_transport_kind, LaneTransportKind::LocalDocker);
+        assert_eq!(
+            config.workspace_root,
+            PathBuf::from("/tmp/orbit-server-workspaces")
+        );
+        assert_eq!(config.docker_image, "orbit-worker:test");
+        assert_eq!(config.docker_server_url, "http://docker.internal.test:8788");
+
+        match previous {
+            Some(value) => env::set_var("ORBIT_SERVER_LANE_TRANSPORT", value),
+            None => env::remove_var("ORBIT_SERVER_LANE_TRANSPORT"),
+        }
+        match previous_workspace_root {
+            Some(value) => env::set_var("ORBIT_SERVER_WORKSPACE_ROOT", value),
+            None => env::remove_var("ORBIT_SERVER_WORKSPACE_ROOT"),
+        }
+        match previous_docker_image {
+            Some(value) => env::set_var("ORBIT_SERVER_DOCKER_IMAGE", value),
+            None => env::remove_var("ORBIT_SERVER_DOCKER_IMAGE"),
+        }
+        match previous_callback_url {
+            Some(value) => env::set_var("ORBIT_SERVER_CALLBACK_URL", value),
+            None => env::remove_var("ORBIT_SERVER_CALLBACK_URL"),
+        }
+    }
+
+    #[test]
+    fn hosted_task_context_builds_repo_checkout_request() {
+        let context = HostedTaskContext {
+            repository: Some("acme/payments".to_string()),
+            repo_url: Some("https://github.com/acme/payments.git".to_string()),
+            base_ref: Some("main".to_string()),
+            branch: Some("orbit/fix-flake".to_string()),
+            ..HostedTaskContext::default()
+        };
+
+        let request = context
+            .repo_checkout_request("/tmp/orbit-workspaces", "task-123")
+            .expect("repo checkout request should be built");
+
+        assert_eq!(
+            request.workspace_root,
+            PathBuf::from("/tmp/orbit-workspaces")
+        );
+        assert_eq!(request.checkout_id, "task-123");
+        assert_eq!(request.repository.as_deref(), Some("acme/payments"));
+        assert_eq!(request.base_ref.as_deref(), Some("main"));
+        assert_eq!(request.branch.as_deref(), Some("orbit/fix-flake"));
+        assert_eq!(
+            request.source,
+            RepoSource::RemoteUrl("https://github.com/acme/payments.git".to_string())
+        );
+    }
+
+    #[test]
+    fn hosted_task_context_skips_repo_checkout_request_without_repo_url() {
+        let context = HostedTaskContext {
+            repository: Some("acme/payments".to_string()),
+            ..HostedTaskContext::default()
+        };
+
+        assert!(context
+            .repo_checkout_request("/tmp/orbit-workspaces", "task-123")
+            .is_none());
+    }
+
+    #[test]
+    fn build_event_payload_includes_github_publication_summary() {
+        let context = HostedTaskContext {
+            repository: Some("acme/payments".to_string()),
+            repo_url: Some("https://github.com/acme/payments.git".to_string()),
+            branch: Some("orbit/fix-flake".to_string()),
+            published_branch: Some("orbit/fix-flake".to_string()),
+            pr_number: Some(42),
+            pr_url: Some("https://github.com/acme/payments/pull/42".to_string()),
+            ..HostedTaskContext::default()
+        };
+
+        let payload = build_event_payload(&context, Some("running"), None)
+            .expect("event payload should be present");
+
+        assert_eq!(payload.get("repository"), Some(&json!("acme/payments")));
+        assert_eq!(
+            payload.get("repo_url"),
+            Some(&json!("https://github.com/acme/payments.git"))
+        );
+        assert_eq!(
+            payload.get("published_branch"),
+            Some(&json!("orbit/fix-flake"))
+        );
+        assert_eq!(
+            payload.get("pr_url"),
+            Some(&json!("https://github.com/acme/payments/pull/42"))
+        );
+        assert_eq!(payload.get("pr_number"), Some(&json!(42)));
     }
 }

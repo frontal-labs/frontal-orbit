@@ -159,7 +159,19 @@ pub struct HostedTaskEventSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -366,7 +378,13 @@ pub fn render_typescript_bindings() -> String {
         "  thread_ts?: string;",
         "  approval_message_ts?: string;",
         "  repository?: string;",
+        "  repo_url?: string;",
+        "  base_ref?: string;",
         "  branch?: string;",
+        "  published_branch?: string;",
+        "  pr_url?: string;",
+        "  pr_number?: number;",
+        "  execution_backend?: string;",
         "  priority?: string;",
         "  plan_id?: string;",
         "  plan_kind?: string;",
@@ -549,6 +567,14 @@ mod tests {
             source: Some("slack".into()),
             channel_id: Some("C123".into()),
             thread_ts: Some("1712345678.000100".into()),
+            repository: Some("acme/payments".into()),
+            repo_url: Some("https://github.com/acme/payments.git".into()),
+            base_ref: Some("main".into()),
+            branch: Some("orbit/fix-flake".into()),
+            published_branch: Some("orbit/fix-flake".into()),
+            pr_url: Some("https://github.com/acme/payments/pull/42".into()),
+            pr_number: Some(42),
+            execution_backend: Some("local_docker".into()),
             worker_id: Some("worker-1".into()),
             worker_status: Some("running".into()),
             orphan_policy: Some(AppliedOrphanPolicy {
@@ -568,6 +594,20 @@ mod tests {
         assert_eq!(serialized["source"], "slack");
         assert_eq!(serialized["channel_id"], "C123");
         assert_eq!(serialized["thread_ts"], "1712345678.000100");
+        assert_eq!(serialized["repository"], "acme/payments");
+        assert_eq!(
+            serialized["repo_url"],
+            "https://github.com/acme/payments.git"
+        );
+        assert_eq!(serialized["base_ref"], "main");
+        assert_eq!(serialized["branch"], "orbit/fix-flake");
+        assert_eq!(serialized["published_branch"], "orbit/fix-flake");
+        assert_eq!(
+            serialized["pr_url"],
+            "https://github.com/acme/payments/pull/42"
+        );
+        assert_eq!(serialized["pr_number"], 42);
+        assert_eq!(serialized["execution_backend"], "local_docker");
         assert_eq!(serialized["worker_id"], "worker-1");
         assert_eq!(serialized["worker_status"], "running");
         assert_eq!(serialized["orphan_policy"]["source"], "default");
