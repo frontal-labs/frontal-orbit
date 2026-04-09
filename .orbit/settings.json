@@ -1,0 +1,43 @@
+{
+  "workspace": {
+    "name": "frontal-orbit",
+    "description": "Orbit CLI development workspace",
+    "guidance": [
+      "Run `orbit doctor` before landing changes.",
+      "Keep `.orbit/settings.local.json` for machine-specific overrides."
+    ]
+  },
+  "session": {
+    "auto_save": true,
+    "max_sessions": 50,
+    "compression": "gzip",
+    "metadata": {
+      "save_system_info": true,
+      "save_environment": false,
+      "save_git_state": true
+    }
+  },
+  "telemetry": {
+    "enabled": false,
+    "sample_rate": 0.05,
+    "path": ".orbit/telemetry.jsonl"
+  },
+  "mcp": {
+    "auto_start": ["filesystem"],
+    "timeout": 45,
+    "enabled": true
+  },
+  "plugins": {
+    "auto_load": ["orbit-plugins-status"],
+    "enabled": true
+  },
+  "ui": {
+    "output_format": "text",
+    "color_output": true,
+    "show_tool_calls": true
+  },
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "askBeforeTool": ["bash", "write", "edit"]
+  }
+}

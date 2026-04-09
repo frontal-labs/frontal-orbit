@@ -1,0 +1,33 @@
+{
+  "providers": {
+    "anthropic": {
+      "api_key": "${ANTHROPIC_API_KEY}"
+    },
+    "openai": {
+      "api_key": "${OPENAI_API_KEY}"
+    },
+    "xai": {
+      "api_key": "${XAI_API_KEY}"
+    },
+    "frontal": {
+      "api_key": "${FRONTAL_API_KEY}"
+    }
+  },
+  "runtime": {
+    "permission_mode": "safe-mode",
+    "allowed_tools": ["read", "grep", "web_search"]
+  },
+  "session": {
+    "session_dir": ".orbit/sessions",
+    "resume_last_session": true
+  },
+  "telemetry": {
+    "enabled": false,
+    "endpoint": "",
+    "path": ".orbit/telemetry.jsonl"
+  },
+  "security": {
+    "sandbox_mode": false,
+    "api_key_rotation": false
+  }
+}
