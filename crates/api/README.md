@@ -1,31 +1,41 @@
 # Orbit API
 
-Core API client library for interacting with various AI providers in the Orbit ecosystem.
+HTTP API service crate for Orbit, plus the existing provider API re-exports.
 
-## Overview
+## What It Provides
 
-This crate provides a unified interface for communicating with different AI providers including Anthropic, OpenAI-compatible APIs, and xAI. It handles authentication, request/response formatting, streaming responses, and prompt caching.
+- Library surface: re-exports `orbit-providers` (`pub use orbit_providers::*;`)
+- Binary: `orbit-api` HTTP server for CLI-compatible operations
 
-## Features
+## Run
 
-- Multi-provider support (Anthropic, OpenAI-compatible, xAI)
-- Streaming response handling with Server-Sent Events
-- OAuth token management and refresh
-- Prompt caching with configurable cache policies
-- Comprehensive error handling and type safety
-- Telemetry integration for request tracking
+```bash
+cargo run -p orbit-api --bin orbit-api
+```
 
-## Key Components
+By default it binds to `127.0.0.1:8787`.
 
-- **ProviderClient**: Unified client interface for all AI providers
-- **PromptCache**: Intelligent caching system for prompt optimization
-- **SSE Parser**: Handles streaming responses from providers
-- **OAuth Management**: Secure token handling and refresh logic
+## Environment Variables
 
-## Dependencies
+- `ORBIT_API_HOST` (default: `127.0.0.1`)
+- `ORBIT_API_PORT` (default: `8787`)
+- `ORBIT_CLI_BIN` (optional path to `orbit` binary)
+- `ORBIT_API_WORKDIR` (optional working directory for executed CLI commands)
+- `ORBIT_API_KEY` (optional API key; accepts `x-api-key` or `Authorization: Bearer ...`)
+- `ORBIT_API_ALLOWED_COMMANDS` (optional comma-separated allowlist for `/v1/cli/run`)
+- `ORBIT_API_COMMAND_TIMEOUT_MS` (default: `120000`)
 
-- `reqwest` for HTTP client functionality
-- `tokio` for async runtime
-- `serde` for serialization/deserialization
-- `orbit-runtime` for core runtime integration
-- `orbit-telemetry` for analytics and monitoring
+## REST Endpoints
+
+- `GET /health`
+- `POST /v1/cli/run` - generic CLI execution (`args` array)
+- `POST /v1/prompt` - prompt request with model/provider/options
+- `GET /v1/status`
+- `GET /v1/sandbox`
+- `GET /v1/version`
+
+All command endpoints run the CLI with JSON output by default and return:
+- command args
+- exit code and success flag
+- stdout/stderr
+- parsed `json` payload when stdout is valid JSON

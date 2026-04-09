@@ -5,14 +5,21 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "orbit-api"
+path = "src/main.rs"
+
 [dependencies]
-async-stream = "0.3"
-futures = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-orbit-runtime = { path = "../runtime" }
+orbit-providers = { path = "../providers" }
+axum = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread"] }
+
+[dev-dependencies]
 orbit-telemetry = { path = "../telemetry" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json.workspace = true
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
 
 [lints]

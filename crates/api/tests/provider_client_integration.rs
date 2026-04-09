@@ -1,7 +1,10 @@
 use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
-use orbit_api::{read_xai_base_url, ApiError, AuthSource, ProviderClient, ProviderKind};
+use orbit_api::{
+    read_azure_base_url, read_bedrock_base_url, read_frontal_base_url, read_xai_base_url, ApiError,
+    AuthSource, ProviderClient, ProviderKind,
+};
 
 #[test]
 fn provider_client_routes_grok_aliases_through_xai() {
@@ -51,6 +54,88 @@ fn read_xai_base_url_prefers_env_override() {
     let _xai_base_url = EnvVarGuard::set("XAI_BASE_URL", Some("https://example.xai.test/v1"));
 
     assert_eq!(read_xai_base_url(), "https://example.xai.test/v1");
+}
+
+#[test]
+fn provider_client_routes_bedrock_models_and_requires_credentials() {
+    let _lock = env_lock();
+    let _bedrock_api_key = EnvVarGuard::set("BEDROCK_API_KEY", None);
+
+    let error = ProviderClient::from_model("bedrock/meta.llama3-70b-instruct-v1:0")
+        .expect_err("bedrock models without BEDROCK_API_KEY should fail fast");
+
+    match error {
+        ApiError::MissingCredentials { provider, env_vars } => {
+            assert_eq!(provider, "AWS Bedrock");
+            assert_eq!(env_vars, &["BEDROCK_API_KEY"]);
+        }
+        other => panic!("expected missing Bedrock credentials, got {other:?}"),
+    }
+}
+
+#[test]
+fn provider_client_routes_azure_models_and_requires_credentials() {
+    let _lock = env_lock();
+    let _azure_api_key = EnvVarGuard::set("AZURE_OPENAI_API_KEY", None);
+
+    let error = ProviderClient::from_model("azure/gpt-4.1")
+        .expect_err("azure models without AZURE_OPENAI_API_KEY should fail fast");
+
+    match error {
+        ApiError::MissingCredentials { provider, env_vars } => {
+            assert_eq!(provider, "Microsoft Azure");
+            assert_eq!(env_vars, &["AZURE_OPENAI_API_KEY"]);
+        }
+        other => panic!("expected missing Azure credentials, got {other:?}"),
+    }
+}
+
+#[test]
+fn provider_client_routes_frontal_models_and_requires_credentials() {
+    let _lock = env_lock();
+    let _frontal_api_key = EnvVarGuard::set("FRONTAL_API_KEY", None);
+
+    let error = ProviderClient::from_model("frontal/gpt-4.1")
+        .expect_err("frontal models without FRONTAL_API_KEY should fail fast");
+
+    match error {
+        ApiError::MissingCredentials { provider, env_vars } => {
+            assert_eq!(provider, "Frontal");
+            assert_eq!(env_vars, &["FRONTAL_API_KEY"]);
+        }
+        other => panic!("expected missing Frontal credentials, got {other:?}"),
+    }
+}
+
+#[test]
+fn bedrock_and_azure_base_urls_prefer_env_overrides() {
+    let _lock = env_lock();
+    let _bedrock_base_url = EnvVarGuard::set(
+        "BEDROCK_BASE_URL",
+        Some("https://example.bedrock.test/openai/v1"),
+    );
+    let _azure_base_url = EnvVarGuard::set(
+        "AZURE_OPENAI_BASE_URL",
+        Some("https://example.azure.test/openai/deployments/demo"),
+    );
+
+    assert_eq!(
+        read_bedrock_base_url(),
+        "https://example.bedrock.test/openai/v1"
+    );
+    assert_eq!(
+        read_azure_base_url(),
+        "https://example.azure.test/openai/deployments/demo"
+    );
+}
+
+#[test]
+fn frontal_base_url_prefers_env_override() {
+    let _lock = env_lock();
+    let _frontal_base_url =
+        EnvVarGuard::set("FRONTAL_BASE_URL", Some("https://api.frontal.test/v1"));
+
+    assert_eq!(read_frontal_base_url(), "https://api.frontal.test/v1");
 }
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
