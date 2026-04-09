@@ -1,4 +1,4 @@
-FROM rust:1.75-bookworm AS builder
+FROM rust:1.75-bookworm@sha256:87f3b2f93b82995443a1a558c234212dafe79cfdc3af956539610560369ddcd0 AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -20,7 +20,7 @@ COPY crates ./crates
 
 RUN cargo build --release -p orbit-cli
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

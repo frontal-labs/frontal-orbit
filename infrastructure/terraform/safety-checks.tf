@@ -21,12 +21,12 @@ data "kubernetes_service" "existing_orbit_slack" {
 # Check if there's already an ingress for orbit-server
 data "kubernetes_ingress_v1" "existing_orbit_ingress" {
   count = var.deploy_orbit_server ? 1 : 0
-  
+
   metadata {
     name      = "orbit-server"
     namespace = var.orbit_service_namespace
   }
-  
+
   depends_on = [data.kubernetes_service.existing_orbit_server]
 }
 
@@ -55,17 +55,17 @@ locals {
   has_existing_ingress      = var.deploy_orbit_server ? length(data.kubernetes_ingress_v1.existing_orbit_ingress[0].metadata) > 0 : false
   has_existing_dns          = length(data.aws_route53_record.existing_tools_record) > 0
   has_existing_namespace    = length(data.kubernetes_namespace.existing_orbit_namespace.metadata) > 0
-  
+
   # Account validation
   is_development_account = data.aws_caller_identity.current.account_id == var.aws_account_id
-  
+
   # Safety validation
   safety_check_passed = (
-    local.is_development_account && 
-    !local.has_existing_ingress && 
+    local.is_development_account &&
+    !local.has_existing_ingress &&
     !local.has_existing_dns
   )
-  
+
   # Warnings for existing resources
   warnings = [
     local.has_existing_orbit_server ? "Warning: orbit-server service already exists in namespace ${var.orbit_service_namespace}" : "",

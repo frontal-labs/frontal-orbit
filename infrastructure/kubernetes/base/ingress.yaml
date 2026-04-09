@@ -4,8 +4,14 @@ metadata:
   name: orbit-server
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - orbit.example.com
+      secretName: orbit-server-tls
   rules:
     - host: orbit.example.com
       http:

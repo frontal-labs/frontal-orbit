@@ -156,8 +156,8 @@ For maximum isolation, use container-based sandboxing:
 # Enable container sandbox
 orbit --sandbox container
 
-# Use specific container image
-orbit --sandbox container --image orbit-sandbox:latest
+# Use a pinned container image
+orbit --sandbox container --image orbit-sandbox:v0.1.0
 ```
 
 ## Authentication and API Keys
@@ -498,7 +498,7 @@ orbit --permission-mode safe-mode
 orbit --audit-log enable
 
 # Use containerized development
-docker run -it --rm orbit:latest
+docker run -it --rm orbit/cli:v0.1.0
 ```
 
 ### Production Security

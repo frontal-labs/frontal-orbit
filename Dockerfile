@@ -1,5 +1,5 @@
 # Multi-stage build for Orbit
-FROM rust:1.75-bookworm as builder
+FROM rust:1.75-bookworm@sha256:87f3b2f93b82995443a1a558c234212dafe79cfdc3af956539610560369ddcd0 as builder
 
 # Install build dependencies
 RUN apt-get update \
@@ -26,7 +26,7 @@ COPY crates/ ./crates/
 RUN cargo build --release --workspace
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d
 
 # Install runtime dependencies
 RUN apt-get update \

@@ -4,14 +4,14 @@ resource "kubernetes_ingress_v1" "orbit_tools" {
     name      = "orbit-tools-ingress"
     namespace = var.orbit_service_namespace
     annotations = {
-      "kubernetes.io/ingress.class"                    = "nginx"
-      "cert-manager.io/cluster-issuer"                 = "letsencrypt-prod"
-      "nginx.ingress.kubernetes.io/ssl-redirect"       = "true"
-      "nginx.ingress.kubernetes.io/use-regex"           = "true"
-      "nginx.ingress.kubernetes.io/rewrite-target"      = "/$2"
-      "nginx.ingress.kubernetes.io/proxy-body-size"     = "10m"
-      "nginx.ingress.kubernetes.io/proxy-read-timeout"  = "300"
-      "nginx.ingress.kubernetes.io/proxy-send-timeout"  = "300"
+      "kubernetes.io/ingress.class"                       = "nginx"
+      "cert-manager.io/cluster-issuer"                    = "letsencrypt-prod"
+      "nginx.ingress.kubernetes.io/ssl-redirect"          = "true"
+      "nginx.ingress.kubernetes.io/use-regex"             = "true"
+      "nginx.ingress.kubernetes.io/rewrite-target"        = "/$2"
+      "nginx.ingress.kubernetes.io/proxy-body-size"       = "10m"
+      "nginx.ingress.kubernetes.io/proxy-read-timeout"    = "300"
+      "nginx.ingress.kubernetes.io/proxy-send-timeout"    = "300"
       "nginx.ingress.kubernetes.io/configuration-snippet" = <<-EOT
         more_set_headers "X-Forwarded-Proto: https";
         more_set_headers "X-Forwarded-Host: tools.frontal.dev";
@@ -60,8 +60,8 @@ resource "kubernetes_manifest" "orbit_tools_certificate" {
       secretName = "tools-frontal-dev-tls"
       dnsNames   = ["tools.frontal.dev"]
       issuerRef = {
-        name  = "letsencrypt-prod"
-        kind  = "ClusterIssuer"
+        name = "letsencrypt-prod"
+        kind = "ClusterIssuer"
       }
     }
   }

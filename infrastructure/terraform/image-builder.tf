@@ -3,7 +3,7 @@
 
 resource "terraform_data" "build_orbit_server_image" {
   count = var.deploy_orbit_server ? 1 : 0
-  
+
   triggers_replace = [
     var.orbit_server_image
   ]
@@ -32,14 +32,14 @@ resource "terraform_data" "build_orbit_server_image" {
         docker push ${var.orbit_server_image}
       fi
     EOT
-    
+
     working_dir = path.module
   }
 }
 
 resource "terraform_data" "build_orbit_slack_image" {
   count = var.deploy_orbit_slack ? 1 : 0
-  
+
   triggers_replace = [
     var.orbit_slack_image
   ]
@@ -68,16 +68,16 @@ resource "terraform_data" "build_orbit_slack_image" {
         docker push ${var.orbit_slack_image}
       fi
     EOT
-    
+
     working_dir = path.module
   }
 }
 
 # ECR Repository resources (optional - for managed repositories)
 resource "aws_ecr_repository" "orbit_server" {
-  count = var.deploy_orbit_server && var.orbit_server_image != "orbit-server:latest" ? 1 : 0
+  count                = var.deploy_orbit_server && length(regexall("amazonaws\\.com", var.orbit_server_image)) > 0 ? 1 : 0
   name                 = "orbit-server"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
@@ -90,9 +90,9 @@ resource "aws_ecr_repository" "orbit_server" {
 }
 
 resource "aws_ecr_repository" "orbit_slack" {
-  count = var.deploy_orbit_slack && var.orbit_slack_image != "orbit-slack:latest" ? 1 : 0
+  count                = var.deploy_orbit_slack && length(regexall("amazonaws\\.com", var.orbit_slack_image)) > 0 ? 1 : 0
   name                 = "orbit-slack"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
@@ -106,7 +106,7 @@ resource "aws_ecr_repository" "orbit_slack" {
 
 # ECR Lifecycle policies
 resource "aws_ecr_lifecycle_policy" "orbit_server" {
-  count = var.deploy_orbit_server && var.orbit_server_image != "orbit-server:latest" ? 1 : 0
+  count      = var.deploy_orbit_server && length(regexall("amazonaws\\.com", var.orbit_server_image)) > 0 ? 1 : 0
   repository = aws_ecr_repository.orbit_server[0].name
 
   policy = jsonencode({
@@ -128,8 +128,8 @@ resource "aws_ecr_lifecycle_policy" "orbit_server" {
         rulePriority = 2
         description  = "Keep last 10 untagged images"
         selection = {
-          tagStatus = "untagged"
-          countType = "imageCountMoreThan"
+          tagStatus   = "untagged"
+          countType   = "imageCountMoreThan"
           countNumber = 10
         }
         action = {
@@ -141,7 +141,7 @@ resource "aws_ecr_lifecycle_policy" "orbit_server" {
 }
 
 resource "aws_ecr_lifecycle_policy" "orbit_slack" {
-  count = var.deploy_orbit_slack && var.orbit_slack_image != "orbit-slack:latest" ? 1 : 0
+  count      = var.deploy_orbit_slack && length(regexall("amazonaws\\.com", var.orbit_slack_image)) > 0 ? 1 : 0
   repository = aws_ecr_repository.orbit_slack[0].name
 
   policy = jsonencode({
@@ -163,8 +163,8 @@ resource "aws_ecr_lifecycle_policy" "orbit_slack" {
         rulePriority = 2
         description  = "Keep last 10 untagged images"
         selection = {
-          tagStatus = "untagged"
-          countType = "imageCountMoreThan"
+          tagStatus   = "untagged"
+          countType   = "imageCountMoreThan"
           countNumber = 10
         }
         action = {

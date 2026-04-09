@@ -38,14 +38,16 @@ Orbit CLI provides official container images for easy deployment and scaling. Co
 
 Orbit provides official Docker images on multiple registries:
 
+Pin an explicit release tag or digest in production. Avoid mutable aliases like `latest`.
+
 #### Docker Hub
 
 ```bash
-# Latest version
-docker pull orbit/cli:latest
+# Pinned release
+docker pull orbit/cli:v0.1.0
 
 # Specific version
-docker pull orbit/cli:v1.0.0
+docker pull orbit/cli:v0.1.0
 
 # Alpine variant (smaller size)
 docker pull orbit/cli:alpine
@@ -57,28 +59,25 @@ docker pull orbit/cli:dev
 #### GitHub Container Registry
 
 ```bash
-# Latest
-docker pull ghcr.io/orbit-org/cli:latest
+# Pinned release
+docker pull ghcr.io/orbit-org/cli:v0.1.0
 
 # Specific version
-docker pull ghcr.io/orbit-org/cli:v1.0.0
+docker pull ghcr.io/orbit-org/cli:v0.1.0
 ```
 
 #### Amazon ECR
 
 ```bash
 # Public ECR
-docker pull public.ecr.aws/orbit/cli:latest
-
-# Specific region
-docker pull public.ecr.aws/orbit/cli:latest-us-west-2
+docker pull public.ecr.aws/orbit/cli:v0.1.0
 ```
 
 ### Image Variants
 
 | Variant | Description | Size | Use Case |
 |---------|-------------|--------|----------|
-| `latest` | Standard Debian-based image | General purpose |
+| `vX.Y.Z` | Pinned release tag | General purpose |
 | `alpine` | Alpine Linux-based | Minimal size, security-focused |
 | `slim` | Slimmed-down image | Reduced attack surface |
 | `dev` | Development build with tools | Development and debugging |
@@ -86,7 +85,7 @@ docker pull public.ecr.aws/orbit/cli:latest-us-west-2
 ### Image Layers
 
 ```
-orbit/cli:latest
+orbit/cli:v0.1.0
 ├── rust:1.75-alpine          # Base runtime
 ├── ca-certificates             # SSL certificates
 ├── orbit-cli-binary           # Compiled Orbit binary
@@ -112,7 +111,7 @@ COPY . .
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 # Final runtime image
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -171,7 +170,7 @@ FROM --platform=linux/arm64 rust:1.75-alpine AS builder-arm64
 # Build steps...
 
 # Final image with multiple architectures
-FROM --platform=linux/amd64 alpine:latest
+FROM --platform=linux/amd64 alpine:3.20
 # ... copy from builder-amd64
 
 # Create manifest
@@ -200,7 +199,6 @@ services:
     volumes:
       - ./:/app
       - orbit-data:/home/orbit/.orbit
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - ORBIT_LOG_LEVEL=debug
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -214,6 +212,9 @@ volumes:
     driver: local
 ```
 
+Only mount `/var/run/docker.sock` when the container must launch sibling Docker workers.
+Keep it off the default development path and add it explicitly for trusted local-docker scenarios.
+
 ### Production Environment
 
 ```yaml
@@ -222,7 +223,7 @@ version: '3.8'
 
 services:
   orbit:
-    image: orbit/cli:latest
+    image: orbit/cli:v0.1.0
     deploy:
       replicas: 3
       resources:
@@ -283,7 +284,7 @@ version: '3.8'
 
 services:
   orbit:
-    image: orbit/cli:latest
+    image: orbit/cli:v0.1.0
     environment:
       - ORBIT_TELEMETRY_ENABLED=true
       - ORBIT_TELEMETRY_ENDPOINT=http://prometheus:9090/metrics
@@ -292,7 +293,7 @@ services:
       - grafana
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:vX.Y.Z
     ports:
       - "9090:9090"
     volumes:
@@ -305,7 +306,7 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:X.Y.Z
     ports:
       - "3000:3000"
     environment:
@@ -406,7 +407,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: orbit-cli
-        image: orbit/cli:latest
+        image: orbit/cli:v0.1.0
         imagePullPolicy: Always
         ports:
         - name: http
@@ -621,7 +622,7 @@ VOLUME ["/home/orbit/.orbit:rw"]
 
 ```dockerfile
 # Use Alpine for minimal base
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install only required packages
 RUN apk add --no-cache \
@@ -822,7 +823,7 @@ spec:
     spec:
       containers:
       - name: jaeger
-        image: jaegertracing/all-in-one:latest
+        image: jaegertracing/all-in-one:X.Y.Z
         ports:
         - containerPort: 16686
           name: ui
@@ -853,7 +854,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v3
     - name: Set up Docker Buildx
@@ -870,7 +871,7 @@ jobs:
 
   build-and-push:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
     steps:
     - uses: actions/checkout@v3
@@ -886,7 +887,6 @@ jobs:
       run: |
         docker buildx build \
           --platform linux/amd64,linux/arm64 \
-          --tag ghcr.io/orbit-org/cli:latest \
           --tag ghcr.io/orbit-org/cli:${{ github.sha }} \
           --push .
 ```
@@ -976,20 +976,20 @@ docker logs orbit-container
 docker inspect orbit-container --format='{{.State.Health.Status}}'
 
 # Debug with interactive shell
-docker run -it --entrypoint /bin/sh orbit/cli:latest
+docker run -it --entrypoint /bin/sh orbit/cli:v0.1.0
 ```
 
 #### Permission Issues
 
 ```bash
 # Check user permissions
-docker run orbit/cli:latest id
+docker run orbit/cli:v0.1.0 id
 
 # Fix volume permissions
-docker run --user 1000:1000 -v $(pwd):/app orbit/cli:latest
+docker run --user 1000:1000 -v $(pwd):/app orbit/cli:v0.1.0
 
 # Use security context
-docker run --security-opt no-new-privileges orbit/cli:latest
+docker run --security-opt no-new-privileges orbit/cli:v0.1.0
 ```
 
 #### Resource Issues
@@ -1022,13 +1022,13 @@ docker run --volumes-from orbit-container busybox ls -la /home/orbit/.orbit
 
 ```bash
 # Profile with perf
-docker run --privileged -v /usr/local/bin/perf:/usr/local/bin/perf orbit/cli:latest
+docker run --privileged -v /usr/local/bin/perf:/usr/local/bin/perf orbit/cli:v0.1.0
 
 # Memory profiling
-docker run --memory=512m --memory-swap=512m orbit/cli:latest
+docker run --memory=512m --memory-swap=512m orbit/cli:v0.1.0
 
 # CPU profiling
-docker run --cpus=0.5 orbit/cli:latest
+docker run --cpus=0.5 orbit/cli:v0.1.0
 ```
 
 This containers guide provides comprehensive coverage of deploying and managing Orbit CLI in containerized environments.

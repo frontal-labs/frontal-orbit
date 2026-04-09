@@ -56,13 +56,19 @@ variable "deploy_orbit_slack" {
 variable "orbit_server_image" {
   description = "Docker image for orbit-server"
   type        = string
-  default     = "orbit-server:latest"
+  default     = "orbit-server:v0.1.0"
 }
 
 variable "orbit_slack_image" {
   description = "Docker image for orbit-slack"
   type        = string
-  default     = "orbit-slack:latest"
+  default     = "orbit-slack:v0.1.0"
+}
+
+variable "orbit_server_api_key" {
+  description = "Shared API key used by orbit-server control-plane routes and orbit-slack"
+  type        = string
+  sensitive   = true
 }
 
 variable "slack_bot_token" {
@@ -101,14 +107,14 @@ variable "api_keys" {
   description = "API keys for various providers"
   type = object({
     anthropic = optional(string, "")
-    openai     = optional(string, "")
-    xai        = optional(string, "")
-    azure      = optional(string, "")
-    bedrock    = optional(string, "")
-    ollama     = optional(string, "")
+    openai    = optional(string, "")
+    xai       = optional(string, "")
+    azure     = optional(string, "")
+    bedrock   = optional(string, "")
+    ollama    = optional(string, "")
   })
   sensitive = true
-  default = {}
+  default   = {}
 }
 
 variable "storage_class" {

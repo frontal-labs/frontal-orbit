@@ -604,7 +604,7 @@ spec:
     spec:
       containers:
       - name: orbit-cli
-        image: orbit/cli:latest
+        image: orbit/cli:v0.1.0
         resources:
           requests:
             memory: "512Mi"

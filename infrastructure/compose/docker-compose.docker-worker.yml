@@ -1,0 +1,6 @@
+services:
+  orbit-server:
+    environment:
+      ORBIT_SERVER_LANE_TRANSPORT: ${ORBIT_SERVER_LANE_TRANSPORT:-local-docker}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

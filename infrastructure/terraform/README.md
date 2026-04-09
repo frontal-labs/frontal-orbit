@@ -71,8 +71,9 @@ deploy_orbit_server = true
 deploy_orbit_slack = true
 
 # Container Images
-orbit_server_image = "orbit-server:latest"
-orbit_slack_image = "orbit-slack:latest"
+orbit_server_image = "orbit-server:v0.1.0"
+orbit_slack_image = "orbit-slack:v0.1.0"
+orbit_server_api_key = "replace-with-a-long-random-api-key"
 
 # Slack Configuration
 slack_bot_token = "xoxb-xxxxxxxxxxxx"

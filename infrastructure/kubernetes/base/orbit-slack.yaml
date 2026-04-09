@@ -12,15 +12,31 @@ spec:
       labels:
         app: orbit-slack
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: orbit-slack
-          image: orbit-slack:latest
+          image: orbit-slack:v0.1.0
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
           envFrom:
             - configMapRef:
                 name: orbit-config
             - secretRef:
                 name: orbit-slack-secrets
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command: ["sh", "-c", "pidof node >/dev/null"]
@@ -38,3 +54,6 @@ spec:
             limits:
               cpu: 1
               memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}

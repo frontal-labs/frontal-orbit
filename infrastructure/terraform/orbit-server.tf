@@ -4,7 +4,7 @@ resource "kubernetes_namespace" "orbit" {
   metadata {
     name = var.orbit_service_namespace
     labels = {
-      name = var.orbit_service_namespace
+      name        = var.orbit_service_namespace
       environment = var.environment
     }
   }
@@ -14,16 +14,16 @@ resource "kubernetes_namespace" "orbit" {
 resource "kubernetes_persistent_volume_claim" "orbit_workspace" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-workspace"
+    name      = "orbit-workspace"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
 
   spec {
-    access_modes = ["ReadWriteOnce"]
+    access_modes       = ["ReadWriteOnce"]
     storage_class_name = var.storage_class
     resources {
       requests = {
@@ -38,16 +38,16 @@ resource "kubernetes_persistent_volume_claim" "orbit_workspace" {
 resource "kubernetes_persistent_volume_claim" "orbit_server_state" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-server-state"
+    name      = "orbit-server-state"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
 
   spec {
-    access_modes = ["ReadWriteOnce"]
+    access_modes       = ["ReadWriteOnce"]
     storage_class_name = var.storage_class
     resources {
       requests = {
@@ -62,16 +62,16 @@ resource "kubernetes_persistent_volume_claim" "orbit_server_state" {
 resource "kubernetes_persistent_volume_claim" "orbit_agent_store" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-agent-store"
+    name      = "orbit-agent-store"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
 
   spec {
-    access_modes = ["ReadWriteOnce"]
+    access_modes       = ["ReadWriteOnce"]
     storage_class_name = var.storage_class
     resources {
       requests = {
@@ -87,26 +87,26 @@ resource "kubernetes_persistent_volume_claim" "orbit_agent_store" {
 resource "kubernetes_config_map" "orbit_server_config" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-server-config"
+    name      = "orbit-server-config"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
 
   data = {
-    "ORBIT_SERVER_HOST" = "0.0.0.0"
-    "ORBIT_SERVER_PORT" = "8788"
-    "ORBIT_SERVER_LANE_TRANSPORT" = "tools-agent"
-    "ORBIT_SERVER_RECONCILE_INTERVAL_SECS" = "15"
+    "ORBIT_SERVER_HOST"                       = "0.0.0.0"
+    "ORBIT_SERVER_PORT"                       = "8788"
+    "ORBIT_SERVER_LANE_TRANSPORT"             = "tools-agent"
+    "ORBIT_SERVER_RECONCILE_INTERVAL_SECS"    = "15"
     "ORBIT_SERVER_ORPHAN_APPROVAL_DELAY_SECS" = "0"
-    "ORBIT_SERVER_ORPHAN_AUTO_RETRY_SECS" = "0"
-    "ORBIT_SERVER_ORPHAN_AUTO_CANCEL_SECS" = "0"
-    "ORBIT_SERVER_ORPHAN_POLICY_RULES" = "[]"
-    "ORBIT_SERVER_STATE_FILE" = "/var/lib/orbit/server/state.json"
-    "ORBIT_AGENT_STORE" = "/var/lib/orbit/agents"
-    "RUST_LOG" = "info"
+    "ORBIT_SERVER_ORPHAN_AUTO_RETRY_SECS"     = "0"
+    "ORBIT_SERVER_ORPHAN_AUTO_CANCEL_SECS"    = "0"
+    "ORBIT_SERVER_ORPHAN_POLICY_RULES"        = "[]"
+    "ORBIT_SERVER_STATE_FILE"                 = "/var/lib/orbit/server/state.json"
+    "ORBIT_AGENT_STORE"                       = "/var/lib/orbit/agents"
+    "RUST_LOG"                                = "info"
   }
 
   depends_on = [kubernetes_namespace.orbit]
@@ -116,28 +116,29 @@ resource "kubernetes_config_map" "orbit_server_config" {
 resource "kubernetes_secret" "orbit_server_secrets" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-server-secrets"
+    name      = "orbit-server-secrets"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
 
   data = {
-    "ANTHROPIC_API_KEY" = var.api_keys.anthropic
-    "OPENAI_API_KEY" = var.api_keys.openai
-    "OPENAI_BASE_URL" = ""
-    "FRONTAL_API_KEY" = var.api_keys.anthropic  # Use Anthropic key for Frontal
-    "FRONTAL_BASE_URL" = "https://tools.frontal.dev/orbit"
-    "XAI_API_KEY" = var.api_keys.xai
-    "XAI_BASE_URL" = ""
-    "AZURE_OPENAI_API_KEY" = var.api_keys.azure
+    "ORBIT_SERVER_API_KEY"  = var.orbit_server_api_key
+    "ANTHROPIC_API_KEY"     = var.api_keys.anthropic
+    "OPENAI_API_KEY"        = var.api_keys.openai
+    "OPENAI_BASE_URL"       = ""
+    "FRONTAL_API_KEY"       = var.api_keys.anthropic # Use Anthropic key for Frontal
+    "FRONTAL_BASE_URL"      = "https://tools.frontal.dev/orbit"
+    "XAI_API_KEY"           = var.api_keys.xai
+    "XAI_BASE_URL"          = ""
+    "AZURE_OPENAI_API_KEY"  = var.api_keys.azure
     "AZURE_OPENAI_BASE_URL" = ""
-    "BEDROCK_API_KEY" = var.api_keys.bedrock
-    "BEDROCK_BASE_URL" = ""
-    "OLLAMA_BASE_URL" = var.api_keys.ollama
-    "OLLAMA_MODEL" = ""
+    "BEDROCK_API_KEY"       = var.api_keys.bedrock
+    "BEDROCK_BASE_URL"      = ""
+    "OLLAMA_BASE_URL"       = var.api_keys.ollama
+    "OLLAMA_MODEL"          = ""
   }
 
   type = "Opaque"
@@ -149,10 +150,10 @@ resource "kubernetes_secret" "orbit_server_secrets" {
 resource "kubernetes_deployment" "orbit_server" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-server"
+    name      = "orbit-server"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
@@ -169,20 +170,36 @@ resource "kubernetes_deployment" "orbit_server" {
     template {
       metadata {
         labels = {
-          app = "orbit-server"
+          app         = "orbit-server"
           environment = var.environment
         }
       }
 
       spec {
+        automount_service_account_token = false
+
+        security_context {
+          fs_group        = 1000
+          run_as_group    = 1000
+          run_as_non_root = true
+          run_as_user     = 1000
+        }
+
         container {
-          name = "orbit-server"
-          image = var.orbit_server_image
+          name              = "orbit-server"
+          image             = var.orbit_server_image
           image_pull_policy = "IfNotPresent"
+
+          security_context {
+            allow_privilege_escalation = false
+            run_as_group               = 1000
+            run_as_non_root            = true
+            run_as_user                = 1000
+          }
 
           port {
             container_port = 8788
-            name = "http"
+            name           = "http"
           }
 
           env_from {
@@ -199,11 +216,11 @@ resource "kubernetes_deployment" "orbit_server" {
 
           resources {
             limits = {
-              cpu = "2000m"
+              cpu    = "2000m"
               memory = "4Gi"
             }
             requests = {
-              cpu = "1000m"
+              cpu    = "1000m"
               memory = "2Gi"
             }
           }
@@ -214,9 +231,9 @@ resource "kubernetes_deployment" "orbit_server" {
               port = 8788
             }
             initial_delay_seconds = 30
-            period_seconds = 10
-            timeout_seconds = 5
-            failure_threshold = 3
+            period_seconds        = 10
+            timeout_seconds       = 5
+            failure_threshold     = 3
           }
 
           readiness_probe {
@@ -225,23 +242,23 @@ resource "kubernetes_deployment" "orbit_server" {
               port = 8788
             }
             initial_delay_seconds = 10
-            period_seconds = 5
-            timeout_seconds = 3
-            failure_threshold = 3
+            period_seconds        = 5
+            timeout_seconds       = 3
+            failure_threshold     = 3
           }
 
           volume_mount {
-            name = "orbit-workspace"
+            name       = "orbit-workspace"
             mount_path = "/workspace"
           }
 
           volume_mount {
-            name = "orbit-server-state"
+            name       = "orbit-server-state"
             mount_path = "/var/lib/orbit/server"
           }
 
           volume_mount {
-            name = "orbit-agent-store"
+            name       = "orbit-agent-store"
             mount_path = "/var/lib/orbit/agents"
           }
         }
@@ -300,10 +317,10 @@ resource "kubernetes_deployment" "orbit_server" {
 resource "kubernetes_service" "orbit_server" {
   count = var.deploy_orbit_server ? 1 : 0
   metadata {
-    name = "orbit-server"
+    name      = "orbit-server"
     namespace = var.orbit_service_namespace
     labels = {
-      app = "orbit-server"
+      app         = "orbit-server"
       environment = var.environment
     }
   }
@@ -314,8 +331,8 @@ resource "kubernetes_service" "orbit_server" {
     }
 
     port {
-      name = "http"
-      port = 8788
+      name        = "http"
+      port        = 8788
       target_port = 8788
     }
 
