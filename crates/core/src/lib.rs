@@ -2,6 +2,17 @@
 //!
 //! This crate provides core capabilities for the Orbit system.
 
+pub mod config;
+
+#[cfg(test)]
+mod example;
+
+#[cfg(test)]
+mod test_config_loading;
+
+#[cfg(test)]
+mod test_project_config;
+
 #[cfg(test)]
 mod tests {
     #[test]

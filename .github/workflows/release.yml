@@ -25,7 +25,7 @@ jobs:
       matrix:
         include:
           - name: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             bin: orbit
             artifact_name: orbit-linux-x64.tar.gz
           - name: macos-arm64
@@ -37,7 +37,7 @@ jobs:
             bin: orbit
             artifact_name: orbit-macos-x64.tar.gz
           - name: windows-x64
-            os: windows-latest
+            os: windows-2022
             bin: orbit.exe
             artifact_name: orbit-windows-x64.exe
     defaults:

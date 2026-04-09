@@ -41,10 +41,9 @@ impl HmacAuthenticator {
         let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())
             .map_err(|e| format!("Failed to create HMAC: {}", e))?;
         mac.update(payload);
-        let result = mac.finalize();
 
-        // Verify
-        Ok(result.into_bytes().as_slice() == expected_bytes.as_slice())
+        // Verify in constant time.
+        Ok(mac.verify_slice(&expected_bytes).is_ok())
     }
 
     /// Generate signature for payload

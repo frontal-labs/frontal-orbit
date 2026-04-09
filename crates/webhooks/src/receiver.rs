@@ -12,8 +12,6 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower::ServiceBuilder;
-use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 
 use super::auth::{HmacAuthenticator, WebhookAuth};
@@ -85,7 +83,6 @@ impl WebhookReceiver {
         Router::new()
             .route("/webhook", post(handle_webhook))
             .route("/webhook/:source", post(handle_webhook_with_source))
-            .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
             .with_state(self.state)
     }
 

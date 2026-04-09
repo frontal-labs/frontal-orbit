@@ -57,7 +57,7 @@ env:
 jobs:
   doc-source-of-truth:
     name: docs source-of-truth
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: .
@@ -71,7 +71,7 @@ jobs:
 
   fmt:
     name: cargo fmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -85,7 +85,7 @@ jobs:
 
   test-workspace:
     name: cargo test --workspace
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -97,7 +97,7 @@ jobs:
 
   slack-extension-ci:
     name: slack contract + build + lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: extensions/orbit-slack
@@ -121,7 +121,7 @@ jobs:
 
   clippy-workspace:
     name: cargo clippy --workspace
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

@@ -187,6 +187,20 @@ pub struct HostedTaskEventSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_feedback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_identifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_stack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_head_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_base_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
@@ -400,6 +414,21 @@ pub fn render_typescript_bindings() -> String {
         "  published_branch?: string;",
         "  pr_url?: string;",
         "  pr_number?: number;",
+        "  pr_state?: string;",
+        "  pr_merged?: boolean;",
+        "  pr_closed_at?: string;",
+        "  pr_merged_at?: string;",
+        "  published_commit_sha?: string;",
+        "  github_review_state?: string;",
+        "  github_feedback_required?: boolean;",
+        "  github_feedback_reason?: string;",
+        "  linear_issue_id?: string;",
+        "  linear_issue_url?: string;",
+        "  linear_issue_state?: string;",
+        "  linear_issue_identifier?: string;",
+        "  graphite_stack_id?: string;",
+        "  graphite_head_branch?: string;",
+        "  graphite_base_branch?: string;",
         "  execution_backend?: string;",
         "  priority?: string;",
         "  plan_id?: string;",

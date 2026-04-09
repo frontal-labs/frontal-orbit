@@ -97,7 +97,7 @@ The server can run hosted lanes in sibling Docker containers by setting:
 
 - `ORBIT_SERVER_LANE_TRANSPORT=local-docker`
 - `ORBIT_SERVER_WORKSPACE_ROOT=/path/to/server/workspaces`
-- `ORBIT_SERVER_DOCKER_IMAGE=orbit-worker:latest`
+- `ORBIT_SERVER_DOCKER_IMAGE=orbit-worker:local`
 - `ORBIT_SERVER_CALLBACK_URL=http://host.docker.internal:8788`
 
 In that mode, the control plane:

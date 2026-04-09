@@ -4675,7 +4675,8 @@ fn maybe_report_hosted_task_completion(
         return;
     };
     let client = reqwest::blocking::Client::new();
-    let _ = client.post(url).json(&request).send();
+    let request = authorize_hosted_server_request(client.post(url)).json(&request);
+    let _ = request.send();
 }
 
 fn read_hosted_server_url() -> Option<String> {
@@ -4684,6 +4685,23 @@ fn read_hosted_server_url() -> Option<String> {
         .or_else(|| env::var("ORBIT_SERVER_BASE_URL").ok())
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn read_hosted_server_api_key() -> Option<String> {
+    env::var("ORBIT_SERVER_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn authorize_hosted_server_request(
+    builder: reqwest::blocking::RequestBuilder,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(api_key) = read_hosted_server_api_key() {
+        builder.header("x-api-key", api_key)
+    } else {
+        builder
+    }
 }
 
 fn hosted_task_completion_request<'a>(
