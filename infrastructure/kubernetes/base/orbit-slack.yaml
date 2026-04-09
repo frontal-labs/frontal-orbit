@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orbit-slack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orbit-slack
+  template:
+    metadata:
+      labels:
+        app: orbit-slack
+    spec:
+      containers:
+        - name: orbit-slack
+          image: orbit-slack:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: orbit-config
+            - secretRef:
+                name: orbit-slack-secrets
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pidof node >/dev/null"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pidof node >/dev/null"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 512Mi

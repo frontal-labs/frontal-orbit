@@ -1,0 +1,50 @@
+{
+  "name": "orbit-ide",
+  "displayName": "Orbit IDE",
+  "description": "Orbit integration for VS Code and Cursor",
+  "version": "0.1.0",
+  "publisher": "orbit",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onCommand:orbit.startRepl",
+    "onCommand:orbit.askSelection",
+    "onCommand:orbit.askInput"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "orbit.startRepl",
+        "title": "Orbit: Start REPL"
+      },
+      {
+        "command": "orbit.askSelection",
+        "title": "Orbit: Ask About Selection"
+      },
+      {
+        "command": "orbit.askInput",
+        "title": "Orbit: Ask Orbit"
+      }
+    ],
+    "configuration": {
+      "title": "Orbit",
+      "properties": {
+        "orbit.cliPath": {
+          "type": "string",
+          "default": "orbit",
+          "description": "Path to the Orbit CLI binary."
+        },
+        "orbit.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model override used for one-shot asks."
+        }
+      }
+    }
+  }
+}

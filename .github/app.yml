@@ -1,0 +1,67 @@
+# GitHub App Configuration for Orbit Autonomous Engineering
+name: Orbit Autonomous Engineering
+description: AI-powered autonomous engineering platform that handles code analysis, bug fixes, and deployments through natural language interfaces
+
+# App URL and webhook configuration
+url: https://your-orbit-server.com
+webhook_url: https://your-orbit-server.com/webhook/github
+
+# Repository permissions
+permissions:
+  contents: write          # Read/write repository contents
+  issues: write            # Create and manage issues  
+  pull_requests: write     # Create and manage pull requests
+  checks: write           # Create and manage check runs
+  statuses: write         # Create commit statuses
+  deployments: write      # Manage deployments
+  actions: read          # Read GitHub Actions workflows
+  metadata: read          # Read repository metadata
+  discussions: write      # Create and manage discussions
+  repository_projects: write # Manage repository projects
+  security_events: read   # Read security events
+
+# Organization permissions (optional, for enterprise features)
+# organization:
+#   administration: write
+#   members: read
+
+# Webhook events to subscribe to
+events:
+  # Code and repository events
+  - push
+  - pull_request
+  - pull_request_review
+  - pull_request_comment
+  - issue_comment
+  - issues
+  - create
+  - delete
+  
+  # CI/CD events  
+  - check_run
+  - check_suite
+  - status
+  
+  # Security events
+  - security_advisory
+  - dependabot_alert
+  - code_scanning_alert
+  
+  # Release events
+  - release
+  - deployment
+
+# Installation configuration
+installation_repositories: all  # Can be changed to "selected" for specific repos
+
+# App settings
+public: false
+verify_ssl: true
+
+# Default permissions for new installations
+default_permissions:
+  contents: write
+  issues: write
+  pull_requests: write
+  checks: write
+  statuses: write

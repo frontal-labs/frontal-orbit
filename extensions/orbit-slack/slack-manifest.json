@@ -1,0 +1,192 @@
+{
+  "display_information": {
+    "name": "Frontal Orbit",
+    "description": "AI-powered autonomous engineering platform for code analysis, bug fixes, and deployments",
+    "background_color": "#000000",
+    "long_description": "Orbit is a complete autonomous engineering platform that can reason, plan, and execute like a full-stack engineer. It understands your infrastructure, code, and data in real time, then takes action to build, fix, and operate systems end-to-end through natural language commands in Slack."
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "Orbit Engineering Bot",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/orbit",
+        "url": "https://your-orbit-server.com/slack/commands",
+        "description": "Autonomous engineering commands",
+        "usage_hint": "ask 'question' | task 'description' | status | help",
+        "should_escape": false
+      },
+      {
+        "command": "/orbit-branch",
+        "url": "https://your-orbit-server.com/slack/commands",
+        "description": "Git branch operations",
+        "usage_hint": "create <n> | switch <n> | list",
+        "should_escape": false
+      },
+      {
+        "command": "/orbit-commit",
+        "url": "https://your-orbit-server.com/slack/commands",
+        "description": "Commit changes",
+        "usage_hint": "<message>",
+        "should_escape": false
+      },
+      {
+        "command": "/orbit-pr",
+        "url": "https://your-orbit-server.com/slack/commands",
+        "description": "Pull request operations",
+        "usage_hint": "create <title> | merge <number> | review <number>",
+        "should_escape": false
+      },
+      {
+        "command": "/orbit-deploy",
+        "url": "https://your-orbit-server.com/slack/commands",
+        "description": "Deploy to environments",
+        "usage_hint": "<environment>",
+        "should_escape": false
+      },
+      {
+        "command": "/orbit-fix",
+        "url": "https://your-orbit-server.com/slack/commands",
+        "description": "Fix issues automatically",
+        "usage_hint": "issue <url> | bug <description> | test <n>",
+        "should_escape": false
+      }
+    ],
+    "unfurl_domains": [
+      "github.com",
+      "gitlab.com",
+      "bitbucket.org"
+    ]
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://your-orbit-server.com/slack/oauth/callback"
+    ],
+    "scopes": {
+      "user": [
+        "channels:read",
+        "channels:write",
+        "channels:history",
+        "groups:read",
+        "groups:write",
+        "groups:history",
+        "im:read",
+        "im:write",
+        "im:history",
+        "mpim:read",
+        "mpim:write",
+        "mpim:history",
+        "team:read",
+        "users:read",
+        "users:read.email",
+        "users.profile:read",
+        "users.profile:write",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "search:read",
+        "stars:read",
+        "stars:write",
+        "pins:read",
+        "pins:write",
+        "reactions:read",
+        "reactions:write",
+        "reminders:read",
+        "reminders:write",
+        "bookmarks:read",
+        "bookmarks:write",
+        "calls:read",
+        "calls:write",
+        "canvases:read",
+        "canvases:write",
+        "dnd:read",
+        "emoji:read",
+        "links:write",
+        "remote_files:read",
+        "remote_files:share",
+        "usergroups:read",
+        "usergroups:write"
+      ],
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "channels:manage",
+        "chat:write",
+        "chat:write.public",
+        "chat:write.customize",
+        "commands",
+        "files:write",
+        "files:read",
+        "groups:history",
+        "groups:read",
+        "groups:write",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "team:read",
+        "users:read",
+        "users:read.email",
+        "users.profile:read",
+        "incoming-webhook",
+        "bookmarks:write",
+        "bookmarks:read",
+        "calls:write",
+        "calls:read",
+        "canvases:write",
+        "canvases:read",
+        "dnd:read",
+        "emoji:read",
+        "links:write",
+        "metadata.message:read",
+        "pins:read",
+        "pins:write",
+        "reactions:read",
+        "reactions:write",
+        "reminders:read",
+        "reminders:write",
+        "remote_files:read",
+        "remote_files:share",
+        "remote_files:write",
+        "usergroups:read",
+        "usergroups:write",
+        "links:read"
+      ]
+    },
+    "pkce_enabled": false
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://your-orbit-server.com/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "member_joined_channel",
+        "member_left_channel",
+        "team_join",
+        "link_shared"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://your-orbit-server.com/slack/interactive",
+      "message_menu_options_url": "https://your-orbit-server.com/slack/menu"
+    },
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

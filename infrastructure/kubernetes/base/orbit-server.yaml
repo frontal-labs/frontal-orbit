@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orbit-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orbit-server
+  template:
+    metadata:
+      labels:
+        app: orbit-server
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: orbit-server
+          image: orbit-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8788
+              name: http
+          workingDir: /workspace
+          envFrom:
+            - configMapRef:
+                name: orbit-config
+            - secretRef:
+                name: orbit-secrets
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: server-state
+              mountPath: /var/lib/orbit/server
+            - name: agent-store
+              mountPath: /var/lib/orbit/agents
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: orbit-workspace
+        - name: server-state
+          persistentVolumeClaim:
+            claimName: orbit-server-state
+        - name: agent-store
+          persistentVolumeClaim:
+            claimName: orbit-agent-store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orbit-server
+spec:
+  selector:
+    app: orbit-server
+  ports:
+    - name: http
+      port: 8788
+      targetPort: http
