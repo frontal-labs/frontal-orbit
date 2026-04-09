@@ -50,4 +50,5 @@ orbit prompt "your question here"
 
 # With specific provider
 orbit --provider anthropic prompt "your question"
+orbit --provider frontal prompt "your question"
 ```

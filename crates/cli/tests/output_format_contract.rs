@@ -46,6 +46,166 @@ fn status_and_sandbox_emit_json_when_requested() {
 }
 
 #[test]
+fn config_telemetry_emits_structured_json_when_requested() {
+    let root = unique_temp_dir("config-telemetry-json");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(workspace.join(".orbit")).expect("workspace orbit dir should exist");
+    fs::write(
+        workspace.join(".orbit").join("settings.json"),
+        r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+    )
+    .expect("project settings");
+    fs::write(
+        workspace.join(".orbit").join("settings.local.json"),
+        r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+    )
+    .expect("local settings");
+
+    let parsed = assert_json_command(
+        &workspace,
+        &["--output-format", "json", "config", "telemetry"],
+    );
+    assert_eq!(parsed["kind"], "config");
+    assert_eq!(parsed["section"], "telemetry");
+    assert_eq!(parsed["merged_section"]["path"], "local/log.jsonl");
+    assert_eq!(parsed["effective"]["kind"], "telemetry");
+    assert_eq!(parsed["effective"]["effective_source"], "config");
+    assert_eq!(parsed["effective"]["path"], "local/log.jsonl");
+    assert!(parsed["effective"]["config_source_path"]
+        .as_str()
+        .expect("config source path")
+        .ends_with(".orbit/settings.local.json"));
+}
+
+#[test]
+fn telemetry_status_with_target_emits_structured_json_when_requested() {
+    let root = unique_temp_dir("telemetry-status-target-json");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(workspace.join(".orbit")).expect("workspace orbit dir should exist");
+    fs::write(
+        workspace.join(".orbit").join("settings.json"),
+        r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+    )
+    .expect("project settings");
+    fs::write(
+        workspace.join(".orbit").join("settings.local.json"),
+        r#"{"telemetry":{"enabled":false,"path":"local/log.jsonl"}}"#,
+    )
+    .expect("local settings");
+
+    let parsed = assert_json_command(
+        &workspace,
+        &["--output-format", "json", "telemetry", "status", "project"],
+    );
+    assert_eq!(parsed["kind"], "telemetry");
+    assert_eq!(parsed["target"]["scope"], "project");
+    assert_eq!(parsed["target"]["settings_status"], "present");
+    assert_eq!(parsed["target"]["config_enabled"], true);
+    assert_eq!(parsed["target"]["config_path"], "project/log.jsonl");
+    assert_eq!(parsed["effective_source"], "config");
+    assert_eq!(parsed["path"], "local/log.jsonl");
+}
+
+#[test]
+fn config_sections_emit_structured_json_when_requested() {
+    let root = unique_temp_dir("config-sections-json");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(workspace.join(".orbit")).expect("workspace orbit dir should exist");
+    fs::write(
+        workspace.join(".orbit").join("settings.json"),
+        r#"{
+          "env": {"API_BASE_URL": "https://example.test", "FEATURE_FLAG": "on"},
+          "hooks": {
+            "PreToolUse": ["scripts/pre.sh"],
+            "PostToolUse": ["scripts/post.sh"],
+            "PostToolUseFailure": ["scripts/fail.sh"]
+          },
+          "model": "claude-sonnet-4-6",
+          "plugins": {
+            "enabled": {"demo-plugin": true},
+            "externalDirectories": ["./plugins"]
+          }
+        }"#,
+    )
+    .expect("project settings");
+
+    let env = assert_json_command(&workspace, &["--output-format", "json", "config", "env"]);
+    assert_eq!(env["kind"], "config");
+    assert_eq!(env["section"], "env");
+    assert_eq!(
+        env["merged_section"]["API_BASE_URL"],
+        "https://example.test"
+    );
+    assert_eq!(env["merged_section"]["FEATURE_FLAG"], "on");
+
+    let hooks = assert_json_command(&workspace, &["--output-format", "json", "config", "hooks"]);
+    assert_eq!(hooks["kind"], "config");
+    assert_eq!(hooks["section"], "hooks");
+    assert_eq!(hooks["merged_section"]["PreToolUse"][0], "scripts/pre.sh");
+    assert_eq!(hooks["merged_section"]["PostToolUse"][0], "scripts/post.sh");
+    assert_eq!(
+        hooks["merged_section"]["PostToolUseFailure"][0],
+        "scripts/fail.sh"
+    );
+
+    let model = assert_json_command(&workspace, &["--output-format", "json", "config", "model"]);
+    assert_eq!(model["kind"], "config");
+    assert_eq!(model["section"], "model");
+    assert_eq!(model["merged_section"], "claude-sonnet-4-6");
+
+    let plugins = assert_json_command(
+        &workspace,
+        &["--output-format", "json", "config", "plugins"],
+    );
+    assert_eq!(plugins["kind"], "config");
+    assert_eq!(plugins["section"], "plugins");
+    assert_eq!(plugins["merged_section"]["enabled"]["demo-plugin"], true);
+    assert_eq!(
+        plugins["merged_section"]["externalDirectories"][0],
+        "./plugins"
+    );
+}
+
+#[test]
+fn config_unset_section_emits_structured_json_when_requested() {
+    let root = unique_temp_dir("config-unset-json");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(workspace.join(".orbit")).expect("workspace orbit dir should exist");
+    fs::write(
+        workspace.join(".orbit").join("settings.json"),
+        r#"{"model":"claude-sonnet-4-6"}"#,
+    )
+    .expect("project settings");
+
+    let parsed = assert_json_command(&workspace, &["--output-format", "json", "config", "hooks"]);
+    assert_eq!(parsed["kind"], "config");
+    assert_eq!(parsed["section"], "hooks");
+    assert_eq!(parsed["section_supported"], true);
+    assert_eq!(parsed["section_present"], false);
+    assert_eq!(parsed["section_status"], "unset");
+    assert!(parsed["merged_section"].is_null());
+}
+
+#[test]
+fn config_unsupported_section_emits_structured_json_when_requested() {
+    let root = unique_temp_dir("config-unsupported-json");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace should exist");
+
+    let parsed = assert_json_command(
+        &workspace,
+        &["--output-format", "json", "config", "unknown"],
+    );
+    assert_eq!(parsed["kind"], "config");
+    assert_eq!(parsed["section"], "unknown");
+    assert_eq!(parsed["status"], "unsupported");
+    assert_eq!(parsed["section_supported"], false);
+    assert_eq!(parsed["section_present"], false);
+    assert_eq!(parsed["section_status"], "unsupported");
+    assert!(parsed["supported_sections"].is_array());
+}
+
+#[test]
 fn inventory_commands_emit_structured_json_when_requested() {
     let root = unique_temp_dir("inventory-json");
     fs::create_dir_all(&root).expect("temp dir should exist");
@@ -206,7 +366,7 @@ fn doctor_and_resume_status_emit_json_when_requested() {
     assert!(summary["failures"].as_u64().is_some());
 
     let checks = doctor["checks"].as_array().expect("doctor checks");
-    assert_eq!(checks.len(), 5);
+    assert_eq!(checks.len(), 6);
     let check_names = checks
         .iter()
         .map(|check| {
@@ -218,7 +378,14 @@ fn doctor_and_resume_status_emit_json_when_requested() {
         .collect::<Vec<_>>();
     assert_eq!(
         check_names,
-        vec!["auth", "config", "workspace", "sandbox", "system"]
+        vec![
+            "auth",
+            "config",
+            "workspace",
+            "sandbox",
+            "system",
+            "ide integration",
+        ]
     );
 
     let workspace = checks
@@ -316,6 +483,32 @@ fn resumed_inventory_commands_emit_structured_json_when_requested() {
     assert_eq!(skills["action"], "list");
     assert!(skills["summary"]["total"].is_number());
     assert!(skills["skills"].is_array());
+
+    let config = assert_json_command_with_env(
+        &root,
+        &[
+            "--output-format",
+            "json",
+            "--resume",
+            session_path.to_str().expect("utf8 session path"),
+            "/config",
+            "unknown",
+        ],
+        &[
+            (
+                "ORBIT_CONFIG_HOME",
+                config_home.to_str().expect("utf8 config home"),
+            ),
+            ("HOME", home.to_str().expect("utf8 home")),
+        ],
+    );
+    assert_eq!(config["kind"], "config");
+    assert_eq!(config["section"], "unknown");
+    assert_eq!(config["status"], "unsupported");
+    assert_eq!(config["section_supported"], false);
+    assert_eq!(config["section_present"], false);
+    assert_eq!(config["section_status"], "unsupported");
+    assert!(config["supported_sections"].is_array());
 }
 
 #[test]

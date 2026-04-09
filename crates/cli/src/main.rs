@@ -10,11 +10,10 @@ mod init;
 mod input;
 mod render;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::TcpListener;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,41 +22,53 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+use futures_util::StreamExt;
 use orbit_api::{
-    create_provider_client, detect_provider_kind, oauth_token_is_expired,
-    resolve_startup_auth_source, AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache, ProviderClient,
-    ProviderKind, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
-    ToolResultContentBlock,
+    create_provider_client, detect_provider_kind, AnthropicClient, AuthSource, ContentBlockDelta,
+    InputContentBlock, InputMessage, JsonlTelemetrySink, MessageRequest, MessageResponse,
+    OutputContentBlock, PromptCache, ProviderClient, ProviderKind, SessionTracer,
+    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
+use init::initialize_repo;
 use orbit_commands::{
     classify_skills_slash_command, handle_agents_slash_command, handle_agents_slash_command_json,
     handle_mcp_slash_command, handle_mcp_slash_command_json, handle_plugins_slash_command,
     handle_skills_slash_command, handle_skills_slash_command_json, render_slash_command_help,
     resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
-    SkillSlashDispatch, SlashCommand,
+    SkillSlashDispatch, SlashCommand, CONFIG_SECTION_ARGUMENT_HINT, SUPPORTED_CONFIG_SECTIONS,
 };
 use orbit_compat_harness::{extract_manifest, UpstreamPaths};
-use init::initialize_repo;
-use orbit_plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
-use render::{MarkdownStreamState, Spinner, TerminalRenderer};
-use orbit_runtime::{
-    clear_oauth_credentials, format_usd, generate_pkce_pair, generate_state,
-    load_oauth_credentials, load_system_prompt, parse_oauth_callback_request_target,
-    permission_enforcer::PermissionEnforcer, pricing_for_model, resolve_sandbox_status,
-    save_oauth_credentials, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
-    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
-    McpTool, MessageRole, ModelPricing, OAuthAuthorizationRequest, OAuthConfig,
-    OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext, PromptCacheEvent,
-    ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
+use orbit_events::{EventEnvelope, HostedEventName, HostedEventStatus, HostedEventTopic};
+use orbit_integrations::ide::{
+    collect_status as collect_ide_status, install_extension as install_ide_extension,
+    install_packaged_extension as install_packaged_ide_extension,
+    launch_target as launch_ide_target, package_extension as package_ide_extension,
+    parse_target as parse_ide_target, set_default_target as set_default_ide_target,
+    setup_editor_integration as setup_ide_editor_integration, IdeStatus, IdeTarget,
 };
-use serde::Deserialize;
+use orbit_integrations::mcp::config as integrations_mcp_config;
+use orbit_plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
+use orbit_runtime::{
+    format_usd, load_system_prompt, permission_enforcer::PermissionEnforcer, pricing_for_model,
+    resolve_sandbox_status, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
+    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
+    McpTool, MessageRole, ModelPricing, PermissionMode, PermissionPolicy, ProjectContext,
+    PromptCacheEvent, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
+    ToolExecutor, UsageTracker,
+};
+use orbit_tools::{
+    GlobalToolRegistry, RuntimeToolDefinition, ToolExecutionScope, ToolSearchOutput,
+};
+use render::{MarkdownStreamState, Spinner, TerminalRenderer};
+use reqwest::blocking::Client as HttpClient;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use orbit_tools::{GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput};
+use tokio_tungstenite::{connect_async, tungstenite::Message as WebSocketMessage};
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_HOSTED_SERVER_URL: &str = "http://127.0.0.1:8788";
+const HOSTED_SERVER_TIMEOUT_SECS: u64 = 30;
 fn max_tokens_for_model(model: &str) -> u32 {
     if model.contains("opus") {
         32_000
@@ -66,10 +77,10 @@ fn max_tokens_for_model(model: &str) -> u32 {
     }
 }
 const DEFAULT_DATE: &str = "2026-03-31";
-const DEFAULT_OAUTH_CALLBACK_PORT: u16 = 4545;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_TARGET: Option<&str> = option_env!("TARGET");
 const GIT_SHA: Option<&str> = option_env!("GIT_SHA");
+const ORBIT_TELEMETRY_PATH: &str = "ORBIT_TELEMETRY_PATH";
 const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const PRIMARY_SESSION_EXTENSION: &str = "jsonl";
 const LEGACY_SESSION_EXTENSION: &str = "json";
@@ -152,6 +163,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
             output_format,
         } => print_status_snapshot(&model, permission_mode, output_format)?,
+        CliAction::Config {
+            section,
+            output_format,
+        } => LiveCli::print_config(section.as_deref(), output_format)?,
+        CliAction::Telemetry {
+            output_format,
+            action,
+            target,
+        } => print_telemetry_status(output_format, action.as_deref(), target.as_deref())?,
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt {
             prompt,
@@ -162,10 +182,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
         } => LiveCli::new_with_provider(model, provider, true, allowed_tools, permission_mode)?
             .run_turn_with_output(&prompt, output_format)?,
-        CliAction::Login { output_format } => run_login(output_format)?,
-        CliAction::Logout { output_format } => run_logout(output_format)?,
         CliAction::Doctor { output_format } => run_doctor(output_format)?,
         CliAction::Init { output_format } => run_init(output_format)?,
+        CliAction::Hosted {
+            command,
+            output_format,
+        } => run_hosted_command(command, output_format)?,
         CliAction::Repl {
             model,
             provider,
@@ -176,6 +198,98 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Help { output_format } => print_help(output_format)?,
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TelemetryResolution {
+    enabled: bool,
+    path: Option<String>,
+    source: &'static str,
+    config_path: Option<PathBuf>,
+}
+
+fn resolve_telemetry_config(
+    runtime_config: Option<&orbit_runtime::RuntimeConfig>,
+) -> TelemetryResolution {
+    if let Ok(path) = env::var(ORBIT_TELEMETRY_PATH) {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return TelemetryResolution {
+                enabled: true,
+                path: Some(trimmed.to_string()),
+                source: "env",
+                config_path: telemetry_config_entry(runtime_config).map(|(_, path)| path),
+            };
+        }
+    }
+
+    if let Some(telemetry) = runtime_config.map(orbit_runtime::RuntimeConfig::telemetry) {
+        if telemetry.enabled() == Some(false) {
+            return TelemetryResolution {
+                enabled: false,
+                path: telemetry.path().map(ToOwned::to_owned),
+                source: "config",
+                config_path: telemetry_config_entry(runtime_config).map(|(_, path)| path),
+            };
+        }
+        if let Some(path) = telemetry.path().filter(|path| !path.trim().is_empty()) {
+            return TelemetryResolution {
+                enabled: true,
+                path: Some(path.to_string()),
+                source: "config",
+                config_path: telemetry_config_entry(runtime_config).map(|(_, path)| path),
+            };
+        }
+    }
+
+    TelemetryResolution {
+        enabled: false,
+        path: None,
+        source: "default",
+        config_path: None,
+    }
+}
+
+fn telemetry_config_entry(
+    runtime_config: Option<&orbit_runtime::RuntimeConfig>,
+) -> Option<(orbit_runtime::ConfigSource, PathBuf)> {
+    let runtime_config = runtime_config?;
+    runtime_config
+        .loaded_entries()
+        .iter()
+        .rev()
+        .find_map(|entry| {
+            let contents = fs::read_to_string(&entry.path).ok()?;
+            let parsed = serde_json::from_str::<Value>(&contents).ok()?;
+            parsed
+                .as_object()
+                .and_then(|object| object.contains_key("telemetry").then_some(()))?;
+            Some((entry.source, entry.path.clone()))
+        })
+}
+
+fn build_cli_session_tracer(
+    session_id: &str,
+    runtime_config: Option<&orbit_runtime::RuntimeConfig>,
+) -> Option<SessionTracer> {
+    let resolution = resolve_telemetry_config(runtime_config);
+    if !resolution.enabled {
+        return None;
+    }
+    resolution
+        .path
+        .and_then(|path| JsonlTelemetrySink::new(path).ok())
+        .map(|sink| SessionTracer::new(session_id.to_string(), Arc::new(sink)))
+}
+
+fn attach_session_tracer(
+    client: ProviderClient,
+    session_tracer: Option<SessionTracer>,
+) -> ProviderClient {
+    match session_tracer {
+        Some(tracer) => client.with_session_tracer(tracer),
+        None => client,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +336,15 @@ enum CliAction {
         permission_mode: PermissionMode,
         output_format: CliOutputFormat,
     },
+    Config {
+        section: Option<String>,
+        output_format: CliOutputFormat,
+    },
+    Telemetry {
+        output_format: CliOutputFormat,
+        action: Option<String>,
+        target: Option<String>,
+    },
     Sandbox {
         output_format: CliOutputFormat,
     },
@@ -233,16 +356,14 @@ enum CliAction {
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
     },
-    Login {
-        output_format: CliOutputFormat,
-    },
-    Logout {
-        output_format: CliOutputFormat,
-    },
     Doctor {
         output_format: CliOutputFormat,
     },
     Init {
+        output_format: CliOutputFormat,
+    },
+    Hosted {
+        command: HostedCommand,
         output_format: CliOutputFormat,
     },
     Repl {
@@ -256,6 +377,207 @@ enum CliAction {
     Help {
         output_format: CliOutputFormat,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HostedCommand {
+    PolicyOrphans {
+        repository: Option<String>,
+        source: Option<String>,
+        priority: Option<String>,
+    },
+    EventsWatch {
+        query: HostedEventWatchQuery,
+    },
+    TasksList {
+        query: HostedTaskListQuery,
+    },
+    TasksWatch {
+        query: HostedTaskListQuery,
+    },
+    TaskGet {
+        task_id: String,
+    },
+    TaskRuntime {
+        task_id: String,
+    },
+    TaskReconcile {
+        task_id: String,
+    },
+    TaskCancel {
+        task_id: String,
+    },
+    TaskApproval {
+        task_id: String,
+        action: HostedApprovalAction,
+        resolved_by: Option<String>,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct HostedTaskListQuery {
+    status: Option<String>,
+    source: Option<String>,
+    repository: Option<String>,
+    channel_id: Option<String>,
+    thread_ts: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct HostedEventWatchQuery {
+    task_id: Option<String>,
+    topic: Option<String>,
+    event: Option<String>,
+    status: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostedApprovalAction {
+    Retry,
+    Cancel,
+}
+
+impl HostedApprovalAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Retry => "retry",
+            Self::Cancel => "cancel",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "retry" => Ok(Self::Retry),
+            "cancel" => Ok(Self::Cancel),
+            other => Err(format!(
+                "unsupported hosted approval action: {other} (expected retry or cancel)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedPolicyResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<HostedPolicyPreview>,
+    default_policy: HostedAppliedOrphanPolicy,
+    effective_policy: HostedAppliedOrphanPolicy,
+    configured_rules: Vec<HostedPolicyRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedPolicyPreview {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedAppliedOrphanPolicy {
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    match_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    match_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    match_priority: Option<String>,
+    approval_delay_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_retry_after_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_cancel_after_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedPolicyRule {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_delay_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_retry_after_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_cancel_after_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedTaskSnapshot {
+    task_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_ts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    orphan_policy: Option<HostedAppliedOrphanPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedAgentRuntimeSnapshot {
+    found: bool,
+    #[serde(rename = "liveControl")]
+    live_control: bool,
+    status: String,
+    #[serde(rename = "derivedState")]
+    derived_state: String,
+    orphaned: bool,
+    #[serde(rename = "manifestFile", skip_serializing_if = "Option::is_none")]
+    manifest_file: Option<String>,
+    #[serde(rename = "outputFile", skip_serializing_if = "Option::is_none")]
+    output_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HostedTaskRuntimeResponse {
+    task_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    orphan_policy: Option<HostedAppliedOrphanPolicy>,
+    #[serde(rename = "hostedAgent", skip_serializing_if = "Option::is_none")]
+    hosted_agent: Option<HostedAgentRuntimeSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HostedTaskWatchItem {
+    event: EventEnvelope,
+    task: HostedTaskSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -448,6 +770,12 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     match rest[0].as_str() {
         "dump-manifests" => Ok(CliAction::DumpManifests { output_format }),
         "bootstrap-plan" => Ok(CliAction::BootstrapPlan { output_format }),
+        "config" => parse_config_cli_action(&rest[1..], output_format),
+        "telemetry" => Ok(CliAction::Telemetry {
+            output_format,
+            action: rest.get(1).cloned(),
+            target: rest.get(2).cloned(),
+        }),
         "agents" => Ok(CliAction::Agents {
             args: join_optional_args(&rest[1..]),
             output_format,
@@ -473,9 +801,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }),
             }
         }
+        "hosted" => parse_hosted_cli_action(&rest[1..], output_format),
         "system-prompt" => parse_system_prompt_args(&rest[1..], output_format),
-        "login" => Ok(CliAction::Login { output_format }),
-        "logout" => Ok(CliAction::Logout { output_format }),
         "init" => Ok(CliAction::Init { output_format }),
         "prompt" => {
             let prompt = rest[1..].join(" ");
@@ -524,6 +851,356 @@ fn parse_local_help_action(rest: &[String]) -> Option<Result<CliAction, String>>
     Some(Ok(CliAction::HelpTopic(topic)))
 }
 
+fn parse_hosted_cli_action(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    if args.is_empty() {
+        return Err(
+            "hosted requires a subcommand. Use `orbit hosted policy orphans` or `orbit hosted task ...`."
+                .to_string(),
+        );
+    }
+
+    match args[0].as_str() {
+        "policy" => parse_hosted_policy_cli_action(&args[1..], output_format),
+        "events" => parse_hosted_events_cli_action(&args[1..], output_format),
+        "tasks" => parse_hosted_tasks_cli_action(&args[1..], output_format),
+        "task" => parse_hosted_task_cli_action(&args[1..], output_format),
+        other => Err(format!(
+            "unknown hosted subcommand: {other} (expected policy, events, tasks, or task)"
+        )),
+    }
+}
+
+fn parse_hosted_events_cli_action(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    if args.first().map(String::as_str) != Some("watch") {
+        return Err(
+            "unsupported hosted events command. Use `orbit hosted events watch`.".to_string(),
+        );
+    }
+
+    let mut query = HostedEventWatchQuery::default();
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--task-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted events watch requires a value after --task-id".to_string());
+                };
+                query.task_id = Some(value.clone());
+                index += 2;
+            }
+            "--topic" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted events watch requires a value after --topic".to_string());
+                };
+                query.topic = Some(value.clone());
+                index += 2;
+            }
+            "--event" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted events watch requires a value after --event".to_string());
+                };
+                query.event = Some(value.clone());
+                index += 2;
+            }
+            "--status" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted events watch requires a value after --status".to_string());
+                };
+                query.status = Some(value.clone());
+                index += 2;
+            }
+            "--limit" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted events watch requires a value after --limit".to_string());
+                };
+                let parsed = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid hosted event limit: {value}"))?;
+                query.limit = Some(parsed);
+                index += 2;
+            }
+            other => {
+                return Err(format!(
+                    "unsupported hosted events argument: {other}. Use --task-id, --topic, --event, --status, or --limit."
+                ));
+            }
+        }
+    }
+
+    Ok(CliAction::Hosted {
+        command: HostedCommand::EventsWatch { query },
+        output_format,
+    })
+}
+
+fn parse_hosted_tasks_cli_action(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    let Some(action) = args.first().map(String::as_str) else {
+        return Err("hosted tasks requires a subcommand. Use `orbit hosted tasks list` or `orbit hosted tasks watch`.".to_string());
+    };
+
+    let mut query = HostedTaskListQuery::default();
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--status" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted tasks list requires a value after --status".to_string());
+                };
+                query.status = Some(value.clone());
+                index += 2;
+            }
+            "--source" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted tasks list requires a value after --source".to_string());
+                };
+                query.source = Some(value.clone());
+                index += 2;
+            }
+            "--repository" | "--repo" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted tasks list requires a value after --repository".to_string());
+                };
+                query.repository = Some(value.clone());
+                index += 2;
+            }
+            "--channel-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted tasks list requires a value after --channel-id".to_string());
+                };
+                query.channel_id = Some(value.clone());
+                index += 2;
+            }
+            "--thread-ts" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted tasks list requires a value after --thread-ts".to_string());
+                };
+                query.thread_ts = Some(value.clone());
+                index += 2;
+            }
+            "--limit" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted tasks list requires a value after --limit".to_string());
+                };
+                let parsed = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid hosted task limit: {value}"))?;
+                query.limit = Some(parsed);
+                index += 2;
+            }
+            other => {
+                return Err(format!(
+                    "unsupported hosted tasks argument: {other}. Use --status, --source, --repository, --channel-id, --thread-ts, or --limit."
+                ));
+            }
+        }
+    }
+
+    Ok(CliAction::Hosted {
+        command: match action {
+            "list" => HostedCommand::TasksList { query },
+            "watch" => HostedCommand::TasksWatch { query },
+            other => {
+                return Err(format!(
+                    "unsupported hosted tasks command: {other}. Use `orbit hosted tasks list` or `orbit hosted tasks watch`."
+                ))
+            }
+        },
+        output_format,
+    })
+}
+
+fn parse_hosted_policy_cli_action(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    if args.first().map(String::as_str) != Some("orphans") {
+        return Err(
+            "unsupported hosted policy command. Use `orbit hosted policy orphans`.".to_string(),
+        );
+    }
+
+    let mut repository = None;
+    let mut source = None;
+    let mut priority = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--repository" | "--repo" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "hosted policy orphans requires a value after --repository".to_string()
+                    );
+                };
+                repository = Some(value.clone());
+                index += 2;
+            }
+            "--source" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("hosted policy orphans requires a value after --source".to_string());
+                };
+                source = Some(value.clone());
+                index += 2;
+            }
+            "--priority" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "hosted policy orphans requires a value after --priority".to_string()
+                    );
+                };
+                priority = Some(value.clone());
+                index += 2;
+            }
+            other => {
+                return Err(format!(
+                    "unsupported hosted policy argument: {other}. Use --repository, --source, or --priority."
+                ));
+            }
+        }
+    }
+
+    Ok(CliAction::Hosted {
+        command: HostedCommand::PolicyOrphans {
+            repository,
+            source,
+            priority,
+        },
+        output_format,
+    })
+}
+
+fn parse_hosted_task_cli_action(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    let Some(action) = args.first().map(String::as_str) else {
+        return Err(
+            "hosted task requires a subcommand. Use get, runtime, reconcile, cancel, or approval."
+                .to_string(),
+        );
+    };
+
+    match action {
+        "get" => {
+            let Some(task_id) = args.get(1) else {
+                return Err("hosted task get requires a task id".to_string());
+            };
+            if args.len() != 2 {
+                return Err("hosted task get accepts exactly one task id".to_string());
+            }
+            Ok(CliAction::Hosted {
+                command: HostedCommand::TaskGet {
+                    task_id: task_id.clone(),
+                },
+                output_format,
+            })
+        }
+        "runtime" => {
+            let Some(task_id) = args.get(1) else {
+                return Err("hosted task runtime requires a task id".to_string());
+            };
+            if args.len() != 2 {
+                return Err("hosted task runtime accepts exactly one task id".to_string());
+            }
+            Ok(CliAction::Hosted {
+                command: HostedCommand::TaskRuntime {
+                    task_id: task_id.clone(),
+                },
+                output_format,
+            })
+        }
+        "reconcile" => {
+            let Some(task_id) = args.get(1) else {
+                return Err("hosted task reconcile requires a task id".to_string());
+            };
+            if args.len() != 2 {
+                return Err("hosted task reconcile accepts exactly one task id".to_string());
+            }
+            Ok(CliAction::Hosted {
+                command: HostedCommand::TaskReconcile {
+                    task_id: task_id.clone(),
+                },
+                output_format,
+            })
+        }
+        "cancel" => {
+            let Some(task_id) = args.get(1) else {
+                return Err("hosted task cancel requires a task id".to_string());
+            };
+            if args.len() != 2 {
+                return Err("hosted task cancel accepts exactly one task id".to_string());
+            }
+            Ok(CliAction::Hosted {
+                command: HostedCommand::TaskCancel {
+                    task_id: task_id.clone(),
+                },
+                output_format,
+            })
+        }
+        "approval" => {
+            let Some(task_id) = args.get(1) else {
+                return Err("hosted task approval requires a task id".to_string());
+            };
+            let Some(action) = args.get(2) else {
+                return Err("hosted task approval requires an action: retry or cancel".to_string());
+            };
+            let action = HostedApprovalAction::parse(action)?;
+            let mut resolved_by = None;
+            let mut reason = None;
+            let mut index = 3;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--resolved-by" => {
+                        let Some(value) = args.get(index + 1) else {
+                            return Err(
+                                "hosted task approval requires a value after --resolved-by"
+                                    .to_string(),
+                            );
+                        };
+                        resolved_by = Some(value.clone());
+                        index += 2;
+                    }
+                    "--reason" => {
+                        let Some(value) = args.get(index + 1) else {
+                            return Err(
+                                "hosted task approval requires a value after --reason".to_string()
+                            );
+                        };
+                        reason = Some(value.clone());
+                        index += 2;
+                    }
+                    other => {
+                        return Err(format!(
+                            "unsupported hosted task approval argument: {other}. Use --resolved-by or --reason."
+                        ));
+                    }
+                }
+            }
+
+            Ok(CliAction::Hosted {
+                command: HostedCommand::TaskApproval {
+                    task_id: task_id.clone(),
+                    action,
+                    resolved_by,
+                    reason,
+                },
+                output_format,
+            })
+        }
+        other => Err(format!(
+            "unsupported hosted task subcommand: {other} (expected get, runtime, reconcile, cancel, or approval)"
+        )),
+    }
+}
+
 fn is_help_flag(value: &str) -> bool {
     matches!(value, "--help" | "-h")
 }
@@ -548,6 +1225,15 @@ fn parse_single_word_command_alias(
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
             output_format,
         })),
+        "config" => Some(Ok(CliAction::Config {
+            section: None,
+            output_format,
+        })),
+        "telemetry" => Some(Ok(CliAction::Telemetry {
+            output_format,
+            action: None,
+            target: None,
+        })),
         "sandbox" => Some(Ok(CliAction::Sandbox { output_format })),
         "doctor" => Some(Ok(CliAction::Doctor { output_format })),
         other => bare_slash_command_guidance(other).map(Err),
@@ -563,8 +1249,6 @@ fn bare_slash_command_guidance(command_name: &str) -> Option<String> {
             | "mcp"
             | "skills"
             | "system-prompt"
-            | "login"
-            | "logout"
             | "init"
             | "prompt"
     ) {
@@ -589,6 +1273,163 @@ fn join_optional_args(args: &[String]) -> Option<String> {
     let joined = args.join(" ");
     let trimmed = joined.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn supported_config_sections_phrase() -> String {
+    match SUPPORTED_CONFIG_SECTIONS {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [rest @ .., last] => format!("{}, or {}", rest.join(", "), last),
+    }
+}
+
+fn unsupported_config_section_message(section: &str) -> String {
+    format!(
+        "Unsupported config section '{section}'. Use {}.",
+        supported_config_sections_phrase()
+    )
+}
+
+fn config_section_status(section_present: bool) -> &'static str {
+    if section_present {
+        "set"
+    } else {
+        "unset"
+    }
+}
+
+fn report_row(label: &str, value: impl std::fmt::Display) -> String {
+    format!("  {label:<16} {value}")
+}
+
+enum ConfigSectionResolution {
+    Supported { rendered_value: Option<String> },
+    Unsupported,
+}
+
+struct DiscoveredConfigFileSummary {
+    source: &'static str,
+    status: &'static str,
+    path: String,
+}
+
+struct TelemetryTargetStatus {
+    target: String,
+    settings_path: PathBuf,
+    settings_status: &'static str,
+    enabled: Option<bool>,
+    path: Option<String>,
+}
+
+fn resolve_config_section(
+    runtime_config: &orbit_runtime::RuntimeConfig,
+    section: &str,
+) -> ConfigSectionResolution {
+    let value = match section {
+        "env" => runtime_config.get("env"),
+        "hooks" => runtime_config.get("hooks"),
+        "model" => runtime_config.get("model"),
+        "telemetry" => runtime_config.get("telemetry"),
+        "plugins" => runtime_config
+            .get("plugins")
+            .or_else(|| runtime_config.get("enabledPlugins")),
+        _ => return ConfigSectionResolution::Unsupported,
+    };
+
+    ConfigSectionResolution::Supported {
+        rendered_value: value.map(|value| value.render()),
+    }
+}
+
+fn summarize_discovered_config_files(
+    discovered: &[orbit_runtime::ConfigEntry],
+    runtime_config: &orbit_runtime::RuntimeConfig,
+) -> Vec<DiscoveredConfigFileSummary> {
+    discovered
+        .iter()
+        .map(|entry| {
+            let source = match entry.source {
+                ConfigSource::User => "user",
+                ConfigSource::Project => "project",
+                ConfigSource::Local => "local",
+            };
+            let status = if runtime_config
+                .loaded_entries()
+                .iter()
+                .any(|loaded_entry| loaded_entry.path == entry.path)
+            {
+                "loaded"
+            } else {
+                "missing"
+            };
+            DiscoveredConfigFileSummary {
+                source,
+                status,
+                path: entry.path.display().to_string(),
+            }
+        })
+        .collect()
+}
+
+fn telemetry_target_status(cwd: &Path, target: &str) -> TelemetryTargetStatus {
+    let settings_path = telemetry_settings_path(cwd, Some(target));
+    let mut status = TelemetryTargetStatus {
+        target: target.to_string(),
+        settings_path: settings_path.clone(),
+        settings_status: "missing",
+        enabled: None,
+        path: None,
+    };
+
+    let Ok(contents) = fs::read_to_string(&settings_path) else {
+        return status;
+    };
+
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        status.settings_status = "present";
+        return status;
+    }
+
+    let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+        status.settings_status = "invalid";
+        return status;
+    };
+
+    let Some(object) = parsed.as_object() else {
+        status.settings_status = "invalid";
+        return status;
+    };
+
+    status.settings_status = "present";
+    if let Some(telemetry) = object.get("telemetry").and_then(Value::as_object) {
+        status.enabled = telemetry.get("enabled").and_then(Value::as_bool);
+        status.path = telemetry
+            .get("path")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+    }
+
+    status
+}
+
+fn parse_config_cli_action(
+    args: &[String],
+    output_format: CliOutputFormat,
+) -> Result<CliAction, String> {
+    match args {
+        [] => Ok(CliAction::Config {
+            section: None,
+            output_format,
+        }),
+        [section] => Ok(CliAction::Config {
+            section: Some(section.to_string()),
+            output_format,
+        }),
+        _ => Err(format!(
+            "config accepts at most one section argument: {CONFIG_SECTION_ARGUMENT_HINT}"
+        )),
+    }
 }
 
 fn parse_direct_slash_cli_action(
@@ -1121,6 +1962,7 @@ fn render_doctor_report() -> Result<DoctorReport, Box<dyn std::error::Error>> {
             check_workspace_health(&context),
             check_sandbox_health(&context.sandbox_status),
             check_system_health(&cwd, config.as_ref().ok()),
+            check_ide_integration_health(&cwd),
         ],
     })
 }
@@ -1142,132 +1984,73 @@ fn run_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 
 #[allow(clippy::too_many_lines)]
 fn check_auth_health() -> DiagnosticCheck {
-    let api_key_present = env::var("ANTHROPIC_API_KEY")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    let auth_token_present = env::var("ANTHROPIC_AUTH_TOKEN")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-
-    match load_oauth_credentials() {
-        Ok(Some(token_set)) => {
-            let expired = oauth_token_is_expired(&orbit_api::OAuthTokenSet {
-                access_token: token_set.access_token.clone(),
-                refresh_token: token_set.refresh_token.clone(),
-                expires_at: token_set.expires_at,
-                scopes: token_set.scopes.clone(),
-            });
-            let mut details = vec![
-                format!(
-                    "Environment       api_key={} auth_token={}",
-                    if api_key_present { "present" } else { "absent" },
-                    if auth_token_present {
-                        "present"
-                    } else {
-                        "absent"
-                    }
-                ),
-                format!(
-                    "Saved OAuth       expires_at={} refresh_token={} scopes={}",
-                    token_set
-                        .expires_at
-                        .map_or_else(|| "<none>".to_string(), |value| value.to_string()),
-                    if token_set.refresh_token.is_some() {
-                        "present"
-                    } else {
-                        "absent"
-                    },
-                    if token_set.scopes.is_empty() {
-                        "<none>".to_string()
-                    } else {
-                        token_set.scopes.join(",")
-                    }
-                ),
-            ];
-            if expired {
-                details.push(
-                    "Suggested action  orbit login to refresh local OAuth credentials".to_string(),
-                );
-            }
-            DiagnosticCheck::new(
-                "Auth",
-                if expired {
-                    DiagnosticLevel::Warn
-                } else {
-                    DiagnosticLevel::Ok
-                },
-                if expired {
-                    "saved OAuth credentials are present but expired"
-                } else if api_key_present || auth_token_present {
-                    "environment and saved credentials are available"
-                } else {
-                    "saved OAuth credentials are available"
-                },
+    let providers = [
+        ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+        ("anthropic_auth_token", "ANTHROPIC_AUTH_TOKEN"),
+        ("openai_api_key", "OPENAI_API_KEY"),
+        ("xai_api_key", "XAI_API_KEY"),
+        ("frontal_api_key", "FRONTAL_API_KEY"),
+        ("bedrock_api_key", "BEDROCK_API_KEY"),
+        ("azure_openai_api_key", "AZURE_OPENAI_API_KEY"),
+    ];
+    let provider_presence = providers
+        .iter()
+        .map(|(name, key)| {
+            (
+                (*name).to_string(),
+                env::var(key)
+                    .ok()
+                    .is_some_and(|value| !value.trim().is_empty()),
             )
-            .with_details(details)
-            .with_data(Map::from_iter([
-                ("api_key_present".to_string(), json!(api_key_present)),
-                ("auth_token_present".to_string(), json!(auth_token_present)),
-                ("saved_oauth_present".to_string(), json!(true)),
-                ("saved_oauth_expired".to_string(), json!(expired)),
-                (
-                    "saved_oauth_expires_at".to_string(),
-                    json!(token_set.expires_at),
-                ),
-                (
-                    "refresh_token_present".to_string(),
-                    json!(token_set.refresh_token.is_some()),
-                ),
-                ("scopes".to_string(), json!(token_set.scopes)),
-            ]))
+        })
+        .collect::<Vec<_>>();
+    let ollama_base_url_present = env::var("OLLAMA_BASE_URL")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let any_cloud_key = provider_presence.iter().any(|(_, present)| *present);
+
+    let mut details = provider_presence
+        .iter()
+        .map(|(name, present)| {
+            format!(
+                "Environment       {name}={}",
+                if *present { "present" } else { "absent" }
+            )
+        })
+        .collect::<Vec<_>>();
+    details.push(format!(
+        "Environment       ollama_base_url={}",
+        if ollama_base_url_present {
+            "present"
+        } else {
+            "absent"
         }
-        Ok(None) => DiagnosticCheck::new(
-            "Auth",
-            if api_key_present || auth_token_present {
-                DiagnosticLevel::Ok
-            } else {
-                DiagnosticLevel::Warn
-            },
-            if api_key_present || auth_token_present {
-                "environment credentials are configured"
-            } else {
-                "no API key or saved OAuth credentials were found"
-            },
-        )
-        .with_details(vec![format!(
-            "Environment       api_key={} auth_token={}",
-            if api_key_present { "present" } else { "absent" },
-            if auth_token_present {
-                "present"
-            } else {
-                "absent"
-            }
-        )])
-        .with_data(Map::from_iter([
-            ("api_key_present".to_string(), json!(api_key_present)),
-            ("auth_token_present".to_string(), json!(auth_token_present)),
-            ("saved_oauth_present".to_string(), json!(false)),
-            ("saved_oauth_expired".to_string(), json!(false)),
-            ("saved_oauth_expires_at".to_string(), Value::Null),
-            ("refresh_token_present".to_string(), json!(false)),
-            ("scopes".to_string(), json!(Vec::<String>::new())),
-        ])),
-        Err(error) => DiagnosticCheck::new(
-            "Auth",
-            DiagnosticLevel::Fail,
-            format!("failed to inspect saved credentials: {error}"),
-        )
-        .with_data(Map::from_iter([
-            ("api_key_present".to_string(), json!(api_key_present)),
-            ("auth_token_present".to_string(), json!(auth_token_present)),
-            ("saved_oauth_present".to_string(), Value::Null),
-            ("saved_oauth_expired".to_string(), Value::Null),
-            ("saved_oauth_expires_at".to_string(), Value::Null),
-            ("refresh_token_present".to_string(), Value::Null),
-            ("scopes".to_string(), Value::Null),
-            ("saved_oauth_error".to_string(), json!(error.to_string())),
-        ])),
-    }
+    ));
+
+    let summary = if any_cloud_key || ollama_base_url_present {
+        "environment credentials are configured"
+    } else {
+        "no provider credentials detected in environment variables"
+    };
+    DiagnosticCheck::new(
+        "Auth",
+        if any_cloud_key || ollama_base_url_present {
+            DiagnosticLevel::Ok
+        } else {
+            DiagnosticLevel::Warn
+        },
+        summary,
+    )
+    .with_details(details)
+    .with_data(Map::from_iter(
+        provider_presence
+            .into_iter()
+            .map(|(name, present)| (name, json!(present)))
+            .chain(std::iter::once((
+                "ollama_base_url_present".to_string(),
+                json!(ollama_base_url_present),
+            ))),
+    ))
 }
 
 fn check_config_health(
@@ -1497,7 +2280,10 @@ fn check_sandbox_health(status: &orbit_runtime::SandboxStatus) -> DiagnosticChec
     ]))
 }
 
-fn check_system_health(cwd: &Path, config: Option<&orbit_runtime::RuntimeConfig>) -> DiagnosticCheck {
+fn check_system_health(
+    cwd: &Path,
+    config: Option<&orbit_runtime::RuntimeConfig>,
+) -> DiagnosticCheck {
     let default_model = config.and_then(orbit_runtime::RuntimeConfig::model);
     let mut details = vec![
         format!("OS               {} {}", env::consts::OS, env::consts::ARCH),
@@ -1524,6 +2310,220 @@ fn check_system_health(cwd: &Path, config: Option<&orbit_runtime::RuntimeConfig>
         ("git_sha".to_string(), json!(GIT_SHA)),
         ("default_model".to_string(), json!(default_model)),
     ]))
+}
+
+fn check_ide_integration_health(cwd: &Path) -> DiagnosticCheck {
+    let status = collect_ide_status(cwd);
+    let mut details = vec![
+        format!("Config file       {}", status.config_path.display()),
+        format!(
+            "Configured target {}",
+            status
+                .configured_target
+                .map_or_else(|| "<none>".to_string(), |target| target.to_string())
+        ),
+        format!(
+            "Extension source  {}",
+            status.extension_dev_path.as_ref().map_or_else(
+                || "<missing>".to_string(),
+                |path| path.display().to_string()
+            )
+        ),
+    ];
+
+    let package_result = package_ide_extension(cwd);
+    let package_path = package_result.as_ref().ok().cloned();
+    match &package_result {
+        Ok(path) => details.push(format!("Package           ok ({})", path.display())),
+        Err(error) => details.push(format!("Package           failed ({error})")),
+    }
+
+    let mut vscode_install = None;
+    let mut vscode_launch = None;
+    let mut cursor_install = None;
+    let mut cursor_launch = None;
+    let mut antigravity_install = None;
+    let mut antigravity_launch = None;
+    let mut windsurf_install = None;
+    let mut windsurf_launch = None;
+    let mut failures = Vec::new();
+
+    for target in [
+        IdeTarget::Vscode,
+        IdeTarget::Cursor,
+        IdeTarget::Antigravity,
+        IdeTarget::Windsurf,
+    ] {
+        let available = status.available_targets.contains(&target);
+        details.push(format!(
+            "{target} binary     {}",
+            if available { "detected" } else { "missing" }
+        ));
+
+        if !available {
+            continue;
+        }
+
+        let Some(path) = &package_path else {
+            details.push(format!("{target} install    skipped (packaging failed)"));
+            details.push(format!("{target} launch     skipped (packaging failed)"));
+            continue;
+        };
+
+        let install_result = install_packaged_ide_extension(target, path);
+        let install_ok = install_result.is_ok();
+        details.push(format!(
+            "{target} install    {}",
+            if install_ok { "ok" } else { "failed" }
+        ));
+        match target {
+            IdeTarget::Vscode => {
+                vscode_install = Some(install_ok);
+            }
+            IdeTarget::Cursor => {
+                cursor_install = Some(install_ok);
+            }
+            IdeTarget::Antigravity => {
+                antigravity_install = Some(install_ok);
+            }
+            IdeTarget::Windsurf => {
+                windsurf_install = Some(install_ok);
+            }
+        }
+        if let Err(error) = install_result {
+            details.push(format!("{target} launch     skipped (install failed)"));
+            failures.push(format!("{target} install failed: {error}"));
+            continue;
+        }
+
+        let launch_result = launch_ide_target(target, cwd);
+        let launch_ok = launch_result.is_ok();
+        details.push(format!(
+            "{target} launch     {}",
+            if launch_ok { "ok" } else { "failed" }
+        ));
+        match target {
+            IdeTarget::Vscode => {
+                vscode_launch = Some(launch_ok);
+            }
+            IdeTarget::Cursor => {
+                cursor_launch = Some(launch_ok);
+            }
+            IdeTarget::Antigravity => {
+                antigravity_launch = Some(launch_ok);
+            }
+            IdeTarget::Windsurf => {
+                windsurf_launch = Some(launch_ok);
+            }
+        }
+        if let Err(error) = launch_result {
+            failures.push(format!("{target} launch failed: {error}"));
+        }
+    }
+
+    let available_count = status.available_targets.len();
+    let package_ok = package_result.is_ok();
+    let level = if !failures.is_empty() {
+        DiagnosticLevel::Fail
+    } else if status.extension_dev_path.is_none() || available_count == 0 || !package_ok {
+        DiagnosticLevel::Warn
+    } else {
+        DiagnosticLevel::Ok
+    };
+
+    if !failures.is_empty() {
+        details.extend(
+            failures
+                .iter()
+                .map(|failure| format!("Failure          {failure}")),
+        );
+    }
+    if let Some(config_error) = &status.config_error {
+        details.push(format!("Config error      {config_error}"));
+    }
+
+    let summary = if !failures.is_empty() {
+        "one or more IDE integration actions failed".to_string()
+    } else if available_count == 0 {
+        "no supported IDE binaries detected (VS Code/Cursor/Antigravity/Windsurf)".to_string()
+    } else if !package_ok {
+        "IDE binaries detected but extension packaging failed".to_string()
+    } else if status.extension_dev_path.is_none() {
+        "IDE binaries detected but extension source is missing".to_string()
+    } else {
+        "IDE binaries, extension packaging, install, and launch checks passed".to_string()
+    };
+
+    let available_targets = status
+        .available_targets
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    DiagnosticCheck::new("IDE Integration", level, summary)
+        .with_details(details)
+        .with_data(Map::from_iter([
+            ("available_targets".to_string(), json!(available_targets)),
+            (
+                "extension_source_path".to_string(),
+                json!(status
+                    .extension_dev_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())),
+            ),
+            (
+                "packaged_extension_path".to_string(),
+                json!(package_path.as_ref().map(|path| path.display().to_string())),
+            ),
+            ("packaging_ok".to_string(), json!(package_ok)),
+            (
+                "vscode_binary_detected".to_string(),
+                json!(status.available_targets.contains(&IdeTarget::Vscode)),
+            ),
+            (
+                "cursor_binary_detected".to_string(),
+                json!(status.available_targets.contains(&IdeTarget::Cursor)),
+            ),
+            (
+                "antigravity_binary_detected".to_string(),
+                json!(status.available_targets.contains(&IdeTarget::Antigravity)),
+            ),
+            (
+                "windsurf_binary_detected".to_string(),
+                json!(status.available_targets.contains(&IdeTarget::Windsurf)),
+            ),
+            ("vscode_install_ok".to_string(), json!(vscode_install)),
+            ("vscode_launch_ok".to_string(), json!(vscode_launch)),
+            ("cursor_install_ok".to_string(), json!(cursor_install)),
+            ("cursor_launch_ok".to_string(), json!(cursor_launch)),
+            (
+                "antigravity_install_ok".to_string(),
+                json!(antigravity_install),
+            ),
+            (
+                "antigravity_launch_ok".to_string(),
+                json!(antigravity_launch),
+            ),
+            ("windsurf_install_ok".to_string(), json!(windsurf_install)),
+            ("windsurf_launch_ok".to_string(), json!(windsurf_launch)),
+            ("config_error".to_string(), json!(status.config_error)),
+        ]))
+}
+
+fn emit_login_browser_open_failure(
+    output_format: CliOutputFormat,
+    authorize_url: &str,
+    error: &io::Error,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> io::Result<()> {
+    writeln!(
+        stderr,
+        "warning: failed to open browser automatically: {error}"
+    )?;
+    match output_format {
+        CliOutputFormat::Text => writeln!(stdout, "Open this URL manually:\n{authorize_url}"),
+        CliOutputFormat::Json => writeln!(stderr, "Open this URL manually:\n{authorize_url}"),
+    }
 }
 
 fn resume_command_can_absorb_token(current_command: &str, token: &str) -> bool {
@@ -1600,182 +2600,6 @@ fn print_bootstrap_plan(output_format: CliOutputFormat) -> Result<(), Box<dyn st
     Ok(())
 }
 
-fn default_oauth_config() -> OAuthConfig {
-    OAuthConfig {
-        client_id: String::from("9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
-        authorize_url: String::from("https://platform.claude.com/oauth/authorize"),
-        token_url: String::from("https://platform.claude.com/v1/oauth/token"),
-        callback_port: None,
-        manual_redirect_url: None,
-        scopes: vec![
-            String::from("user:profile"),
-            String::from("user:inference"),
-            String::from("user:sessions:claude_code"),
-        ],
-    }
-}
-
-fn run_login(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
-    let cwd = env::current_dir()?;
-    let config = ConfigLoader::default_for(&cwd).load()?;
-    let default_oauth = default_oauth_config();
-    let oauth = config.oauth().unwrap_or(&default_oauth);
-    let callback_port = oauth.callback_port.unwrap_or(DEFAULT_OAUTH_CALLBACK_PORT);
-    let redirect_uri = orbit_runtime::loopback_redirect_uri(callback_port);
-    let pkce = generate_pkce_pair()?;
-    let state = generate_state()?;
-    let authorize_url =
-        OAuthAuthorizationRequest::from_config(oauth, redirect_uri.clone(), state.clone(), &pkce)
-            .build_url();
-
-    if output_format == CliOutputFormat::Text {
-        println!("Starting Claude OAuth login...");
-        println!("Listening for callback on {redirect_uri}");
-    }
-    if let Err(error) = open_browser(&authorize_url) {
-        emit_login_browser_open_failure(
-            output_format,
-            &authorize_url,
-            &error,
-            &mut io::stdout(),
-            &mut io::stderr(),
-        )?;
-    }
-
-    let callback = wait_for_oauth_callback(callback_port)?;
-    if let Some(error) = callback.error {
-        let description = callback
-            .error_description
-            .unwrap_or_else(|| "authorization failed".to_string());
-        return Err(io::Error::other(format!("{error}: {description}")).into());
-    }
-    let code = callback.code.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include code")
-    })?;
-    let returned_state = callback.state.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include state")
-    })?;
-    if returned_state != state {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "oauth state mismatch").into());
-    }
-
-    let client = AnthropicClient::from_auth(AuthSource::None).with_base_url(orbit_api::read_base_url());
-    let exchange_request = OAuthTokenExchangeRequest::from_config(
-        oauth,
-        code,
-        state,
-        pkce.verifier,
-        redirect_uri.clone(),
-    );
-    let runtime = tokio::runtime::Runtime::new()?;
-    let token_set = runtime.block_on(client.exchange_oauth_code(oauth, &exchange_request))?;
-    save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
-        access_token: token_set.access_token,
-        refresh_token: token_set.refresh_token,
-        expires_at: token_set.expires_at,
-        scopes: token_set.scopes,
-    })?;
-    match output_format {
-        CliOutputFormat::Text => println!("Claude OAuth login complete."),
-        CliOutputFormat::Json => println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "kind": "login",
-                "callback_port": callback_port,
-                "redirect_uri": redirect_uri,
-                "message": "Claude OAuth login complete.",
-            }))?
-        ),
-    }
-    Ok(())
-}
-
-fn emit_login_browser_open_failure(
-    output_format: CliOutputFormat,
-    authorize_url: &str,
-    error: &io::Error,
-    stdout: &mut impl Write,
-    stderr: &mut impl Write,
-) -> io::Result<()> {
-    writeln!(
-        stderr,
-        "warning: failed to open browser automatically: {error}"
-    )?;
-    match output_format {
-        CliOutputFormat::Text => writeln!(stdout, "Open this URL manually:\n{authorize_url}"),
-        CliOutputFormat::Json => writeln!(stderr, "Open this URL manually:\n{authorize_url}"),
-    }
-}
-
-fn run_logout(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
-    clear_oauth_credentials()?;
-    match output_format {
-        CliOutputFormat::Text => println!("Claude OAuth credentials cleared."),
-        CliOutputFormat::Json => println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "kind": "logout",
-                "message": "Claude OAuth credentials cleared.",
-            }))?
-        ),
-    }
-    Ok(())
-}
-
-fn open_browser(url: &str) -> io::Result<()> {
-    let commands = if cfg!(target_os = "macos") {
-        vec![("open", vec![url])]
-    } else if cfg!(target_os = "windows") {
-        vec![("cmd", vec!["/C", "start", "", url])]
-    } else {
-        vec![("xdg-open", vec![url])]
-    };
-    for (program, args) in commands {
-        match Command::new(program).args(args).spawn() {
-            Ok(_) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "no supported browser opener command found",
-    ))
-}
-
-fn wait_for_oauth_callback(
-    port: u16,
-) -> Result<orbit_runtime::OAuthCallbackParams, Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
-    let (mut stream, _) = listener.accept()?;
-    let mut buffer = [0_u8; 4096];
-    let bytes_read = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let request_line = request.lines().next().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "missing callback request line")
-    })?;
-    let target = request_line.split_whitespace().nth(1).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "missing callback request target",
-        )
-    })?;
-    let callback = parse_oauth_callback_request_target(target)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let body = if callback.error.is_some() {
-        "Claude OAuth login failed. You can close this window."
-    } else {
-        "Claude OAuth login succeeded. You can close this window."
-    };
-    let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(response.as_bytes())?;
-    Ok(callback)
-}
-
 fn print_system_prompt(
     cwd: PathBuf,
     date: String,
@@ -1809,6 +2633,1065 @@ fn print_version(output_format: CliOutputFormat) -> Result<(), Box<dyn std::erro
         }
     }
     Ok(())
+}
+
+fn render_upgrade_guidance() -> String {
+    "Upgrade\n  Preferred        Homebrew\n  Install          brew install --HEAD ./homebrew/orbit.rb\n  Update           brew upgrade --fetch-HEAD orbit\n  Fallback         git pull --ff-only\n                   brew reinstall --HEAD ./homebrew/orbit.rb"
+        .to_string()
+}
+
+fn run_hosted_command(
+    command: HostedCommand,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let server_url = hosted_server_url();
+    let client = HttpClient::builder()
+        .timeout(Duration::from_secs(HOSTED_SERVER_TIMEOUT_SECS))
+        .build()?;
+
+    match command {
+        HostedCommand::PolicyOrphans {
+            repository,
+            source,
+            priority,
+        } => {
+            let response = fetch_hosted_policy(&client, &server_url, repository, source, priority)?;
+            match output_format {
+                CliOutputFormat::Text => {
+                    println!("{}", render_hosted_policy_report(&server_url, &response))
+                }
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+        HostedCommand::EventsWatch { query } => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(watch_hosted_events(&server_url, &query, output_format))?;
+        }
+        HostedCommand::TasksList { query } => {
+            let response = list_hosted_tasks(&client, &server_url, &query)?;
+            match output_format {
+                CliOutputFormat::Text => {
+                    println!(
+                        "{}",
+                        render_hosted_task_list_report(&server_url, &query, &response)
+                    )
+                }
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+        HostedCommand::TasksWatch { query } => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(watch_hosted_tasks(&server_url, &query, output_format))?;
+        }
+        HostedCommand::TaskGet { task_id } => {
+            let response = get_hosted_task(&client, &server_url, &task_id)?;
+            match output_format {
+                CliOutputFormat::Text => println!(
+                    "{}",
+                    render_hosted_task_report("Hosted task", &server_url, &response)
+                ),
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+        HostedCommand::TaskRuntime { task_id } => {
+            let response = get_hosted_task_runtime(&client, &server_url, &task_id)?;
+            match output_format {
+                CliOutputFormat::Text => println!(
+                    "{}",
+                    render_hosted_task_runtime_report(&server_url, &response)
+                ),
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+        HostedCommand::TaskReconcile { task_id } => {
+            let response = reconcile_hosted_task(&client, &server_url, &task_id)?;
+            match output_format {
+                CliOutputFormat::Text => println!(
+                    "{}",
+                    render_hosted_task_report("Hosted task reconcile", &server_url, &response)
+                ),
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+        HostedCommand::TaskCancel { task_id } => {
+            let response = cancel_hosted_task(&client, &server_url, &task_id)?;
+            match output_format {
+                CliOutputFormat::Text => println!(
+                    "{}",
+                    render_hosted_task_report("Hosted task cancel", &server_url, &response)
+                ),
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+        HostedCommand::TaskApproval {
+            task_id,
+            action,
+            resolved_by,
+            reason,
+        } => {
+            let response = resolve_hosted_task_approval(
+                &client,
+                &server_url,
+                &task_id,
+                action,
+                resolved_by,
+                reason,
+            )?;
+            match output_format {
+                CliOutputFormat::Text => println!(
+                    "{}",
+                    render_hosted_task_report(
+                        &format!("Hosted task approval ({})", action.as_str()),
+                        &server_url,
+                        &response,
+                    )
+                ),
+                CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn hosted_server_url() -> String {
+    env::var("ORBIT_SERVER_URL")
+        .ok()
+        .or_else(|| env::var("ORBIT_SERVER_BASE_URL").ok())
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_HOSTED_SERVER_URL.to_string())
+}
+
+fn fetch_hosted_policy(
+    client: &HttpClient,
+    server_url: &str,
+    repository: Option<String>,
+    source: Option<String>,
+    priority: Option<String>,
+) -> Result<HostedPolicyResponse, Box<dyn std::error::Error>> {
+    let mut url = reqwest::Url::parse(&format!("{server_url}/v1/policies/orphans"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        if let Some(repository) = repository {
+            query.append_pair("repository", &repository);
+        }
+        if let Some(source) = source {
+            query.append_pair("source", &source);
+        }
+        if let Some(priority) = priority {
+            query.append_pair("priority", &priority);
+        }
+    }
+    let response = client.get(url).send()?.error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn list_hosted_tasks(
+    client: &HttpClient,
+    server_url: &str,
+    query: &HostedTaskListQuery,
+) -> Result<Vec<HostedTaskSnapshot>, Box<dyn std::error::Error>> {
+    let mut url = reqwest::Url::parse(&format!("{server_url}/v1/tasks"))?;
+    {
+        let mut query_pairs = url.query_pairs_mut();
+        if let Some(status) = &query.status {
+            query_pairs.append_pair("status", status);
+        }
+        if let Some(source) = &query.source {
+            query_pairs.append_pair("source", source);
+        }
+        if let Some(repository) = &query.repository {
+            query_pairs.append_pair("repository", repository);
+        }
+        if let Some(channel_id) = &query.channel_id {
+            query_pairs.append_pair("channel_id", channel_id);
+        }
+        if let Some(thread_ts) = &query.thread_ts {
+            query_pairs.append_pair("thread_ts", thread_ts);
+        }
+        if let Some(limit) = query.limit {
+            query_pairs.append_pair("limit", &limit.to_string());
+        }
+    }
+    let response = client.get(url).send()?.error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn get_hosted_task(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
+    let response = client
+        .get(format!("{server_url}/v1/tasks/{task_id}"))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn get_hosted_task_runtime(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+) -> Result<HostedTaskRuntimeResponse, Box<dyn std::error::Error>> {
+    let response = client
+        .get(format!("{server_url}/v1/tasks/{task_id}/runtime"))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn reconcile_hosted_task(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
+    let response = client
+        .post(format!("{server_url}/v1/tasks/{task_id}/reconcile"))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn cancel_hosted_task(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
+    let response = client
+        .post(format!("{server_url}/v1/tasks/{task_id}/cancel"))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn resolve_hosted_task_approval(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+    action: HostedApprovalAction,
+    resolved_by: Option<String>,
+    reason: Option<String>,
+) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
+    let response = client
+        .post(format!("{server_url}/v1/tasks/{task_id}/approval"))
+        .json(&json!({
+            "approval_kind": "orphaned_hosted_agent",
+            "action": action.as_str(),
+            "resolved_by": resolved_by,
+            "reason": reason,
+        }))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+async fn watch_hosted_events(
+    server_url: &str,
+    query: &HostedEventWatchQuery,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ws_url = hosted_events_ws_url(server_url, &hosted_event_query_pairs(query))?;
+    if output_format == CliOutputFormat::Text {
+        println!("Hosted events watch");
+        println!("{}", report_row("Server", server_url));
+        println!("{}", report_row("Stream", &ws_url));
+        println!(
+            "{}",
+            report_row("Filters", format_hosted_event_query(query))
+        );
+        println!("{}", report_row("Stop", "Ctrl-C"));
+    }
+
+    let (stream, _) = connect_async(ws_url.as_str()).await?;
+    let (_, mut reader) = stream.split();
+    let mut matched_events = 0usize;
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                if output_format == CliOutputFormat::Text {
+                    println!("{}", report_row("Status", "stopped"));
+                }
+                break;
+            }
+            message = reader.next() => {
+                let Some(message) = message else {
+                    if output_format == CliOutputFormat::Text {
+                        println!("{}", report_row("Status", "stream closed"));
+                    }
+                    break;
+                };
+                let message = message?;
+                let Some(event) = parse_hosted_event_message(message)? else {
+                    continue;
+                };
+                if !hosted_event_matches_query(&event, query) {
+                    continue;
+                }
+
+                matched_events += 1;
+                match output_format {
+                    CliOutputFormat::Text => println!("{}", render_hosted_event_line(&event)),
+                    CliOutputFormat::Json => println!("{}", serde_json::to_string(&event)?),
+                }
+
+                if query.limit.is_some_and(|limit| matched_events >= limit) {
+                    if output_format == CliOutputFormat::Text {
+                        println!("{}", report_row("Status", format!("matched limit {matched_events}")));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn watch_hosted_tasks(
+    server_url: &str,
+    query: &HostedTaskListQuery,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ws_url = hosted_events_ws_url(server_url, &hosted_task_watch_query_pairs(query))?;
+    let client = HttpClient::builder()
+        .timeout(Duration::from_secs(HOSTED_SERVER_TIMEOUT_SECS))
+        .build()?;
+    let initial_query = query.clone();
+    let initial_server_url = server_url.to_string();
+    let initial_client = client.clone();
+    let initial_tasks = tokio::task::spawn_blocking(move || {
+        let mut startup_query = initial_query;
+        startup_query.limit = None;
+        list_hosted_tasks(&initial_client, &initial_server_url, &startup_query)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+
+    let mut tracked_tasks = initial_tasks
+        .into_iter()
+        .map(|task| (task.task_id.clone(), task))
+        .collect::<BTreeMap<_, _>>();
+
+    if output_format == CliOutputFormat::Text {
+        println!("Hosted tasks watch");
+        println!("{}", report_row("Server", server_url));
+        println!("{}", report_row("Stream", &ws_url));
+        println!("{}", report_row("Filters", format_hosted_task_query(query)));
+        println!("{}", report_row("Tracked", tracked_tasks.len()));
+        println!(
+            "{}",
+            report_row(
+                "Limit",
+                query
+                    .limit
+                    .map_or_else(|| "none".to_string(), |value| value.to_string())
+            )
+        );
+        println!("{}", report_row("Stop", "Ctrl-C"));
+    }
+
+    let (stream, _) = connect_async(ws_url.as_str()).await?;
+    let (_, mut reader) = stream.split();
+    let mut matched_updates = 0usize;
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                if output_format == CliOutputFormat::Text {
+                    println!("{}", report_row("Status", "stopped"));
+                }
+                break;
+            }
+            message = reader.next() => {
+                let Some(message) = message else {
+                    if output_format == CliOutputFormat::Text {
+                        println!("{}", report_row("Status", "stream closed"));
+                    }
+                    break;
+                };
+                let message = message?;
+                let Some(event) = parse_hosted_event_message(message)? else {
+                    continue;
+                };
+                let Some(task_id) = event.task_id.clone() else {
+                    continue;
+                };
+
+                let was_tracked = tracked_tasks.contains_key(&task_id);
+                let snapshot = if let Some(snapshot) = hosted_task_snapshot_from_event(&event) {
+                    snapshot
+                } else {
+                    let server_url = server_url.to_string();
+                    let fetch_client = client.clone();
+                    let fetch_task_id = task_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        get_hosted_task(&fetch_client, &server_url, &fetch_task_id)
+                            .map_err(|error| error.to_string())
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+                };
+                let matches_filter = hosted_task_matches_query(&snapshot, query);
+                if !matches_filter && !was_tracked {
+                    continue;
+                }
+
+                matched_updates += 1;
+                let item = HostedTaskWatchItem {
+                    event: event.clone(),
+                    task: snapshot.clone(),
+                };
+                match output_format {
+                    CliOutputFormat::Text => println!("{}", render_hosted_task_watch_line(&item)),
+                    CliOutputFormat::Json => println!("{}", serde_json::to_string(&item)?),
+                }
+
+                if matches_filter && !hosted_task_is_terminal(&snapshot) {
+                    tracked_tasks.insert(task_id.clone(), snapshot);
+                } else {
+                    tracked_tasks.remove(&task_id);
+                }
+
+                if query.limit.is_some_and(|limit| matched_updates >= limit) {
+                    if output_format == CliOutputFormat::Text {
+                        println!("{}", report_row("Status", format!("matched limit {matched_updates}")));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn hosted_events_ws_url(
+    server_url: &str,
+    query_pairs: &[(String, String)],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut url = reqwest::Url::parse(server_url)?;
+    match url.scheme() {
+        "http" => {
+            url.set_scheme("ws")
+                .map_err(|_| "failed to convert hosted server URL from http to ws")?;
+        }
+        "https" => {
+            url.set_scheme("wss")
+                .map_err(|_| "failed to convert hosted server URL from https to wss")?;
+        }
+        "ws" | "wss" => {}
+        other => {
+            return Err(format!(
+                "unsupported hosted server URL scheme: {other} (expected http or https)"
+            )
+            .into())
+        }
+    }
+    url.set_path("/v1/events/ws");
+    url.query_pairs_mut().clear();
+    {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in query_pairs {
+            pairs.append_pair(key, value);
+        }
+    }
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+fn hosted_event_query_pairs(query: &HostedEventWatchQuery) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if let Some(task_id) = &query.task_id {
+        pairs.push(("task_id".to_string(), task_id.clone()));
+    }
+    if let Some(topic) = &query.topic {
+        pairs.push(("topic".to_string(), topic.clone()));
+    }
+    if let Some(event) = &query.event {
+        pairs.push(("event".to_string(), event.clone()));
+    }
+    if let Some(status) = &query.status {
+        pairs.push(("status".to_string(), status.clone()));
+    }
+    if let Some(limit) = query.limit {
+        pairs.push(("limit".to_string(), limit.to_string()));
+    }
+    pairs
+}
+
+fn hosted_task_watch_query_pairs(query: &HostedTaskListQuery) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if let Some(source) = &query.source {
+        pairs.push(("source".to_string(), source.clone()));
+    }
+    if let Some(repository) = &query.repository {
+        pairs.push(("repository".to_string(), repository.clone()));
+    }
+    if let Some(channel_id) = &query.channel_id {
+        pairs.push(("channel_id".to_string(), channel_id.clone()));
+    }
+    if let Some(thread_ts) = &query.thread_ts {
+        pairs.push(("thread_ts".to_string(), thread_ts.clone()));
+    }
+    pairs
+}
+
+fn parse_hosted_event_message(
+    message: WebSocketMessage,
+) -> Result<Option<EventEnvelope>, Box<dyn std::error::Error>> {
+    match message {
+        WebSocketMessage::Text(text) => Ok(Some(serde_json::from_str(&text)?)),
+        WebSocketMessage::Binary(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        WebSocketMessage::Close(_) => Ok(None),
+        WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_) | WebSocketMessage::Frame(_) => {
+            Ok(None)
+        }
+    }
+}
+
+fn hosted_event_matches_query(event: &EventEnvelope, query: &HostedEventWatchQuery) -> bool {
+    matches_optional_filter(query.task_id.as_deref(), event.task_id.as_deref())
+        && matches_optional_filter(
+            query.topic.as_deref(),
+            Some(hosted_event_topic_label(&event.topic)),
+        )
+        && matches_optional_filter(
+            query.event.as_deref(),
+            Some(hosted_event_name_label(&event.event)),
+        )
+        && matches_optional_csv_filter(
+            query.status.as_deref(),
+            Some(hosted_event_status_label(&event.status)),
+        )
+}
+
+fn hosted_event_topic_label(topic: &HostedEventTopic) -> &'static str {
+    match topic {
+        HostedEventTopic::Task => "task",
+        HostedEventTopic::Lane => "lane",
+        HostedEventTopic::Approval => "approval",
+        HostedEventTopic::Memory => "memory",
+        HostedEventTopic::Connector => "connector",
+    }
+}
+
+fn hosted_event_name_label(event: &HostedEventName) -> &'static str {
+    match event {
+        HostedEventName::TaskCreated => "task.created",
+        HostedEventName::TaskRouted => "task.routed",
+        HostedEventName::TaskCancelled => "task.cancelled",
+        HostedEventName::LaneStarted => "lane.started",
+        HostedEventName::LaneBlocked => "lane.blocked",
+        HostedEventName::LaneGreen => "lane.green",
+        HostedEventName::LaneFailed => "lane.failed",
+        HostedEventName::ApprovalRequested => "approval.requested",
+        HostedEventName::ApprovalResolved => "approval.resolved",
+        HostedEventName::MemoryCaptured => "memory.captured",
+        HostedEventName::ConnectorEventReceived => "connector.event.received",
+    }
+}
+
+fn hosted_event_status_label(status: &HostedEventStatus) -> &'static str {
+    match status {
+        HostedEventStatus::Pending => "pending",
+        HostedEventStatus::Running => "running",
+        HostedEventStatus::Blocked => "blocked",
+        HostedEventStatus::Completed => "completed",
+        HostedEventStatus::Failed => "failed",
+        HostedEventStatus::Cancelled => "cancelled",
+    }
+}
+
+fn render_hosted_event_line(event: &EventEnvelope) -> String {
+    let mut parts = vec![
+        event.emitted_at.clone(),
+        hosted_event_name_label(&event.event).to_string(),
+        format!("[{}]", hosted_event_status_label(&event.status)),
+    ];
+    if let Some(task_id) = &event.task_id {
+        parts.push(format!("task={task_id}"));
+    }
+    if let Some(lane_id) = &event.lane_id {
+        parts.push(format!("lane={lane_id}"));
+    }
+    parts.push(format!("topic={}", hosted_event_topic_label(&event.topic)));
+    if let Some(payload) = &event.payload {
+        parts.push(format!(
+            "payload={}",
+            truncate_single_line(&payload.to_string(), 120)
+        ));
+    }
+    parts.join(" ")
+}
+
+fn hosted_task_matches_query(task: &HostedTaskSnapshot, query: &HostedTaskListQuery) -> bool {
+    matches_optional_csv_filter(query.status.as_deref(), Some(task.status.as_str()))
+        && matches_optional_filter(query.source.as_deref(), task.source.as_deref())
+        && matches_optional_filter(query.repository.as_deref(), task.repository.as_deref())
+        && matches_optional_filter(query.channel_id.as_deref(), task.channel_id.as_deref())
+        && matches_optional_filter(query.thread_ts.as_deref(), task.thread_ts.as_deref())
+}
+
+fn hosted_task_snapshot_from_event(event: &EventEnvelope) -> Option<HostedTaskSnapshot> {
+    let task_id = event.task_id.clone()?;
+    let payload = event.payload.as_ref();
+    let status = payload
+        .and_then(|payload| payload.get("task_status"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| infer_hosted_task_status_from_event(event))?;
+
+    Some(HostedTaskSnapshot {
+        task_id,
+        status,
+        repository: payload
+            .and_then(|payload| payload.get("repository"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        source: payload
+            .and_then(|payload| payload.get("source"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        user_id: payload
+            .and_then(|payload| payload.get("user_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        channel_id: payload
+            .and_then(|payload| payload.get("channel_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        thread_ts: payload
+            .and_then(|payload| payload.get("thread_ts"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        worker_id: payload
+            .and_then(|payload| payload.get("worker_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        worker_status: payload
+            .and_then(|payload| payload.get("worker_status"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        plan_kind: payload
+            .and_then(|payload| payload.get("plan_kind"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        orphan_policy: None,
+        error: payload
+            .and_then(|payload| payload.get("error"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        result: payload
+            .and_then(|payload| payload.get("result"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn infer_hosted_task_status_from_event(event: &EventEnvelope) -> Option<String> {
+    let inferred = match event.event {
+        HostedEventName::TaskCreated => "pending",
+        HostedEventName::TaskRouted | HostedEventName::LaneStarted => "running",
+        HostedEventName::LaneBlocked | HostedEventName::ApprovalRequested => "pending",
+        HostedEventName::ApprovalResolved => match event.status {
+            HostedEventStatus::Pending
+            | HostedEventStatus::Running
+            | HostedEventStatus::Blocked => "running",
+            HostedEventStatus::Completed => "completed",
+            HostedEventStatus::Failed => "failed",
+            HostedEventStatus::Cancelled => "cancelled",
+        },
+        HostedEventName::LaneGreen => "completed",
+        HostedEventName::LaneFailed => "failed",
+        HostedEventName::TaskCancelled => "cancelled",
+        HostedEventName::MemoryCaptured | HostedEventName::ConnectorEventReceived => return None,
+    };
+
+    Some(inferred.to_string())
+}
+
+fn hosted_task_is_terminal(task: &HostedTaskSnapshot) -> bool {
+    matches!(task.status.as_str(), "completed" | "failed" | "cancelled")
+}
+
+fn render_hosted_task_watch_line(item: &HostedTaskWatchItem) -> String {
+    let task = &item.task;
+    let event = &item.event;
+    let mut parts = vec![
+        event.emitted_at.clone(),
+        hosted_event_name_label(&event.event).to_string(),
+        format!("[{}]", hosted_event_status_label(&event.status)),
+        format!("task={}", task.task_id),
+        format!("status={}", task.status),
+    ];
+    if let Some(source) = &task.source {
+        parts.push(format!("source={source}"));
+    }
+    if let Some(repository) = &task.repository {
+        parts.push(format!("repo={repository}"));
+    }
+    if let Some(worker_status) = &task.worker_status {
+        parts.push(format!("worker={worker_status}"));
+    }
+    if let Some(plan_kind) = &task.plan_kind {
+        parts.push(format!("plan={plan_kind}"));
+    }
+    if let Some(error) = &task.error {
+        parts.push(format!("error={}", truncate_single_line(error, 80)));
+    }
+    parts.join(" ")
+}
+
+fn render_hosted_policy_report(server_url: &str, response: &HostedPolicyResponse) -> String {
+    let preview = response
+        .preview
+        .as_ref()
+        .map(format_hosted_preview)
+        .unwrap_or_else(|| "global defaults".to_string());
+    let default_policy = format_hosted_policy_line(&response.default_policy);
+    let effective_policy = format_hosted_policy_line(&response.effective_policy);
+
+    let mut lines = vec![
+        "Hosted orphan policy".to_string(),
+        report_row("Server", server_url),
+        report_row("Preview", preview),
+        report_row("Effective", effective_policy),
+        report_row("Default", default_policy),
+        report_row("Rules", response.configured_rules.len()),
+    ];
+
+    if !response.configured_rules.is_empty() {
+        lines.push("Configured rules".to_string());
+        lines.extend(
+            response
+                .configured_rules
+                .iter()
+                .enumerate()
+                .map(|(index, rule)| format!("  {}. {}", index + 1, format_hosted_rule(rule))),
+        );
+    }
+
+    lines.join("\n")
+}
+
+fn render_hosted_task_report(title: &str, server_url: &str, task: &HostedTaskSnapshot) -> String {
+    let mut lines = vec![
+        title.to_string(),
+        report_row("Server", server_url),
+        report_row("Task", &task.task_id),
+        report_row("Status", &task.status),
+    ];
+
+    if let Some(repository) = &task.repository {
+        lines.push(report_row("Repository", repository));
+    }
+    if let Some(source) = &task.source {
+        lines.push(report_row("Source", source));
+    }
+    if let Some(plan_kind) = &task.plan_kind {
+        lines.push(report_row("Plan kind", plan_kind));
+    }
+    if let Some(worker_id) = &task.worker_id {
+        lines.push(report_row("Worker", worker_id));
+    }
+    if let Some(worker_status) = &task.worker_status {
+        lines.push(report_row("Worker status", worker_status));
+    }
+    if let Some(orphan_policy) = &task.orphan_policy {
+        lines.push(report_row(
+            "Orphan policy",
+            format_hosted_policy_line(orphan_policy),
+        ));
+    }
+    if let Some(error) = &task.error {
+        lines.push(report_row("Error", error));
+    }
+    if let Some(result) = &task.result {
+        lines.push(report_row("Result", truncate_single_line(result, 120)));
+    }
+
+    lines.join("\n")
+}
+
+fn render_hosted_task_list_report(
+    server_url: &str,
+    query: &HostedTaskListQuery,
+    tasks: &[HostedTaskSnapshot],
+) -> String {
+    let mut lines = vec![
+        "Hosted tasks".to_string(),
+        report_row("Server", server_url),
+        report_row("Count", tasks.len()),
+        report_row("Filters", format_hosted_task_query(query)),
+    ];
+
+    if tasks.is_empty() {
+        lines.push("  No tasks matched the current filter.".to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Results".to_string());
+    lines.extend(tasks.iter().enumerate().map(|(index, task)| {
+        let mut summary = vec![format!(
+            "  {}. {} [{}]",
+            index + 1,
+            task.task_id,
+            task.status
+        )];
+        if let Some(repository) = &task.repository {
+            summary.push(format!("repo={repository}"));
+        }
+        if let Some(source) = &task.source {
+            summary.push(format!("source={source}"));
+        }
+        if let Some(worker_status) = &task.worker_status {
+            summary.push(format!("worker={worker_status}"));
+        }
+        if let Some(plan_kind) = &task.plan_kind {
+            summary.push(format!("plan={plan_kind}"));
+        }
+        summary.join(" ")
+    }));
+
+    lines.join("\n")
+}
+
+fn render_hosted_task_runtime_report(
+    server_url: &str,
+    runtime: &HostedTaskRuntimeResponse,
+) -> String {
+    let mut lines = vec![
+        "Hosted task runtime".to_string(),
+        report_row("Server", server_url),
+        report_row("Task", &runtime.task_id),
+    ];
+
+    if let Some(worker_id) = &runtime.worker_id {
+        lines.push(report_row("Worker", worker_id));
+    }
+    if let Some(worker_status) = &runtime.worker_status {
+        lines.push(report_row("Worker status", worker_status));
+    }
+    if let Some(manifest_file) = &runtime.manifest_file {
+        lines.push(report_row("Manifest", manifest_file));
+    }
+    if let Some(output_file) = &runtime.output_file {
+        lines.push(report_row("Output", output_file));
+    }
+    if let Some(orphan_policy) = &runtime.orphan_policy {
+        lines.push(report_row(
+            "Orphan policy",
+            format_hosted_policy_line(orphan_policy),
+        ));
+    }
+
+    if let Some(hosted_agent) = &runtime.hosted_agent {
+        lines.push("Hosted agent".to_string());
+        lines.push(report_row("Found", hosted_agent.found));
+        lines.push(report_row("Live control", hosted_agent.live_control));
+        lines.push(report_row("Status", &hosted_agent.status));
+        lines.push(report_row("Derived state", &hosted_agent.derived_state));
+        lines.push(report_row("Orphaned", hosted_agent.orphaned));
+        if let Some(detail) = &hosted_agent.detail {
+            lines.push(report_row("Detail", detail));
+        }
+        if let Some(error) = &hosted_agent.error {
+            lines.push(report_row("Error", error));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_hosted_preview(preview: &HostedPolicyPreview) -> String {
+    let selectors = [
+        preview
+            .repository
+            .as_ref()
+            .map(|value| format!("repo={value}")),
+        preview
+            .source
+            .as_ref()
+            .map(|value| format!("source={value}")),
+        preview
+            .priority
+            .as_ref()
+            .map(|value| format!("priority={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    if selectors.is_empty() {
+        "global defaults".to_string()
+    } else {
+        selectors.join(", ")
+    }
+}
+
+fn format_hosted_policy_line(policy: &HostedAppliedOrphanPolicy) -> String {
+    let selectors = [
+        policy
+            .match_repository
+            .as_ref()
+            .map(|value| format!("repo={value}")),
+        policy
+            .match_source
+            .as_ref()
+            .map(|value| format!("source={value}")),
+        policy
+            .match_priority
+            .as_ref()
+            .map(|value| format!("priority={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let scope = if selectors.is_empty() {
+        policy.source.clone()
+    } else {
+        format!("{} ({})", policy.source, selectors.join(", "))
+    };
+    let timings = [
+        format!("approval {}s", policy.approval_delay_secs),
+        policy
+            .auto_retry_after_secs
+            .map(|value| format!("retry {}s", value))
+            .unwrap_or_else(|| "retry off".to_string()),
+        policy
+            .auto_cancel_after_secs
+            .map(|value| format!("cancel {}s", value))
+            .unwrap_or_else(|| "cancel off".to_string()),
+    ];
+    format!("{scope}; {}", timings.join(", "))
+}
+
+fn format_hosted_rule(rule: &HostedPolicyRule) -> String {
+    let selectors = [
+        rule.repository
+            .as_ref()
+            .map(|value| format!("repo={value}")),
+        rule.source.as_ref().map(|value| format!("source={value}")),
+        rule.priority
+            .as_ref()
+            .map(|value| format!("priority={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let timings = [
+        rule.approval_delay_secs
+            .map(|value| format!("approval {}s", value)),
+        rule.auto_retry_after_secs
+            .map(|value| format!("retry {}s", value)),
+        rule.auto_cancel_after_secs
+            .map(|value| format!("cancel {}s", value)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    format!(
+        "{} -> {}",
+        if selectors.is_empty() {
+            "match any".to_string()
+        } else {
+            selectors.join(", ")
+        },
+        if timings.is_empty() {
+            "inherit defaults".to_string()
+        } else {
+            timings.join(", ")
+        }
+    )
+}
+
+fn format_hosted_task_query(query: &HostedTaskListQuery) -> String {
+    let filters = [
+        query.status.as_ref().map(|value| format!("status={value}")),
+        query.source.as_ref().map(|value| format!("source={value}")),
+        query
+            .repository
+            .as_ref()
+            .map(|value| format!("repo={value}")),
+        query
+            .channel_id
+            .as_ref()
+            .map(|value| format!("channel={value}")),
+        query
+            .thread_ts
+            .as_ref()
+            .map(|value| format!("thread={value}")),
+        query.limit.map(|value| format!("limit={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    if filters.is_empty() {
+        "none".to_string()
+    } else {
+        filters.join(", ")
+    }
+}
+
+fn format_hosted_event_query(query: &HostedEventWatchQuery) -> String {
+    let filters = [
+        query.task_id.as_ref().map(|value| format!("task={value}")),
+        query.topic.as_ref().map(|value| format!("topic={value}")),
+        query.event.as_ref().map(|value| format!("event={value}")),
+        query.status.as_ref().map(|value| format!("status={value}")),
+        query.limit.map(|value| format!("limit={value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    if filters.is_empty() {
+        "none".to_string()
+    } else {
+        filters.join(", ")
+    }
+}
+
+fn matches_optional_filter(expected: Option<&str>, actual: Option<&str>) -> bool {
+    match expected {
+        Some(expected) => actual == Some(expected),
+        None => true,
+    }
+}
+
+fn matches_optional_csv_filter(expected: Option<&str>, actual: Option<&str>) -> bool {
+    match expected {
+        Some(expected) => expected
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .any(|candidate| actual == Some(candidate)),
+        None => true,
+    }
+}
+
+fn truncate_single_line(value: &str, limit: usize) -> String {
+    let single_line = value.replace('\n', " ");
+    if single_line.chars().count() <= limit {
+        return single_line;
+    }
+    let truncated = single_line
+        .chars()
+        .take(limit.saturating_sub(3))
+        .collect::<String>();
+    format!("{truncated}...")
 }
 
 fn version_json_value() -> serde_json::Value {
@@ -2336,8 +4219,66 @@ fn run_resume_command(
         SlashCommand::Config { section } => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_config_report(section.as_deref())?),
-            json: None,
+            json: Some(config_json_value(section.as_deref())?),
         }),
+        SlashCommand::Telemetry { action, target } => {
+            let action = action.as_deref().unwrap_or("status");
+            match action {
+                "status" => {
+                    let cwd = env::current_dir()?;
+                    let loader = ConfigLoader::default_for(&cwd);
+                    let runtime_config = loader
+                        .load()
+                        .unwrap_or_else(|_| orbit_runtime::RuntimeConfig::empty());
+                    Ok(ResumeCommandOutcome {
+                        session: session.clone(),
+                        message: Some(render_telemetry_report(target.as_deref())?),
+                        json: Some(telemetry_status_json_value(
+                            &runtime_config,
+                            target.as_deref(),
+                        )?),
+                    })
+                }
+                "on" | "off" => {
+                    let cwd = env::current_dir()?;
+                    let settings_path = update_project_telemetry_settings(
+                        &cwd,
+                        action == "on",
+                        target.as_deref(),
+                    )?;
+                    let loader = ConfigLoader::default_for(&cwd);
+                    let runtime_config = loader.load()?;
+                    let resolution = resolve_telemetry_config(Some(&runtime_config));
+                    Ok(ResumeCommandOutcome {
+                        session: session.clone(),
+                        message: Some(telemetry_update_report(
+                            action,
+                            &settings_path,
+                            &runtime_config,
+                        )),
+                        json: Some(json!({
+                            "kind": "telemetry",
+                            "status": "updated",
+                            "action": action,
+                            "target": target,
+                            "settings_path": settings_path.display().to_string(),
+                            "effective": telemetry_json_value(&resolution, &runtime_config),
+                        })),
+                    })
+                }
+                other => Ok(ResumeCommandOutcome {
+                    session: session.clone(),
+                    message: Some(format!(
+                        "Telemetry\n  Result           unsupported\n  Action           {other}\n  Supported        /telemetry [status|on|off] [project|local]"
+                    )),
+                    json: Some(json!({
+                        "kind": "telemetry",
+                        "status": "unsupported",
+                        "action": other
+                    })),
+                }),
+            }
+        }
         SlashCommand::Mcp { action, target } => {
             let cwd = env::current_dir()?;
             let args = match (action.as_deref(), target.as_deref()) {
@@ -2376,6 +4317,19 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(render_version_report()),
             json: Some(version_json_value()),
+        }),
+        SlashCommand::Upgrade => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(render_upgrade_guidance()),
+            json: Some(json!({
+                "kind": "upgrade-guidance",
+                "install": "brew install --HEAD ./homebrew/orbit.rb",
+                "update": "brew upgrade --fetch-HEAD orbit",
+                "fallback": [
+                    "git pull --ff-only",
+                    "brew reinstall --HEAD ./homebrew/orbit.rb"
+                ],
+            })),
         }),
         SlashCommand::Export { path } => {
             let export_path = resolve_export_path(path.as_deref(), session)?;
@@ -2429,10 +4383,7 @@ fn run_resume_command(
         | SlashCommand::Permissions { .. }
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
-        | SlashCommand::Login
-        | SlashCommand::Logout
         | SlashCommand::Vim
-        | SlashCommand::Upgrade
         | SlashCommand::Stats
         | SlashCommand::Share
         | SlashCommand::Feedback
@@ -2589,6 +4540,7 @@ struct ManagedSessionSummary {
 
 struct LiveCli {
     model: String,
+    provider: Option<String>,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     system_prompt: Vec<String>,
@@ -2597,6 +4549,7 @@ struct LiveCli {
 }
 
 struct RuntimePluginState {
+    runtime_config: orbit_runtime::RuntimeConfig,
     feature_config: orbit_runtime::RuntimeFeatureConfig,
     tool_registry: GlobalToolRegistry,
     plugin_registry: PluginRegistry,
@@ -2719,8 +4672,10 @@ struct ReadMcpResourceRequest {
 impl RuntimeMcpState {
     fn new(
         runtime_config: &orbit_runtime::RuntimeConfig,
-    ) -> Result<Option<(Self, orbit_runtime::McpToolDiscoveryReport)>, Box<dyn std::error::Error>> {
-        let mut manager = McpServerManager::from_runtime_config(runtime_config);
+    ) -> Result<Option<(Self, orbit_runtime::McpToolDiscoveryReport)>, Box<dyn std::error::Error>>
+    {
+        let integration_servers = map_runtime_mcp_servers(runtime_config.mcp().servers());
+        let mut manager = McpServerManager::from_servers(&integration_servers);
         if manager.server_names().is_empty() && manager.unsupported_servers().is_empty() {
             return Ok(None);
         }
@@ -2751,38 +4706,37 @@ impl RuntimeMcpState {
             .into_iter()
             .filter(|server_name| !failed_server_names.contains(server_name))
             .collect::<Vec<_>>();
-        let failed_servers =
-            discovery
-                .failed_servers
-                .iter()
-                .map(|failure| orbit_runtime::McpFailedServer {
-                    server_name: failure.server_name.clone(),
-                    phase: orbit_runtime::McpLifecyclePhase::ToolDiscovery,
+        let failed_servers = discovery
+            .failed_servers
+            .iter()
+            .map(|failure| orbit_runtime::McpFailedServer {
+                server_name: failure.server_name.clone(),
+                phase: orbit_runtime::McpLifecyclePhase::ToolDiscovery,
+                error: orbit_runtime::McpErrorSurface::new(
+                    orbit_runtime::McpLifecyclePhase::ToolDiscovery,
+                    Some(failure.server_name.clone()),
+                    failure.error.clone(),
+                    std::collections::BTreeMap::new(),
+                    true,
+                ),
+            })
+            .chain(discovery.unsupported_servers.iter().map(|server| {
+                orbit_runtime::McpFailedServer {
+                    server_name: server.server_name.clone(),
+                    phase: orbit_runtime::McpLifecyclePhase::ServerRegistration,
                     error: orbit_runtime::McpErrorSurface::new(
-                        orbit_runtime::McpLifecyclePhase::ToolDiscovery,
-                        Some(failure.server_name.clone()),
-                        failure.error.clone(),
-                        std::collections::BTreeMap::new(),
-                        true,
+                        orbit_runtime::McpLifecyclePhase::ServerRegistration,
+                        Some(server.server_name.clone()),
+                        server.reason.clone(),
+                        std::collections::BTreeMap::from([(
+                            "transport".to_string(),
+                            format!("{:?}", server.transport).to_ascii_lowercase(),
+                        )]),
+                        false,
                     ),
-                })
-                .chain(discovery.unsupported_servers.iter().map(|server| {
-                    orbit_runtime::McpFailedServer {
-                        server_name: server.server_name.clone(),
-                        phase: orbit_runtime::McpLifecyclePhase::ServerRegistration,
-                        error: orbit_runtime::McpErrorSurface::new(
-                            orbit_runtime::McpLifecyclePhase::ServerRegistration,
-                            Some(server.server_name.clone()),
-                            server.reason.clone(),
-                            std::collections::BTreeMap::from([(
-                                "transport".to_string(),
-                                format!("{:?}", server.transport).to_ascii_lowercase(),
-                            )]),
-                            false,
-                        ),
-                    }
-                }))
-                .collect::<Vec<_>>();
+                }
+            }))
+            .collect::<Vec<_>>();
         let degraded_report = (!failed_servers.is_empty()).then(|| {
             orbit_runtime::McpDegradedReport::new(
                 working_servers,
@@ -2902,6 +4856,102 @@ impl RuntimeMcpState {
             "contents": result.contents,
         }))
         .map_err(|error| ToolError::new(error.to_string()))
+    }
+}
+
+fn map_runtime_mcp_servers(
+    servers: &BTreeMap<String, orbit_runtime::ScopedMcpServerConfig>,
+) -> BTreeMap<String, integrations_mcp_config::ScopedMcpServerConfig> {
+    servers
+        .iter()
+        .map(|(name, scoped)| {
+            (
+                name.clone(),
+                integrations_mcp_config::ScopedMcpServerConfig {
+                    scope: match scoped.scope {
+                        orbit_runtime::ConfigSource::User
+                        | orbit_runtime::ConfigSource::Project => {
+                            integrations_mcp_config::ConfigSource::Remote
+                        }
+                        orbit_runtime::ConfigSource::Local => {
+                            integrations_mcp_config::ConfigSource::Local
+                        }
+                    },
+                    config: map_runtime_mcp_server_config(&scoped.config),
+                },
+            )
+        })
+        .collect()
+}
+
+fn map_runtime_mcp_server_config(
+    config: &orbit_runtime::McpServerConfig,
+) -> integrations_mcp_config::McpServerConfig {
+    match config {
+        orbit_runtime::McpServerConfig::Stdio(stdio) => {
+            integrations_mcp_config::McpServerConfig::Stdio(
+                integrations_mcp_config::McpStdioServerConfig {
+                    command: stdio.command.clone(),
+                    args: stdio.args.clone(),
+                    env: stdio.env.clone(),
+                    tool_call_timeout_ms: stdio.tool_call_timeout_ms,
+                },
+            )
+        }
+        orbit_runtime::McpServerConfig::Sse(remote) => {
+            integrations_mcp_config::McpServerConfig::Sse(
+                integrations_mcp_config::McpRemoteServerConfig {
+                    url: remote.url.clone(),
+                    headers: remote.headers.clone(),
+                    headers_helper: remote.headers_helper.clone(),
+                    oauth: remote.oauth.as_ref().map(|oauth| {
+                        integrations_mcp_config::McpOAuthConfig {
+                            client_id: oauth.client_id.clone(),
+                            callback_port: oauth.callback_port,
+                            auth_server_metadata_url: oauth.auth_server_metadata_url.clone(),
+                            xaa: oauth.xaa,
+                        }
+                    }),
+                },
+            )
+        }
+        orbit_runtime::McpServerConfig::Http(remote) => {
+            integrations_mcp_config::McpServerConfig::Http(
+                integrations_mcp_config::McpRemoteServerConfig {
+                    url: remote.url.clone(),
+                    headers: remote.headers.clone(),
+                    headers_helper: remote.headers_helper.clone(),
+                    oauth: remote.oauth.as_ref().map(|oauth| {
+                        integrations_mcp_config::McpOAuthConfig {
+                            client_id: oauth.client_id.clone(),
+                            callback_port: oauth.callback_port,
+                            auth_server_metadata_url: oauth.auth_server_metadata_url.clone(),
+                            xaa: oauth.xaa,
+                        }
+                    }),
+                },
+            )
+        }
+        orbit_runtime::McpServerConfig::Ws(ws) => integrations_mcp_config::McpServerConfig::Ws(
+            integrations_mcp_config::McpWebSocketServerConfig {
+                url: ws.url.clone(),
+                headers: ws.headers.clone(),
+                headers_helper: ws.headers_helper.clone(),
+            },
+        ),
+        orbit_runtime::McpServerConfig::Sdk(sdk) => integrations_mcp_config::McpServerConfig::Sdk(
+            integrations_mcp_config::McpSdkServerConfig {
+                name: sdk.name.clone(),
+            },
+        ),
+        orbit_runtime::McpServerConfig::ManagedProxy(proxy) => {
+            integrations_mcp_config::McpServerConfig::ManagedProxy(
+                integrations_mcp_config::McpManagedProxyServerConfig {
+                    url: proxy.url.clone(),
+                    id: proxy.id.clone(),
+                },
+            )
+        }
     }
 }
 
@@ -3046,7 +5096,10 @@ impl HookAbortMonitor {
         })
     }
 
-    fn spawn_with_waiter<F>(abort_signal: orbit_runtime::HookAbortSignal, wait_for_interrupt: F) -> Self
+    fn spawn_with_waiter<F>(
+        abort_signal: orbit_runtime::HookAbortSignal,
+        wait_for_interrupt: F,
+    ) -> Self
     where
         F: FnOnce(Receiver<()>, orbit_runtime::HookAbortSignal) + Send + 'static,
     {
@@ -3092,6 +5145,7 @@ impl LiveCli {
         )?;
         let cli = Self {
             model,
+            provider: None,
             allowed_tools,
             permission_mode,
             system_prompt,
@@ -3110,21 +5164,31 @@ impl LiveCli {
         permission_mode: PermissionMode,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let system_prompt = build_system_prompt()?;
+        let mut effective_model = model;
+        if provider
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("ollama"))
+            && effective_model == DEFAULT_MODEL
+        {
+            effective_model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama2".to_string());
+        }
         let session_state = Session::new();
         let session = create_managed_session_handle(&session_state.session_id)?;
         let runtime = build_runtime_with_provider(
             session_state.with_persistence_path(session.path.clone()),
             &session.id,
-            model.clone(),
+            effective_model.clone(),
             system_prompt.clone(),
             enable_tools,
             true,
             allowed_tools.clone(),
             permission_mode,
-            provider,
+            provider.clone(),
+            None,
         )?;
         let cli = Self {
-            model,
+            model: effective_model,
+            provider,
             allowed_tools,
             permission_mode,
             system_prompt,
@@ -3189,7 +5253,7 @@ impl LiveCli {
         emit_output: bool,
     ) -> Result<(BuiltRuntime, HookAbortMonitor), Box<dyn std::error::Error>> {
         let hook_abort_signal = orbit_runtime::HookAbortSignal::new();
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             self.runtime.session().clone(),
             &self.session.id,
             self.model.clone(),
@@ -3198,6 +5262,7 @@ impl LiveCli {
             emit_output,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?
         .with_hook_abort_signal(hook_abort_signal.clone());
@@ -3227,11 +5292,7 @@ impl LiveCli {
         match result {
             Ok(summary) => {
                 self.replace_runtime(runtime)?;
-                spinner.finish(
-                    "Done",
-                    TerminalRenderer::new().color_theme(),
-                    &mut stdout,
-                )?;
+                spinner.finish("Done", TerminalRenderer::new().color_theme(), &mut stdout)?;
                 println!();
                 if let Some(event) = summary.auto_compaction {
                     println!(
@@ -3362,7 +5423,34 @@ impl LiveCli {
             }
             SlashCommand::Resume { session_path } => self.resume_session(session_path)?,
             SlashCommand::Config { section } => {
-                Self::print_config(section.as_deref())?;
+                Self::print_config(section.as_deref(), CliOutputFormat::Text)?;
+                false
+            }
+            SlashCommand::Telemetry { action, target } => {
+                match action.as_deref().unwrap_or("status") {
+                    "status" => println!("{}", render_telemetry_report(target.as_deref())?),
+                    "on" | "off" => {
+                        let cwd = env::current_dir()?;
+                        let settings_path = update_project_telemetry_settings(
+                            &cwd,
+                            action.as_deref() == Some("on"),
+                            target.as_deref(),
+                        )?;
+                        let loader = ConfigLoader::default_for(&cwd);
+                        let runtime_config = loader.load()?;
+                        println!(
+                            "{}",
+                            telemetry_update_report(
+                                action.as_deref().unwrap_or("status"),
+                                &settings_path,
+                                &runtime_config
+                            )
+                        );
+                    }
+                    other => println!(
+                        "Telemetry\n  Result           unsupported\n  Action           {other}\n  Supported        /telemetry [status|on|off] [project|local]"
+                    ),
+                }
                 false
             }
             SlashCommand::Mcp { action, target } => {
@@ -3389,6 +5477,10 @@ impl LiveCli {
             }
             SlashCommand::Version => {
                 Self::print_version(CliOutputFormat::Text);
+                false
+            }
+            SlashCommand::Upgrade => {
+                println!("{}", render_upgrade_guidance());
                 false
             }
             SlashCommand::Export { path } => {
@@ -3418,10 +5510,11 @@ impl LiveCli {
                 println!("{}", render_doctor_report()?.render());
                 false
             }
-            SlashCommand::Login
-            | SlashCommand::Logout
-            | SlashCommand::Vim
-            | SlashCommand::Upgrade
+            SlashCommand::Ide { target } => {
+                self.handle_ide_command(target.as_deref())?;
+                false
+            }
+            SlashCommand::Vim
             | SlashCommand::Stats
             | SlashCommand::Share
             | SlashCommand::Feedback
@@ -3453,7 +5546,6 @@ impl LiveCli {
             | SlashCommand::Effort { .. }
             | SlashCommand::Branch { .. }
             | SlashCommand::Rewind { .. }
-            | SlashCommand::Ide { .. }
             | SlashCommand::Tag { .. }
             | SlashCommand::OutputStyle { .. }
             | SlashCommand::AddDir { .. } => {
@@ -3504,6 +5596,36 @@ impl LiveCli {
         );
     }
 
+    fn handle_ide_command(&self, target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let cwd = env::current_dir()?;
+
+        match target {
+            Some(value) => {
+                let parsed_target = parse_ide_target(value)?;
+                let config_path = set_default_ide_target(&cwd, parsed_target)?;
+                let editor_config_path = setup_ide_editor_integration(&cwd, parsed_target)?;
+                let install_result = install_ide_extension(parsed_target, &cwd);
+                let launch_result = launch_ide_target(parsed_target, &cwd);
+                println!(
+                    "{}",
+                    format_ide_command_report(
+                        parsed_target,
+                        &config_path,
+                        &editor_config_path,
+                        install_result,
+                        launch_result,
+                    )
+                );
+            }
+            None => {
+                let status = collect_ide_status(&cwd);
+                println!("{}", format_ide_status_report(&status));
+            }
+        }
+
+        Ok(())
+    }
+
     fn set_model(&mut self, model: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
         let Some(model) = model else {
             println!(
@@ -3534,7 +5656,7 @@ impl LiveCli {
         let previous = self.model.clone();
         let session = self.runtime.session().clone();
         let message_count = session.messages.len();
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             session,
             &self.session.id,
             model.clone(),
@@ -3543,6 +5665,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -3580,7 +5703,7 @@ impl LiveCli {
         let previous = self.permission_mode.as_str().to_string();
         let session = self.runtime.session().clone();
         self.permission_mode = permission_mode_from_label(normalized);
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             session,
             &self.session.id,
             self.model.clone(),
@@ -3589,6 +5712,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -3610,7 +5734,7 @@ impl LiveCli {
         let previous_session = self.session.clone();
         let session_state = Session::new();
         self.session = create_managed_session_handle(&session_state.session_id)?;
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             session_state.with_persistence_path(self.session.path.clone()),
             &self.session.id,
             self.model.clone(),
@@ -3619,6 +5743,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -3652,7 +5777,7 @@ impl LiveCli {
         let session = Session::load_from_path(&handle.path)?;
         let message_count = session.messages.len();
         let session_id = session.session_id.clone();
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             session,
             &handle.id,
             self.model.clone(),
@@ -3661,6 +5786,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -3679,8 +5805,17 @@ impl LiveCli {
         Ok(true)
     }
 
-    fn print_config(section: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-        println!("{}", render_config_report(section)?);
+    fn print_config(
+        section: Option<&str>,
+        output_format: CliOutputFormat,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match output_format {
+            CliOutputFormat::Text => println!("{}", render_config_report(section)?),
+            CliOutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&config_json_value(section)?)?
+            ),
+        }
         Ok(())
     }
 
@@ -3802,7 +5937,7 @@ impl LiveCli {
                 let session = Session::load_from_path(&handle.path)?;
                 let message_count = session.messages.len();
                 let session_id = session.session_id.clone();
-                let runtime = build_runtime(
+                let runtime = build_runtime_with_provider(
                     session,
                     &handle.id,
                     self.model.clone(),
@@ -3811,6 +5946,7 @@ impl LiveCli {
                     true,
                     self.allowed_tools.clone(),
                     self.permission_mode,
+                    self.provider.clone(),
                     None,
                 )?;
                 self.replace_runtime(runtime)?;
@@ -3837,7 +5973,7 @@ impl LiveCli {
                 let forked = forked.with_persistence_path(handle.path.clone());
                 let message_count = forked.messages.len();
                 forked.save_to_path(&handle.path)?;
-                let runtime = build_runtime(
+                let runtime = build_runtime_with_provider(
                     forked,
                     &handle.id,
                     self.model.clone(),
@@ -3846,6 +5982,7 @@ impl LiveCli {
                     true,
                     self.allowed_tools.clone(),
                     self.permission_mode,
+                    self.provider.clone(),
                     None,
                 )?;
                 self.replace_runtime(runtime)?;
@@ -3887,7 +6024,7 @@ impl LiveCli {
     }
 
     fn reload_runtime_features(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             self.runtime.session().clone(),
             &self.session.id,
             self.model.clone(),
@@ -3896,6 +6033,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -3907,7 +6045,7 @@ impl LiveCli {
         let removed = result.removed_message_count;
         let kept = result.compacted_session.messages.len();
         let skipped = removed == 0;
-        let runtime = build_runtime(
+        let runtime = build_runtime_with_provider(
             result.compacted_session,
             &self.session.id,
             self.model.clone(),
@@ -3916,6 +6054,7 @@ impl LiveCli {
             true,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             None,
         )?;
         self.replace_runtime(runtime)?;
@@ -3931,7 +6070,7 @@ impl LiveCli {
         progress: Option<InternalPromptProgressReporter>,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let session = self.runtime.session().clone();
-        let mut runtime = build_runtime(
+        let mut runtime = build_runtime_with_provider(
             session,
             &self.session.id,
             self.model.clone(),
@@ -3940,6 +6079,7 @@ impl LiveCli {
             false,
             self.allowed_tools.clone(),
             self.permission_mode,
+            self.provider.clone(),
             progress,
         )?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
@@ -4478,6 +6618,89 @@ fn format_sandbox_report(status: &orbit_runtime::SandboxStatus) -> String {
     )
 }
 
+fn format_ide_status_report(status: &IdeStatus) -> String {
+    let configured = status
+        .configured_target
+        .map_or_else(|| "<none>".to_string(), |target| target.to_string());
+    let config_error = status
+        .config_error
+        .as_deref()
+        .unwrap_or("<none>")
+        .to_string();
+    let extension_status = status.extension_dev_path.as_ref().map_or_else(
+        || "<not found in repo ancestry>".to_string(),
+        |path| path.display().to_string(),
+    );
+    let packaged_extension = status
+        .packaged_extension_path
+        .as_ref()
+        .map_or_else(|| "<none>".to_string(), |path| path.display().to_string());
+    let editor_config = status
+        .editor_config_path
+        .as_ref()
+        .map_or_else(|| "<none>".to_string(), |path| path.display().to_string());
+    format!(
+        "IDE
+  Config file      {}
+  Configured       {}
+  Available        {}
+  Extension path   {}
+  Extension pkg    {}
+  Editor config    {}
+  Config error     {}
+  Usage            /ide [vscode|cursor|antigravity|windsurf]",
+        status.config_path.display(),
+        configured,
+        format_available_ide_targets(&status.available_targets),
+        extension_status,
+        packaged_extension,
+        editor_config,
+        config_error,
+    )
+}
+
+fn format_ide_command_report(
+    target: IdeTarget,
+    config_path: &Path,
+    editor_config_path: &Path,
+    install_result: Result<PathBuf, orbit_integrations::ide::IdeIntegrationError>,
+    launch_result: Result<(), orbit_integrations::ide::IdeIntegrationError>,
+) -> String {
+    let (install_status, install_detail) = match install_result {
+        Ok(path) => ("ok", format!("installed {}", path.display())),
+        Err(error) => ("failed", error.to_string()),
+    };
+    let (launch_status, launch_detail) = match launch_result {
+        Ok(()) => ("ok", format!("launched {target}")),
+        Err(error) => ("failed", error.to_string()),
+    };
+
+    format!(
+        "IDE
+  Result           configured
+  Target           {target}
+  Config file      {}
+  Editor config    {}
+  Install status   {install_status}
+  Install detail   {install_detail}
+  Launch status    {launch_status}
+  Launch detail    {launch_detail}",
+        config_path.display(),
+        editor_config_path.display(),
+    )
+}
+
+fn format_available_ide_targets(targets: &[IdeTarget]) -> String {
+    if targets.is_empty() {
+        return "<none>".to_string();
+    }
+    targets
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn format_commit_preflight_report(branch: Option<&str>, summary: GitWorkspaceSummary) -> String {
     format!(
         "Commit
@@ -4539,6 +6762,371 @@ fn sandbox_json_value(status: &orbit_runtime::SandboxStatus) -> serde_json::Valu
     })
 }
 
+fn telemetry_json_value(
+    resolution: &TelemetryResolution,
+    runtime_config: &orbit_runtime::RuntimeConfig,
+) -> serde_json::Value {
+    let config_source_path = telemetry_config_source_path(resolution);
+    let config_shadowed_by_env = telemetry_config_shadowed_by_env(resolution);
+    json!({
+        "kind": "telemetry",
+        "enabled": resolution.enabled,
+        "path": resolution.path,
+        "source": resolution.source,
+        "effective_source": resolution.source,
+        "config_source_path": config_source_path,
+        "config_shadowed_by_env": config_shadowed_by_env,
+        "config_enabled": runtime_config.telemetry().enabled(),
+        "config_path": runtime_config.telemetry().path(),
+        "env_override": telemetry_env_override_value(),
+    })
+}
+
+fn telemetry_status_json_value(
+    runtime_config: &orbit_runtime::RuntimeConfig,
+    target: Option<&str>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let resolution = resolve_telemetry_config(Some(runtime_config));
+    let mut payload = telemetry_json_value(&resolution, runtime_config);
+    if let Some(target) = target {
+        let cwd = env::current_dir()?;
+        let status = telemetry_target_status(&cwd, target);
+        payload["target"] = json!({
+            "scope": status.target,
+            "settings_path": status.settings_path.display().to_string(),
+            "settings_status": status.settings_status,
+            "config_enabled": status.enabled,
+            "config_path": status.path,
+        });
+    }
+    Ok(payload)
+}
+
+fn telemetry_config_source_path(resolution: &TelemetryResolution) -> Option<String> {
+    resolution
+        .config_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+}
+
+fn telemetry_config_shadowed_by_env(resolution: &TelemetryResolution) -> bool {
+    resolution.source == "env" && resolution.config_path.is_some()
+}
+
+fn telemetry_config_file_label(resolution: &TelemetryResolution) -> &'static str {
+    if telemetry_config_shadowed_by_env(resolution) {
+        "Shadowed config"
+    } else {
+        "Config file"
+    }
+}
+
+fn telemetry_env_override_value() -> Option<String> {
+    env::var(ORBIT_TELEMETRY_PATH)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn telemetry_env_override_display() -> String {
+    telemetry_env_override_value().unwrap_or_else(|| "<unset>".to_string())
+}
+
+fn telemetry_config_enabled_display(runtime_config: &orbit_runtime::RuntimeConfig) -> String {
+    runtime_config
+        .telemetry()
+        .enabled()
+        .map_or("<unset>".to_string(), |value| {
+            if value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        })
+}
+
+fn telemetry_text_detail_lines(
+    resolution: &TelemetryResolution,
+    runtime_config: &orbit_runtime::RuntimeConfig,
+) -> Vec<String> {
+    vec![
+        report_row("Enabled", if resolution.enabled { "yes" } else { "no" }),
+        report_row(
+            "Effective path",
+            resolution.path.as_deref().unwrap_or("<unset>"),
+        ),
+        report_row("Effective source", resolution.source),
+        report_row(
+            telemetry_config_file_label(resolution),
+            telemetry_config_source_path(resolution).unwrap_or_else(|| "<unset>".to_string()),
+        ),
+        report_row(
+            "Config enabled",
+            telemetry_config_enabled_display(runtime_config),
+        ),
+        report_row(
+            "Config path",
+            runtime_config.telemetry().path().unwrap_or("<unset>"),
+        ),
+        report_row("Env override", telemetry_env_override_display()),
+    ]
+}
+
+fn telemetry_target_detail_lines(status: &TelemetryTargetStatus) -> Vec<String> {
+    vec![
+        report_row("Target scope", &status.target),
+        report_row("Settings file", status.settings_path.display()),
+        report_row("Settings status", status.settings_status),
+        report_row(
+            "Target enabled",
+            status
+                .enabled
+                .map(|value| if value { "true" } else { "false" })
+                .unwrap_or("<unset>"),
+        ),
+        report_row("Target path", status.path.as_deref().unwrap_or("<unset>")),
+    ]
+}
+
+fn load_runtime_config_for_current_dir(
+) -> Result<(PathBuf, orbit_runtime::RuntimeConfig), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let loader = ConfigLoader::default_for(&cwd);
+    Ok((cwd, loader.load()?))
+}
+
+fn load_runtime_config_for_current_dir_or_empty(
+) -> Result<(PathBuf, orbit_runtime::RuntimeConfig), Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    let loader = ConfigLoader::default_for(&cwd);
+    Ok((
+        cwd,
+        loader
+            .load()
+            .unwrap_or_else(|_| orbit_runtime::RuntimeConfig::empty()),
+    ))
+}
+
+fn config_json_value(
+    section: Option<&str>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let (cwd, runtime_config) = load_runtime_config_for_current_dir()?;
+    let discovered = ConfigLoader::default_for(&cwd).discover();
+    let discovered_files = summarize_discovered_config_files(&discovered, &runtime_config);
+
+    let discovered_files = discovered_files
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "source": entry.source,
+                "status": entry.status,
+                "path": entry.path,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut payload = json!({
+        "kind": "config",
+        "working_directory": cwd.display().to_string(),
+        "loaded_files": runtime_config.loaded_entries().len(),
+        "merged_keys": runtime_config.merged().len(),
+        "discovered_files": discovered_files,
+    });
+
+    if let Some(section) = section {
+        payload["section"] = json!(section);
+        match resolve_config_section(&runtime_config, section) {
+            ConfigSectionResolution::Unsupported => {
+                payload["status"] = json!("unsupported");
+                payload["section_supported"] = json!(false);
+                payload["section_present"] = json!(false);
+                payload["section_status"] = json!("unsupported");
+                payload["supported_sections"] = json!(SUPPORTED_CONFIG_SECTIONS);
+            }
+            ConfigSectionResolution::Supported { rendered_value } => {
+                let section_present = rendered_value.is_some();
+                payload["section_supported"] = json!(true);
+                payload["section_present"] = json!(section_present);
+                payload["section_status"] = json!(config_section_status(section_present));
+                payload["merged_section"] = rendered_value
+                    .map_or(serde_json::Value::Null, |value| {
+                        rendered_json_to_serde(&value)
+                    });
+            }
+        }
+        if section == "telemetry" {
+            let resolution = resolve_telemetry_config(Some(&runtime_config));
+            payload["effective"] = telemetry_json_value(&resolution, &runtime_config);
+        }
+    } else {
+        payload["merged_json"] = rendered_json_to_serde(&runtime_config.as_json().render());
+    }
+
+    Ok(payload)
+}
+
+fn rendered_json_to_serde(rendered: &str) -> serde_json::Value {
+    serde_json::from_str(rendered).unwrap_or(serde_json::Value::Null)
+}
+
+fn telemetry_settings_path(cwd: &Path, target: Option<&str>) -> PathBuf {
+    match target {
+        Some("local") => cwd.join(".orbit").join("settings.local.json"),
+        _ => cwd.join(".orbit").join("settings.json"),
+    }
+}
+
+fn update_project_telemetry_settings(
+    cwd: &Path,
+    enabled: bool,
+    target: Option<&str>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let settings_path = telemetry_settings_path(cwd, target);
+    if let Some(parent) = settings_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut root = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path)?;
+        if content.trim().is_empty() {
+            serde_json::Map::new()
+        } else {
+            match serde_json::from_str::<Value>(&content)? {
+                Value::Object(object) => object,
+                _ => {
+                    return Err(format!(
+                        "{} must contain a top-level JSON object",
+                        settings_path.display()
+                    )
+                    .into())
+                }
+            }
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    let telemetry_path = cwd.join(".orbit").join("telemetry.jsonl");
+    let mut telemetry = root
+        .remove("telemetry")
+        .and_then(|value| match value {
+            Value::Object(object) => Some(object),
+            _ => None,
+        })
+        .unwrap_or_default();
+    telemetry.insert("enabled".to_string(), Value::Bool(enabled));
+    if !telemetry.contains_key("path") {
+        telemetry.insert(
+            "path".to_string(),
+            Value::String(telemetry_path.display().to_string()),
+        );
+    }
+    root.insert("telemetry".to_string(), Value::Object(telemetry));
+
+    fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&Value::Object(root))?,
+    )?;
+    Ok(settings_path)
+}
+
+fn telemetry_update_report(
+    action: &str,
+    settings_path: &Path,
+    runtime_config: &orbit_runtime::RuntimeConfig,
+) -> String {
+    let resolution = resolve_telemetry_config(Some(runtime_config));
+    [
+        "Telemetry".to_string(),
+        report_row("Result", "updated"),
+        report_row("Action", action),
+        report_row("Settings file", settings_path.display()),
+        report_row("Enabled", if resolution.enabled { "yes" } else { "no" }),
+        report_row(
+            "Effective path",
+            resolution.path.as_deref().unwrap_or("<unset>"),
+        ),
+        report_row("Source", resolution.source),
+    ]
+    .join("\n")
+}
+
+fn print_telemetry_status(
+    output_format: CliOutputFormat,
+    action: Option<&str>,
+    target: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let action = action.unwrap_or("status");
+    match action {
+        "status" => {
+            let (_cwd, runtime_config) = load_runtime_config_for_current_dir_or_empty()?;
+            match output_format {
+                CliOutputFormat::Text => println!("{}", render_telemetry_report(target)?),
+                CliOutputFormat::Json => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&telemetry_status_json_value(
+                        &runtime_config,
+                        target,
+                    )?)?
+                ),
+            }
+        }
+        "on" | "off" => {
+            let cwd = env::current_dir()?;
+            let enabled = action == "on";
+            let settings_path =
+                update_project_telemetry_settings(&cwd, enabled, Some(target.unwrap_or("project")))?;
+            let (_cwd, runtime_config) = load_runtime_config_for_current_dir()?;
+            let resolution = resolve_telemetry_config(Some(&runtime_config));
+            match output_format {
+                CliOutputFormat::Text => {
+                    println!(
+                        "{}",
+                        telemetry_update_report(action, &settings_path, &runtime_config)
+                    );
+                }
+                CliOutputFormat::Json => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                            "kind": "telemetry",
+                            "status": "updated",
+                            "action": action,
+                            "target": target.unwrap_or("project"),
+                            "settings_path": settings_path.display().to_string(),
+                            "effective": telemetry_json_value(&resolution, &runtime_config),
+                        }))?
+                ),
+            }
+        }
+        other => match output_format {
+            CliOutputFormat::Text => println!(
+                "Telemetry\n  Result           unsupported\n  Action           {other}\n  Supported        orbit telemetry [status|on|off] [project|local]"
+            ),
+            CliOutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "kind": "telemetry",
+                    "status": "unsupported",
+                    "action": other
+                }))?
+            ),
+        },
+    }
+    Ok(())
+}
+
+fn render_telemetry_report(target: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+    let (cwd, runtime_config) = load_runtime_config_for_current_dir_or_empty()?;
+    let resolution = resolve_telemetry_config(Some(&runtime_config));
+    let mut lines = vec!["Telemetry".to_string()];
+    if let Some(target) = target {
+        let status = telemetry_target_status(&cwd, target);
+        lines.extend(telemetry_target_detail_lines(&status));
+        lines.push("Effective telemetry".to_string());
+    }
+    lines.extend(telemetry_text_detail_lines(&resolution, &runtime_config));
+    Ok(lines.join("\n"))
+}
+
 fn render_help_topic(topic: LocalHelpTopic) -> String {
     match topic {
         LocalHelpTopic::Status => "Status
@@ -4567,10 +7155,9 @@ fn print_help_topic(topic: LocalHelpTopic) {
 }
 
 fn render_config_report(section: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
-    let cwd = env::current_dir()?;
-    let loader = ConfigLoader::default_for(&cwd);
-    let discovered = loader.discover();
-    let runtime_config = loader.load()?;
+    let (cwd, runtime_config) = load_runtime_config_for_current_dir()?;
+    let discovered = ConfigLoader::default_for(&cwd).discover();
+    let discovered_files = summarize_discovered_config_files(&discovered, &runtime_config);
 
     let mut lines = vec![
         format!(
@@ -4584,53 +7171,38 @@ fn render_config_report(section: Option<&str>) -> Result<String, Box<dyn std::er
         ),
         "Discovered files".to_string(),
     ];
-    for entry in discovered {
-        let source = match entry.source {
-            ConfigSource::User => "user",
-            ConfigSource::Project => "project",
-            ConfigSource::Local => "local",
-        };
-        let status = if runtime_config
-            .loaded_entries()
-            .iter()
-            .any(|loaded_entry| loaded_entry.path == entry.path)
-        {
-            "loaded"
-        } else {
-            "missing"
-        };
+    for entry in discovered_files {
         lines.push(format!(
             "  {source:<7} {status:<7} {}",
-            entry.path.display()
+            entry.path,
+            source = entry.source,
+            status = entry.status,
         ));
     }
 
     if let Some(section) = section {
         lines.push(format!("Merged section: {section}"));
-        let value = match section {
-            "env" => runtime_config.get("env"),
-            "hooks" => runtime_config.get("hooks"),
-            "model" => runtime_config.get("model"),
-            "plugins" => runtime_config
-                .get("plugins")
-                .or_else(|| runtime_config.get("enabledPlugins")),
-            other => {
+        match resolve_config_section(&runtime_config, section) {
+            ConfigSectionResolution::Unsupported => {
+                lines.push(report_row("Section status", "unsupported"));
+                lines.push(format!("  {}", unsupported_config_section_message(section)));
+            }
+            ConfigSectionResolution::Supported { rendered_value } => {
+                lines.push(report_row(
+                    "Section status",
+                    config_section_status(rendered_value.is_some()),
+                ));
                 lines.push(format!(
-                    "  Unsupported config section '{other}'. Use env, hooks, model, or plugins."
-                ));
-                return Ok(lines.join(
-                    "
-",
+                    "  {}",
+                    rendered_value.unwrap_or_else(|| "<unset>".to_string())
                 ));
             }
-        };
-        lines.push(format!(
-            "  {}",
-            match value {
-                Some(value) => value.render(),
-                None => "<unset>".to_string(),
-            }
-        ));
+        }
+        if section == "telemetry" {
+            let resolution = resolve_telemetry_config(Some(&runtime_config));
+            lines.push("Effective telemetry".to_string());
+            lines.extend(telemetry_text_detail_lines(&resolution, &runtime_config));
+        }
         return Ok(lines.join(
             "
 ",
@@ -5144,6 +7716,7 @@ fn build_runtime_plugin_state_with_loader(
     let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_registry.aggregated_tools()?)?
         .with_runtime_tools(runtime_tools)?;
     Ok(RuntimePluginState {
+        runtime_config: runtime_config.clone(),
         feature_config,
         tool_registry,
         plugin_registry,
@@ -5563,6 +8136,7 @@ fn build_runtime_with_provider(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     provider: Option<String>,
+    progress_reporter: Option<InternalPromptProgressReporter>,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
     let runtime_plugin_state = build_runtime_plugin_state()?;
     build_runtime_with_plugin_state_and_provider(
@@ -5575,6 +8149,7 @@ fn build_runtime_with_provider(
         allowed_tools,
         permission_mode,
         provider,
+        progress_reporter,
         runtime_plugin_state,
     )
 }
@@ -5594,12 +8169,18 @@ fn build_runtime_with_plugin_state(
     runtime_plugin_state: RuntimePluginState,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
     let RuntimePluginState {
+        runtime_config,
         feature_config,
         tool_registry,
         plugin_registry,
         mcp_state,
     } = runtime_plugin_state;
     plugin_registry.initialize()?;
+    let session_tracer = build_cli_session_tracer(session_id, Some(&runtime_config));
+    let tool_registry = match session_tracer.clone() {
+        Some(tracer) => tool_registry.with_session_tracer(tracer),
+        None => tool_registry,
+    };
     let policy = permission_policy(permission_mode, &feature_config, &tool_registry)
         .map_err(std::io::Error::other)?;
     let client = if detect_provider_kind(&model) == ProviderKind::Anthropic {
@@ -5611,6 +8192,7 @@ fn build_runtime_with_plugin_state(
     } else {
         ProviderClient::from_model(&model)?
     };
+    let client = attach_session_tracer(client, session_tracer.clone());
     let mcp_active = mcp_state.is_some();
     let plugins_active = true;
     let mut runtime = ConversationRuntime::new_with_features(
@@ -5626,6 +8208,7 @@ fn build_runtime_with_plugin_state(
             client,
         )?,
         CliToolExecutor::new(
+            session_id.to_string(),
             allowed_tools.clone(),
             emit_output,
             tool_registry.clone(),
@@ -5635,6 +8218,9 @@ fn build_runtime_with_plugin_state(
         system_prompt,
         &feature_config,
     );
+    if let Some(session_tracer) = session_tracer {
+        runtime = runtime.with_session_tracer(session_tracer);
+    }
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }
@@ -5659,18 +8245,29 @@ fn build_runtime_with_plugin_state_and_provider(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     provider: Option<String>,
+    progress_reporter: Option<InternalPromptProgressReporter>,
     runtime_plugin_state: RuntimePluginState,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
     let RuntimePluginState {
+        runtime_config,
         feature_config,
         tool_registry,
         plugin_registry,
         mcp_state,
     } = runtime_plugin_state;
     plugin_registry.initialize()?;
+    let session_tracer = build_cli_session_tracer(session_id, Some(&runtime_config));
+    let tool_registry = match session_tracer.clone() {
+        Some(tracer) => tool_registry.with_session_tracer(tracer),
+        None => tool_registry,
+    };
     let policy = permission_policy(permission_mode, &feature_config, &tool_registry)
         .map_err(std::io::Error::other)?;
+    let mut effective_model = model;
     let client = if let Some(provider_name) = provider {
+        if provider_name.eq_ignore_ascii_case("ollama") && effective_model == DEFAULT_MODEL {
+            effective_model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama2".to_string());
+        }
         if provider_name.eq_ignore_ascii_case("anthropic") {
             ProviderClient::Anthropic(
                 AnthropicClient::from_auth(resolve_cli_auth_source()?)
@@ -5678,26 +8275,28 @@ fn build_runtime_with_plugin_state_and_provider(
                     .with_prompt_cache(PromptCache::new(session_id)),
             )
         } else {
-            create_provider_client(&provider_name, model.clone())?
+            create_provider_client(&provider_name, effective_model.clone())?
         }
     } else {
-        ProviderClient::from_model(&model)?
+        ProviderClient::from_model(&effective_model)?
     };
+    let client = attach_session_tracer(client, session_tracer.clone());
     let mcp_active = mcp_state.is_some();
     let plugins_active = true;
     let mut runtime = ConversationRuntime::new_with_features(
         session,
         GenericRuntimeClient::new(
             session_id,
-            model,
+            effective_model,
             enable_tools,
             emit_output,
             allowed_tools.clone(),
             tool_registry.clone(),
-            None,
+            progress_reporter,
             client,
         )?,
         CliToolExecutor::new(
+            session_id.to_string(),
             allowed_tools.clone(),
             emit_output,
             tool_registry.clone(),
@@ -5707,6 +8306,9 @@ fn build_runtime_with_plugin_state_and_provider(
         system_prompt,
         &feature_config,
     );
+    if let Some(session_tracer) = session_tracer {
+        runtime = runtime.with_session_tracer(session_tracer);
+    }
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }
@@ -6036,29 +8638,7 @@ impl AnthropicRuntimeClient {
 }
 
 fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error::Error>> {
-    let cwd = env::current_dir()?;
-    Ok(resolve_cli_auth_source_for_cwd(&cwd, default_oauth_config)?)
-}
-
-fn resolve_cli_auth_source_for_cwd<F>(
-    cwd: &Path,
-    default_oauth: F,
-) -> Result<AuthSource, orbit_api::ApiError>
-where
-    F: FnOnce() -> OAuthConfig,
-{
-    resolve_startup_auth_source(|| {
-        Ok(Some(
-            load_runtime_oauth_config_for(cwd)?.unwrap_or_else(default_oauth),
-        ))
-    })
-}
-
-fn load_runtime_oauth_config_for(cwd: &Path) -> Result<Option<OAuthConfig>, orbit_api::ApiError> {
-    let config = ConfigLoader::default_for(cwd).load().map_err(|error| {
-        orbit_api::ApiError::Auth(format!("failed to load runtime OAuth config: {error}"))
-    })?;
-    Ok(config.oauth().cloned())
+    Ok(AuthSource::from_env()?)
 }
 
 impl ApiClient for AnthropicRuntimeClient {
@@ -6283,7 +8863,9 @@ fn format_context_window_blocked_error(session_id: &str, error: &orbit_api::ApiE
         }
         orbit_api::ApiError::RetriesExhausted { last_error, .. } => {
             let detail = match last_error.as_ref() {
-                orbit_api::ApiError::Api { message, body, .. } => message.as_deref().unwrap_or(body),
+                orbit_api::ApiError::Api { message, body, .. } => {
+                    message.as_deref().unwrap_or(body)
+                }
                 other => return format_context_window_blocked_error(session_id, other),
             }
             .trim();
@@ -6406,12 +8988,18 @@ fn slash_command_completion_candidates_with_sessions(
         "/config env",
         "/config hooks",
         "/config model",
+        "/config telemetry",
         "/config plugins",
         "/mcp ",
         "/mcp list",
         "/mcp show ",
         "/export ",
         "/issue ",
+        "/ide",
+        "/ide vscode",
+        "/ide cursor",
+        "/ide antigravity",
+        "/ide windsurf",
         "/model ",
         "/model opus",
         "/model sonnet",
@@ -7022,10 +9610,12 @@ struct CliToolExecutor {
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
     mcp_state: Option<Arc<Mutex<RuntimeMcpState>>>,
+    scope: ToolExecutionScope,
 }
 
 impl CliToolExecutor {
     fn new(
+        session_id: String,
         allowed_tools: Option<AllowedToolSet>,
         emit_output: bool,
         tool_registry: GlobalToolRegistry,
@@ -7037,6 +9627,7 @@ impl CliToolExecutor {
             allowed_tools,
             tool_registry,
             mcp_state,
+            scope: ToolExecutionScope::for_session(session_id),
         }
     }
 
@@ -7120,7 +9711,7 @@ impl ToolExecutor for CliToolExecutor {
             self.execute_runtime_tool(tool_name, value)
         } else {
             self.tool_registry
-                .execute(tool_name, &value)
+                .execute_scoped(tool_name, &value, &self.scope)
                 .map_err(ToolError::new)
         };
         match result {
@@ -7237,6 +9828,11 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "      Show the current local workspace status snapshot"
     )?;
+    writeln!(out, "  orbit config {CONFIG_SECTION_ARGUMENT_HINT}")?;
+    writeln!(
+        out,
+        "      Inspect merged config sections with text or JSON output"
+    )?;
     writeln!(out, "  orbit sandbox")?;
     writeln!(out, "      Show the current sandbox isolation snapshot")?;
     writeln!(out, "  orbit doctor")?;
@@ -7244,14 +9840,69 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "      Diagnose local auth, config, workspace, and sandbox health"
     )?;
+    writeln!(
+        out,
+        "  orbit hosted policy orphans [--repository REPO] [--source SOURCE] [--priority PRIORITY]"
+    )?;
+    writeln!(
+        out,
+        "      Preview the hosted orphan policy that would apply to a task shape"
+    )?;
+    writeln!(
+        out,
+        "  orbit hosted events watch [--task-id TASK_ID] [--topic TOPIC] [--event EVENT] [--status STATUS[,STATUS...]] [--limit N]"
+    )?;
+    writeln!(
+        out,
+        "      Stream hosted control-plane events over WebSocket with client-side filters"
+    )?;
+    writeln!(
+        out,
+        "  orbit hosted tasks list [--status STATUS[,STATUS...]] [--source SOURCE] [--repository REPO] [--channel-id ID] [--thread-ts TS] [--limit N]"
+    )?;
+    writeln!(out, "      List hosted tasks with server-side filtering")?;
+    writeln!(
+        out,
+        "  orbit hosted tasks watch [--status STATUS[,STATUS...]] [--source SOURCE] [--repository REPO] [--channel-id ID] [--thread-ts TS] [--limit N]"
+    )?;
+    writeln!(
+        out,
+        "      Watch live task updates for tasks matching the current filter"
+    )?;
+    writeln!(out, "  orbit hosted task get TASK_ID")?;
+    writeln!(out, "      Inspect the current hosted task snapshot")?;
+    writeln!(out, "  orbit hosted task runtime TASK_ID")?;
+    writeln!(
+        out,
+        "      Inspect hosted worker runtime and orphan classification"
+    )?;
+    writeln!(out, "  orbit hosted task reconcile TASK_ID")?;
+    writeln!(
+        out,
+        "      Reconcile a hosted task against persisted worker artifacts"
+    )?;
+    writeln!(out, "  orbit hosted task cancel TASK_ID")?;
+    writeln!(
+        out,
+        "      Cancel a hosted task directly through the control plane"
+    )?;
+    writeln!(
+        out,
+        "  orbit hosted task approval TASK_ID [retry|cancel] [--resolved-by NAME] [--reason TEXT]"
+    )?;
+    writeln!(
+        out,
+        "      Resolve an orphaned hosted-agent approval through the control plane"
+    )?;
     writeln!(out, "  orbit dump-manifests")?;
     writeln!(out, "  orbit bootstrap-plan")?;
     writeln!(out, "  orbit agents")?;
     writeln!(out, "  orbit mcp")?;
     writeln!(out, "  orbit skills")?;
-    writeln!(out, "  orbit system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
-    writeln!(out, "  orbit login")?;
-    writeln!(out, "  orbit logout")?;
+    writeln!(
+        out,
+        "  orbit system-prompt [--cwd PATH] [--date YYYY-MM-DD]"
+    )?;
     writeln!(out, "  orbit init")?;
     writeln!(out)?;
     writeln!(out, "Flags:")?;
@@ -7261,7 +9912,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  --provider PROVIDER        Force AI provider (anthropic, openai, xai, ollama)"
+        "  --provider PROVIDER        Force AI provider (anthropic, openai, xai, frontal, bedrock, azure, ollama)"
     )?;
     writeln!(
         out,
@@ -7322,11 +9973,35 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "  orbit --resume {LATEST_SESSION_REFERENCE} /status /diff /export notes.txt"
     )?;
+    writeln!(out, "  orbit --output-format json config telemetry")?;
+    writeln!(
+        out,
+        "  orbit hosted policy orphans --repo myorg/myapp --source slack"
+    )?;
+    writeln!(
+        out,
+        "  orbit hosted events watch --task-id task_123 --limit 20"
+    )?;
+    writeln!(
+        out,
+        "  orbit hosted tasks watch --status pending,running --source slack --limit 20"
+    )?;
+    writeln!(
+        out,
+        "  orbit hosted tasks list --status pending,running --source slack --limit 10"
+    )?;
+    writeln!(out, "  orbit hosted task get task_123")?;
+    writeln!(out, "  orbit hosted task runtime task_123")?;
+    writeln!(out, "  orbit hosted task reconcile task_123")?;
+    writeln!(out, "  orbit hosted task cancel task_123")?;
+    writeln!(
+        out,
+        "  orbit hosted task approval task_123 retry --resolved-by operator"
+    )?;
     writeln!(out, "  orbit agents")?;
     writeln!(out, "  orbit mcp show my-server")?;
     writeln!(out, "  orbit /skills")?;
     writeln!(out, "  orbit doctor")?;
-    writeln!(out, "  orbit login")?;
     writeln!(out, "  orbit init")?;
     Ok(())
 }
@@ -7351,7 +10026,7 @@ fn print_help(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
+        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state, config_json_value,
         create_managed_session_handle, describe_tool_progress, filter_tool_specs,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
@@ -7359,36 +10034,40 @@ mod tests {
         format_permissions_report, format_permissions_switch_report, format_pr_report,
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
-        format_unknown_slash_command_message, format_user_visible_api_error,
-        normalize_permission_mode, parse_args, parse_git_status_branch,
-        parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
-        print_help_to, push_output_block, render_config_report, render_diff_report,
-        render_diff_report_for, render_memory_report, render_repl_help, render_resume_usage,
-        resolve_model_alias, resolve_session_reference, response_to_events,
+        format_unknown_slash_command_message, format_user_visible_api_error, hosted_server_url,
+        hosted_task_snapshot_from_event, normalize_permission_mode, parse_args,
+        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
+        permission_policy, print_help_to, push_output_block, render_config_report,
+        render_diff_report, render_diff_report_for, render_memory_report, render_repl_help,
+        render_resume_usage, render_telemetry_report, report_row, resolve_model_alias,
+        resolve_session_reference, resolve_telemetry_config, response_to_events,
         resume_supported_slash_commands, run_resume_command,
-        slash_command_completion_candidates_with_sessions, status_context, validate_no_args,
-        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
+        slash_command_completion_candidates_with_sessions, status_context,
+        telemetry_status_json_value, update_project_telemetry_settings, validate_no_args,
+        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, EventEnvelope,
+        GitWorkspaceSummary, HostedApprovalAction, HostedCommand, HostedEventName,
+        HostedEventStatus, HostedEventTopic, HostedEventWatchQuery, HostedTaskListQuery,
         InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, LocalHelpTopic,
-        SlashCommand, StatusUsage, DEFAULT_MODEL,
+        SlashCommand, StatusUsage, DEFAULT_MODEL, ORBIT_TELEMETRY_PATH,
     };
     use orbit_api::{ApiError, MessageResponse, OutputContentBlock, Usage};
+    use orbit_events::EventIdentifiers;
     use orbit_plugins::{
         PluginManager, PluginManagerConfig, PluginTool, PluginToolDefinition, PluginToolPermission,
     };
     use orbit_runtime::{
-        load_oauth_credentials, save_oauth_credentials, AssistantEvent, ConfigLoader, ContentBlock,
-        ConversationMessage, MessageRole, OAuthConfig, PermissionMode, Session, ToolExecutor,
+        AssistantEvent, ConfigLoader, ContentBlock, ConversationMessage, MessageRole,
+        PermissionMode, Session, ToolExecutor,
     };
+    use orbit_tools::GlobalToolRegistry;
     use serde_json::json;
     use std::fs;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
-    use orbit_tools::GlobalToolRegistry;
 
     fn registry_with_plugin_tool() -> GlobalToolRegistry {
         GlobalToolRegistry::with_plugin_tools(vec![PluginTool::new(
@@ -7596,36 +10275,6 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn sample_oauth_config(token_url: String) -> OAuthConfig {
-        OAuthConfig {
-            client_id: "runtime-client".to_string(),
-            authorize_url: "https://console.test/oauth/authorize".to_string(),
-            token_url,
-            callback_port: Some(4545),
-            manual_redirect_url: Some("https://console.test/oauth/callback".to_string()),
-            scopes: vec!["org:create_api_key".to_string(), "user:profile".to_string()],
-        }
-    }
-
-    fn spawn_token_server(response_body: &'static str) -> Result<String, std::io::Error> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let address = listener.local_addr().expect("local addr");
-        thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept connection");
-            let mut buffer = [0_u8; 4096];
-            let _ = stream.read(&mut buffer).expect("read request");
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response");
-        });
-        Ok(format!("http://{address}/oauth/token"))
-    }
-
     fn with_current_dir<T>(cwd: &Path, f: impl FnOnce() -> T) -> T {
         let _guard = cwd_lock()
             .lock()
@@ -7763,98 +10412,6 @@ mod tests {
         std::fs::remove_dir_all(root).expect("temp config root should clean up");
 
         assert_eq!(resolved, PermissionMode::ReadOnly);
-    }
-
-    #[test]
-    fn load_runtime_oauth_config_for_returns_none_without_project_config() {
-        let _guard = env_lock();
-        let root = temp_dir();
-        std::fs::create_dir_all(&root).expect("workspace should exist");
-
-        let oauth = super::load_runtime_oauth_config_for(&root)
-            .expect("loading config should succeed when files are absent");
-
-        std::fs::remove_dir_all(root).expect("temp workspace should clean up");
-
-        assert_eq!(oauth, None);
-    }
-
-    #[test]
-    fn resolve_cli_auth_source_uses_default_oauth_when_runtime_config_is_missing() {
-        let _guard = env_lock();
-        let workspace = temp_dir();
-        let config_home = temp_dir();
-        std::fs::create_dir_all(&workspace).expect("workspace should exist");
-        std::fs::create_dir_all(&config_home).expect("config home should exist");
-
-        let original_config_home = std::env::var("ORBIT_CONFIG_HOME").ok();
-        let original_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
-        let original_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
-        std::env::set_var("ORBIT_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_API_KEY");
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-
-        save_oauth_credentials(&orbit_runtime::OAuthTokenSet {
-            access_token: "expired-access-token".to_string(),
-            refresh_token: Some("refresh-token".to_string()),
-            expires_at: Some(0),
-            scopes: vec!["org:create_api_key".to_string(), "user:profile".to_string()],
-        })
-        .expect("save expired oauth credentials");
-
-        let token_url = match spawn_token_server(
-            r#"{"access_token":"refreshed-access-token","refresh_token":"refreshed-refresh-token","expires_at":4102444800,"scopes":["org:create_api_key","user:profile"]}"#,
-        ) {
-            Ok(token_url) => token_url,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                match original_config_home {
-                    Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
-                    None => std::env::remove_var("ORBIT_CONFIG_HOME"),
-                }
-                match original_api_key {
-                    Some(value) => std::env::set_var("ANTHROPIC_API_KEY", value),
-                    None => std::env::remove_var("ANTHROPIC_API_KEY"),
-                }
-                match original_auth_token {
-                    Some(value) => std::env::set_var("ANTHROPIC_AUTH_TOKEN", value),
-                    None => std::env::remove_var("ANTHROPIC_AUTH_TOKEN"),
-                }
-                std::fs::remove_dir_all(workspace).expect("temp workspace should clean up");
-                std::fs::remove_dir_all(config_home).expect("temp config home should clean up");
-                return;
-            }
-            Err(error) => panic!("bind listener: {error}"),
-        };
-
-        let auth =
-            super::resolve_cli_auth_source_for_cwd(&workspace, || sample_oauth_config(token_url))
-                .expect("expired saved oauth should refresh via default config");
-
-        let stored = load_oauth_credentials()
-            .expect("load stored credentials")
-            .expect("stored credentials should exist");
-
-        match original_config_home {
-            Some(value) => std::env::set_var("ORBIT_CONFIG_HOME", value),
-            None => std::env::remove_var("ORBIT_CONFIG_HOME"),
-        }
-        match original_api_key {
-            Some(value) => std::env::set_var("ANTHROPIC_API_KEY", value),
-            None => std::env::remove_var("ANTHROPIC_API_KEY"),
-        }
-        match original_auth_token {
-            Some(value) => std::env::set_var("ANTHROPIC_AUTH_TOKEN", value),
-            None => std::env::remove_var("ANTHROPIC_AUTH_TOKEN"),
-        }
-        std::fs::remove_dir_all(workspace).expect("temp workspace should clean up");
-        std::fs::remove_dir_all(config_home).expect("temp config home should clean up");
-
-        assert_eq!(auth.bearer_token(), Some("refreshed-access-token"));
-        assert_eq!(stored.access_token, "refreshed-access-token");
-        assert_eq!(
-            stored.refresh_token.as_deref(),
-            Some("refreshed-refresh-token")
-        );
     }
 
     #[test]
@@ -8056,19 +10613,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_login_and_logout_subcommands() {
-        assert_eq!(
-            parse_args(&["login".to_string()]).expect("login should parse"),
-            CliAction::Login {
-                output_format: CliOutputFormat::Text,
-            }
-        );
-        assert_eq!(
-            parse_args(&["logout".to_string()]).expect("logout should parse"),
-            CliAction::Logout {
-                output_format: CliOutputFormat::Text,
-            }
-        );
+    fn parses_doctor_init_and_supporting_subcommands() {
         assert_eq!(
             parse_args(&["doctor".to_string()]).expect("doctor should parse"),
             CliAction::Doctor {
@@ -8092,6 +10637,29 @@ mod tests {
             parse_args(&["mcp".to_string()]).expect("mcp should parse"),
             CliAction::Mcp {
                 args: None,
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&["config".to_string()]).expect("config should parse"),
+            CliAction::Config {
+                section: None,
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&["config".to_string(), "telemetry".to_string()])
+                .expect("config telemetry should parse"),
+            CliAction::Config {
+                section: Some("telemetry".to_string()),
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&["telemetry".to_string()]).expect("telemetry should parse"),
+            CliAction::Telemetry {
+                action: None,
+                target: None,
                 output_format: CliOutputFormat::Text,
             }
         );
@@ -8124,6 +10692,326 @@ mod tests {
             CliAction::Agents {
                 args: Some("--help".to_string()),
                 output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_hosted_policy_preview_command() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "policy".to_string(),
+                "orphans".to_string(),
+                "--repo".to_string(),
+                "myorg/myapp".to_string(),
+                "--source".to_string(),
+                "slack".to_string(),
+                "--priority".to_string(),
+                "high".to_string(),
+            ])
+            .expect("hosted policy should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::PolicyOrphans {
+                    repository: Some("myorg/myapp".to_string()),
+                    source: Some("slack".to_string()),
+                    priority: Some("high".to_string()),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_hosted_events_watch_command() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "events".to_string(),
+                "watch".to_string(),
+                "--task-id".to_string(),
+                "task_123".to_string(),
+                "--topic".to_string(),
+                "approval".to_string(),
+                "--event".to_string(),
+                "approval.requested".to_string(),
+                "--status".to_string(),
+                "pending".to_string(),
+                "--limit".to_string(),
+                "5".to_string(),
+            ])
+            .expect("hosted events watch should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::EventsWatch {
+                    query: HostedEventWatchQuery {
+                        task_id: Some("task_123".to_string()),
+                        topic: Some("approval".to_string()),
+                        event: Some("approval.requested".to_string()),
+                        status: Some("pending".to_string()),
+                        limit: Some(5),
+                    },
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_hosted_tasks_list_command() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "tasks".to_string(),
+                "list".to_string(),
+                "--status".to_string(),
+                "pending,running".to_string(),
+                "--source".to_string(),
+                "slack".to_string(),
+                "--repo".to_string(),
+                "myorg/myapp".to_string(),
+                "--channel-id".to_string(),
+                "C123".to_string(),
+                "--thread-ts".to_string(),
+                "171234.56".to_string(),
+                "--limit".to_string(),
+                "10".to_string(),
+            ])
+            .expect("hosted tasks list should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TasksList {
+                    query: HostedTaskListQuery {
+                        status: Some("pending,running".to_string()),
+                        source: Some("slack".to_string()),
+                        repository: Some("myorg/myapp".to_string()),
+                        channel_id: Some("C123".to_string()),
+                        thread_ts: Some("171234.56".to_string()),
+                        limit: Some(10),
+                    },
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_hosted_tasks_watch_command() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "tasks".to_string(),
+                "watch".to_string(),
+                "--status".to_string(),
+                "pending,running".to_string(),
+                "--source".to_string(),
+                "slack".to_string(),
+                "--repo".to_string(),
+                "myorg/myapp".to_string(),
+                "--channel-id".to_string(),
+                "C123".to_string(),
+                "--thread-ts".to_string(),
+                "171234.56".to_string(),
+                "--limit".to_string(),
+                "20".to_string(),
+            ])
+            .expect("hosted tasks watch should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TasksWatch {
+                    query: HostedTaskListQuery {
+                        status: Some("pending,running".to_string()),
+                        source: Some("slack".to_string()),
+                        repository: Some("myorg/myapp".to_string()),
+                        channel_id: Some("C123".to_string()),
+                        thread_ts: Some("171234.56".to_string()),
+                        limit: Some(20),
+                    },
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn hosted_task_snapshot_from_sparse_lane_started_event_infers_running_status() {
+        let event = EventEnvelope::new(
+            HostedEventName::LaneStarted,
+            HostedEventStatus::Running,
+            HostedEventTopic::Lane,
+            EventIdentifiers {
+                task_id: Some("task_sparse".to_string()),
+                lane_id: Some("lane_sparse".to_string()),
+                ..EventIdentifiers::default()
+            },
+            Some(json!({
+                "channel_id": "C123",
+                "thread_ts": "171234.56",
+                "worker_status": "running",
+            })),
+            None,
+        );
+
+        let snapshot = hosted_task_snapshot_from_event(&event)
+            .expect("sparse lane.started event should infer a task snapshot");
+        assert_eq!(snapshot.task_id, "task_sparse");
+        assert_eq!(snapshot.status, "running");
+        assert_eq!(snapshot.channel_id.as_deref(), Some("C123"));
+        assert_eq!(snapshot.thread_ts.as_deref(), Some("171234.56"));
+        assert_eq!(snapshot.worker_status.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn hosted_task_snapshot_from_sparse_cancel_event_infers_cancelled_status() {
+        let event = EventEnvelope::new(
+            HostedEventName::TaskCancelled,
+            HostedEventStatus::Cancelled,
+            HostedEventTopic::Task,
+            EventIdentifiers {
+                task_id: Some("task_cancelled".to_string()),
+                ..EventIdentifiers::default()
+            },
+            Some(json!({
+                "channel_id": "C999",
+            })),
+            None,
+        );
+
+        let snapshot = hosted_task_snapshot_from_event(&event)
+            .expect("sparse task.cancelled event should infer a task snapshot");
+        assert_eq!(snapshot.task_id, "task_cancelled");
+        assert_eq!(snapshot.status, "cancelled");
+        assert_eq!(snapshot.channel_id.as_deref(), Some("C999"));
+    }
+
+    #[test]
+    fn parses_hosted_task_reconcile_and_approval_commands() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "get".to_string(),
+                "task_123".to_string(),
+            ])
+            .expect("hosted get should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskGet {
+                    task_id: "task_123".to_string(),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "runtime".to_string(),
+                "task_123".to_string(),
+            ])
+            .expect("hosted runtime should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskRuntime {
+                    task_id: "task_123".to_string(),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "reconcile".to_string(),
+                "task_123".to_string(),
+            ])
+            .expect("hosted reconcile should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskReconcile {
+                    task_id: "task_123".to_string(),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "cancel".to_string(),
+                "task_123".to_string(),
+            ])
+            .expect("hosted cancel should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskCancel {
+                    task_id: "task_123".to_string(),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "approval".to_string(),
+                "task_123".to_string(),
+                "retry".to_string(),
+                "--resolved-by".to_string(),
+                "operator".to_string(),
+                "--reason".to_string(),
+                "manual-recovery".to_string(),
+            ])
+            .expect("hosted approval should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskApproval {
+                    task_id: "task_123".to_string(),
+                    action: HostedApprovalAction::Retry,
+                    resolved_by: Some("operator".to_string()),
+                    reason: Some("manual-recovery".to_string()),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn hosted_server_url_prefers_env_and_trims_trailing_slash() {
+        let _guard = env_lock();
+        std::env::set_var("ORBIT_SERVER_URL", "http://hosted.orbit.test/");
+        std::env::remove_var("ORBIT_SERVER_BASE_URL");
+        assert_eq!(hosted_server_url(), "http://hosted.orbit.test");
+        std::env::remove_var("ORBIT_SERVER_URL");
+
+        std::env::set_var("ORBIT_SERVER_BASE_URL", "http://fallback.orbit.test/");
+        assert_eq!(hosted_server_url(), "http://fallback.orbit.test");
+        std::env::remove_var("ORBIT_SERVER_BASE_URL");
+    }
+
+    #[test]
+    fn config_subcommand_allows_unknown_sections_and_rejects_extra_args() {
+        assert_eq!(
+            parse_args(&["config".to_string(), "unknown".to_string()])
+                .expect("unknown config section should parse"),
+            CliAction::Config {
+                section: Some("unknown".to_string()),
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        let extra = parse_args(&[
+            "config".to_string(),
+            "telemetry".to_string(),
+            "extra".to_string(),
+        ])
+        .expect_err("extra config arg should fail");
+        assert!(extra.contains("config accepts at most one section argument"));
+    }
+
+    #[test]
+    fn parses_config_subcommand_with_json_output_format() {
+        assert_eq!(
+            parse_args(&[
+                "--output-format=json".to_string(),
+                "config".to_string(),
+                "telemetry".to_string(),
+            ])
+            .expect("config telemetry json should parse"),
+            CliAction::Config {
+                section: Some("telemetry".to_string()),
+                output_format: CliOutputFormat::Json,
             }
         );
     }
@@ -8511,7 +11399,7 @@ mod tests {
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model|plugins]"));
+        assert!(help.contains("/config [env|hooks|model|telemetry|plugins]"));
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
@@ -8544,6 +11432,7 @@ mod tests {
         assert!(completions.contains(&"/session switch session-current".to_string()));
         assert!(completions.contains(&"/resume session-old".to_string()));
         assert!(completions.contains(&"/mcp list".to_string()));
+        assert!(completions.contains(&"/config telemetry".to_string()));
         assert!(completions.contains(&"/ultraplan ".to_string()));
     }
 
@@ -8655,6 +11544,7 @@ mod tests {
         assert!(help.contains("orbit help"));
         assert!(help.contains("orbit version"));
         assert!(help.contains("orbit status"));
+        assert!(help.contains("orbit config [env|hooks|model|telemetry|plugins]"));
         assert!(help.contains("orbit sandbox"));
         assert!(help.contains("orbit init"));
         assert!(help.contains("orbit agents"));
@@ -8805,9 +11695,443 @@ mod tests {
     fn config_report_supports_section_views() {
         let report = render_config_report(Some("env")).expect("config report should render");
         assert!(report.contains("Merged section: env"));
+        assert!(report.contains("Section status"));
         let plugins_report =
             render_config_report(Some("plugins")).expect("plugins config report should render");
         assert!(plugins_report.contains("Merged section: plugins"));
+        let telemetry_report =
+            render_config_report(Some("telemetry")).expect("telemetry config report should render");
+        assert!(telemetry_report.contains("Merged section: telemetry"));
+        assert!(telemetry_report.contains("Effective telemetry"));
+    }
+
+    #[test]
+    fn telemetry_resolution_prefers_env_over_config() {
+        let _guard = env_lock();
+        std::env::set_var(ORBIT_TELEMETRY_PATH, "/tmp/from-env.jsonl");
+        let config = orbit_runtime::RuntimeConfig::empty();
+
+        let resolution = resolve_telemetry_config(Some(&config));
+        assert_eq!(resolution.source, "env");
+        assert_eq!(resolution.path.as_deref(), Some("/tmp/from-env.jsonl"));
+
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+    }
+
+    #[test]
+    fn telemetry_report_uses_sectioned_layout() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let report = render_telemetry_report(None).expect("telemetry report should render");
+        assert!(report.contains("Telemetry"));
+        assert!(report.contains("Enabled"));
+        assert!(report.contains("Effective path"));
+        assert!(report.contains("Effective source"));
+        assert!(report.contains("Config file"));
+    }
+
+    #[test]
+    fn telemetry_report_shows_highest_precedence_config_file() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+        )
+        .expect("project settings");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+
+        let report = with_current_dir(&cwd, || {
+            render_telemetry_report(None).expect("telemetry report should render")
+        });
+        assert!(report.contains("Effective path   local/log.jsonl"));
+        assert!(report.contains(".orbit/settings.local.json"));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn telemetry_report_marks_config_as_shadowed_when_env_override_is_set() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+        std::env::set_var(ORBIT_TELEMETRY_PATH, "/tmp/from-env.jsonl");
+
+        let report = with_current_dir(&cwd, || {
+            render_telemetry_report(None).expect("telemetry report should render")
+        });
+        assert!(report.contains("Effective source env"));
+        assert!(report.contains("Shadowed config"));
+        assert!(report.contains(".orbit/settings.local.json"));
+        assert!(report.contains("Env override     /tmp/from-env.jsonl"));
+
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn telemetry_report_status_target_shows_requested_scope_details() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+        )
+        .expect("project settings");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":false,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+
+        let report = with_current_dir(&cwd, || {
+            render_telemetry_report(Some("project")).expect("telemetry report should render")
+        });
+        assert!(report.contains("Target scope     project"));
+        assert!(report.contains("Settings status  present"));
+        assert!(report.contains("Target enabled   true"));
+        assert!(report.contains("Target path      project/log.jsonl"));
+        assert!(report.contains("Effective telemetry"));
+        assert!(report.contains("Effective path   local/log.jsonl"));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_telemetry_report_shows_effective_precedence_details() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+        )
+        .expect("project settings");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+
+        let report = with_current_dir(&cwd, || {
+            render_config_report(Some("telemetry")).expect("telemetry config report should render")
+        });
+        assert!(report.contains("Merged section: telemetry"));
+        assert!(report.contains("Effective telemetry"));
+        assert!(report.contains("Effective path   local/log.jsonl"));
+        assert!(report.contains(".orbit/settings.local.json"));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_telemetry_report_marks_shadowed_config_when_env_override_is_set() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+        std::env::set_var(ORBIT_TELEMETRY_PATH, "/tmp/from-env.jsonl");
+
+        let report = with_current_dir(&cwd, || {
+            render_config_report(Some("telemetry")).expect("telemetry config report should render")
+        });
+        assert!(report.contains("Effective source env"));
+        assert!(report.contains("Shadowed config"));
+        assert!(report.contains(".orbit/settings.local.json"));
+        assert!(report.contains("Env override     /tmp/from-env.jsonl"));
+
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_report_marks_supported_sections_as_unset_when_missing() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"model":"claude-sonnet-4-6"}"#,
+        )
+        .expect("project settings");
+
+        let report = with_current_dir(&cwd, || {
+            render_config_report(Some("hooks")).expect("hooks config report should render")
+        });
+        assert!(report.contains("Merged section: hooks"));
+        assert!(report.contains(&report_row("Section status", "unset")));
+        assert!(report.contains("  <unset>"));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_report_marks_supported_sections_as_set_when_present() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"env":{"API_BASE_URL":"https://example.test"}}"#,
+        )
+        .expect("project settings");
+
+        let report = with_current_dir(&cwd, || {
+            render_config_report(Some("env")).expect("env config report should render")
+        });
+        assert!(report.contains("Merged section: env"));
+        assert!(report.contains(&report_row("Section status", "set")));
+        assert!(report.contains("\"API_BASE_URL\":\"https://example.test\""));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_report_marks_unsupported_sections_explicitly() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let report = with_current_dir(&cwd, || {
+            render_config_report(Some("unknown")).expect("unknown config report should render")
+        });
+        assert!(report.contains("Merged section: unknown"));
+        assert!(report.contains(&report_row("Section status", "unsupported")));
+        assert!(report.contains(
+            "Unsupported config section 'unknown'. Use env, hooks, model, telemetry, or plugins."
+        ));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_telemetry_json_includes_effective_resolution_details() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+        )
+        .expect("project settings");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+
+        let value = with_current_dir(&cwd, || {
+            config_json_value(Some("telemetry")).expect("telemetry config json should render")
+        });
+        assert_eq!(value["kind"], "config");
+        assert_eq!(value["section"], "telemetry");
+        assert_eq!(value["section_supported"], true);
+        assert_eq!(value["section_present"], true);
+        assert_eq!(value["section_status"], "set");
+        assert_eq!(value["merged_section"]["path"], "local/log.jsonl");
+        assert_eq!(value["effective"]["path"], "local/log.jsonl");
+        assert_eq!(value["effective"]["effective_source"], "config");
+        assert!(value["effective"]["config_source_path"]
+            .as_str()
+            .expect("config path")
+            .ends_with(".orbit/settings.local.json"));
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_telemetry_json_marks_shadowed_config_when_env_override_is_set() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":true,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+        std::env::set_var(ORBIT_TELEMETRY_PATH, "/tmp/from-env.jsonl");
+
+        let value = with_current_dir(&cwd, || {
+            config_json_value(Some("telemetry")).expect("telemetry config json should render")
+        });
+        assert_eq!(value["effective"]["effective_source"], "env");
+        assert_eq!(value["effective"]["env_override"], "/tmp/from-env.jsonl");
+        assert_eq!(value["effective"]["config_shadowed_by_env"], true);
+        assert!(value["effective"]["config_source_path"]
+            .as_str()
+            .expect("config path")
+            .ends_with(".orbit/settings.local.json"));
+
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn telemetry_status_json_includes_requested_target_details() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"telemetry":{"enabled":true,"path":"project/log.jsonl"}}"#,
+        )
+        .expect("project settings");
+        fs::write(
+            cwd.join(".orbit").join("settings.local.json"),
+            r#"{"telemetry":{"enabled":false,"path":"local/log.jsonl"}}"#,
+        )
+        .expect("local settings");
+
+        let value = with_current_dir(&cwd, || {
+            let runtime_config = ConfigLoader::default_for(&cwd)
+                .load()
+                .expect("runtime config should load");
+            telemetry_status_json_value(&runtime_config, Some("project"))
+                .expect("telemetry status json should render")
+        });
+
+        assert_eq!(value["kind"], "telemetry");
+        assert_eq!(value["target"]["scope"], "project");
+        assert_eq!(value["target"]["settings_status"], "present");
+        assert_eq!(value["target"]["config_enabled"], true);
+        assert_eq!(value["target"]["config_path"], "project/log.jsonl");
+        assert_eq!(value["path"], "local/log.jsonl");
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_json_marks_supported_sections_as_unset_when_missing() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"model":"claude-sonnet-4-6"}"#,
+        )
+        .expect("project settings");
+
+        let value = with_current_dir(&cwd, || {
+            config_json_value(Some("hooks")).expect("hooks config json should render")
+        });
+        assert_eq!(value["kind"], "config");
+        assert_eq!(value["section"], "hooks");
+        assert_eq!(value["section_supported"], true);
+        assert_eq!(value["section_present"], false);
+        assert_eq!(value["section_status"], "unset");
+        assert!(value["merged_section"].is_null());
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_json_marks_unsupported_sections_explicitly() {
+        let _guard = env_lock();
+        let cwd = temp_dir();
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let value = with_current_dir(&cwd, || {
+            config_json_value(Some("unknown")).expect("unsupported config json should render")
+        });
+        assert_eq!(value["kind"], "config");
+        assert_eq!(value["section"], "unknown");
+        assert_eq!(value["status"], "unsupported");
+        assert_eq!(value["section_supported"], false);
+        assert_eq!(value["section_present"], false);
+        assert_eq!(value["section_status"], "unsupported");
+        assert!(value["supported_sections"].is_array());
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn telemetry_update_writes_project_settings_json() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let settings_path =
+            update_project_telemetry_settings(&cwd, true, None).expect("telemetry should update");
+        let written = fs::read_to_string(&settings_path).expect("settings should exist");
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("settings json");
+
+        assert_eq!(settings_path, cwd.join(".orbit").join("settings.json"));
+        assert_eq!(parsed["telemetry"]["enabled"], true);
+        assert_eq!(
+            parsed["telemetry"]["path"],
+            cwd.join(".orbit")
+                .join("telemetry.jsonl")
+                .display()
+                .to_string()
+        );
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn telemetry_update_preserves_existing_path_when_disabling() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(cwd.join(".orbit")).expect("orbit dir should exist");
+        fs::write(
+            cwd.join(".orbit").join("settings.json"),
+            r#"{"telemetry":{"enabled":true,"path":"custom/log.jsonl"},"model":"claude-sonnet"}"#,
+        )
+        .expect("seed settings");
+
+        update_project_telemetry_settings(&cwd, false, None).expect("telemetry should update");
+        let written = fs::read_to_string(cwd.join(".orbit").join("settings.json"))
+            .expect("settings should exist");
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("settings json");
+        assert_eq!(parsed["telemetry"]["enabled"], false);
+        assert_eq!(parsed["telemetry"]["path"], "custom/log.jsonl");
+        assert_eq!(parsed["model"], "claude-sonnet");
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn telemetry_update_can_write_local_settings_json() {
+        let _guard = env_lock();
+        std::env::remove_var(ORBIT_TELEMETRY_PATH);
+        let cwd = temp_dir();
+        fs::create_dir_all(&cwd).expect("cwd should exist");
+
+        let settings_path = update_project_telemetry_settings(&cwd, true, Some("local"))
+            .expect("telemetry should update");
+        let written = fs::read_to_string(&settings_path).expect("settings should exist");
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("settings json");
+
+        assert_eq!(
+            settings_path,
+            cwd.join(".orbit").join("settings.local.json")
+        );
+        assert_eq!(parsed["telemetry"]["enabled"], true);
+
+        fs::remove_dir_all(cwd).expect("cleanup temp dir");
     }
 
     #[test]
@@ -9036,6 +12360,39 @@ UU conflicted.rs",
             }))
         );
         assert_eq!(
+            SlashCommand::parse("/config telemetry"),
+            Ok(Some(SlashCommand::Config {
+                section: Some("telemetry".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/config unknown"),
+            Ok(Some(SlashCommand::Config {
+                section: Some("unknown".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/telemetry status"),
+            Ok(Some(SlashCommand::Telemetry {
+                action: Some("status".to_string()),
+                target: None,
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/telemetry on"),
+            Ok(Some(SlashCommand::Telemetry {
+                action: Some("on".to_string()),
+                target: None,
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/telemetry on local"),
+            Ok(Some(SlashCommand::Telemetry {
+                action: Some("on".to_string()),
+                target: Some("local".to_string()),
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/memory"),
             Ok(Some(SlashCommand::Memory))
         );
@@ -9058,6 +12415,7 @@ UU conflicted.rs",
         assert!(help.contains("Use `latest` with --resume, /resume, or /session switch"));
         assert!(help.contains("orbit --resume latest"));
         assert!(help.contains("orbit --resume latest /status /diff /export notes.txt"));
+        assert!(help.contains("orbit --output-format json config telemetry"));
     }
 
     #[test]
@@ -9542,31 +12900,6 @@ UU conflicted.rs",
     }
 
     #[test]
-    fn login_browser_failure_keeps_json_stdout_clean() {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let error = std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no supported browser opener command found",
-        );
-
-        super::emit_login_browser_open_failure(
-            CliOutputFormat::Json,
-            "https://example.test/oauth/authorize",
-            &error,
-            &mut stdout,
-            &mut stderr,
-        )
-        .expect("browser warning should render");
-
-        assert!(stdout.is_empty());
-        let stderr = String::from_utf8(stderr).expect("utf8");
-        assert!(stderr.contains("failed to open browser automatically"));
-        assert!(stderr.contains("Open this URL manually:"));
-        assert!(stderr.contains("https://example.test/oauth/authorize"));
-    }
-
-    #[test]
     fn build_runtime_plugin_state_merges_plugin_hooks_into_runtime_features() {
         let config_home = temp_dir();
         let workspace = temp_dir();
@@ -9639,6 +12972,7 @@ UU conflicted.rs",
         assert!(allowed.contains("MCPTool"));
 
         let mut executor = CliToolExecutor::new(
+            "test-mcp-session".to_string(),
             None,
             false,
             state.tool_registry.clone(),
@@ -9737,6 +13071,7 @@ UU conflicted.rs",
         let state = build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
             .expect("runtime plugin state should load");
         let mut executor = CliToolExecutor::new(
+            "test-mcp-session".to_string(),
             None,
             false,
             state.tool_registry.clone(),

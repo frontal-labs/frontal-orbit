@@ -221,7 +221,8 @@ fn detect_repo(cwd: &Path) -> RepoDetection {
         .unwrap_or_default()
         .to_ascii_lowercase();
     RepoDetection {
-        rust_workspace: cwd.join("Cargo.toml").is_file() || cwd.join("rust").join("Cargo.toml").is_file(),
+        rust_workspace: cwd.join("Cargo.toml").is_file()
+            || cwd.join("rust").join("Cargo.toml").is_file(),
         rust_root: cwd.join("Cargo.toml").is_file(),
         python: cwd.join("pyproject.toml").is_file()
             || cwd.join("requirements.txt").is_file()
@@ -389,7 +390,8 @@ mod tests {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("ORBIT.md"), "custom guidance\n").expect("write existing claude md");
-        fs::write(root.join(".gitignore"), ".orbit/settings.local.json\n").expect("write gitignore");
+        fs::write(root.join(".gitignore"), ".orbit/settings.local.json\n")
+            .expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
         assert!(first.render().contains("ORBIT.md"));
