@@ -1,17 +1,15 @@
-# Use Node.js 18 LTS with Bun
-FROM node:18-alpine AS builder
+ARG BUN_IMAGE=oven/bun:1-alpine@sha256:7ed9f74c326d1c260abe247ac423ccbf5ac92af62bb442d515d1f92f21e8ea9b
+ARG NODE_IMAGE=node:20-alpine@sha256:f598378b5240225e6beab68fa9f356db1fb8efe55173e6d4d8153113bb8f333c
 
-# Install Bun
-RUN npm install -g bun
+FROM ${BUN_IMAGE} AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
+COPY bunfig.toml ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile
 
 # Copy source code
 COPY . .
@@ -19,15 +17,13 @@ COPY . .
 # Build the application
 RUN bun run build
 
-# Production stage
-FROM node:18-alpine AS production
+FROM ${NODE_IMAGE} AS production
 
 # Install dumb-init for proper signal handling
 RUN apk add --no-cache dumb-init
 
-# Create app user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S orbit -u 1001
+RUN addgroup -g 1001 -S orbit \
+    && adduser -S orbit -u 1001 -G orbit
 
 # Set working directory
 WORKDIR /app
@@ -35,21 +31,23 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install only production dependencies
-RUN bun install --frozen-lockfile --production && bun pm cache rm
+ENV NODE_ENV=production
+
+RUN npm ci --omit=dev \
+    && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Create logs directory
-RUN mkdir -p logs && chown -R orbit:nodejs logs
+RUN mkdir -p /tmp logs \
+    && chown -R orbit:orbit /app /tmp
 
 # Switch to non-root user
 USER orbit
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
+  CMD node -e "require('http').get('http://127.0.0.1:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
 
 # Expose port
 EXPOSE 3000

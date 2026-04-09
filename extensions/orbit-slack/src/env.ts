@@ -33,6 +33,11 @@ export const env = createEnv({
       .max(300000)
       .default(30000)
       .describe("Orbit API request timeout in milliseconds"),
+    ORBIT_API_KEY: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Orbit API key for protected hosted control-plane routes"),
 
     // Application Configuration
     NODE_ENV: z
@@ -42,7 +47,6 @@ export const env = createEnv({
     LOG_LEVEL: z
       .enum(["error", "warn", "info", "http", "debug"])
       .default("info")
-      .optional()
       .describe("Logging level"),
     PORT: z
       .coerce.number()
@@ -50,7 +54,6 @@ export const env = createEnv({
       .min(1000)
       .max(65535)
       .default(3000)
-      .optional()
       .describe("Server port"),
 
     // GitHub Configuration (Optional)
@@ -59,6 +62,26 @@ export const env = createEnv({
       .min(1)
       .optional()
       .describe("GitHub personal access token"),
+    LINEAR_TOKEN: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Linear API token"),
+    LINEAR_API_URL: z
+      .string()
+      .url()
+      .optional()
+      .describe("Linear GraphQL endpoint (optional)"),
+    GRAPHITE_TOKEN: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Graphite API token"),
+    GRAPHITE_API_URL: z
+      .string()
+      .url()
+      .optional()
+      .describe("Graphite API endpoint (optional)"),
 
     // Sentry Configuration (Optional)
     SENTRY_DSN: z
@@ -114,10 +137,15 @@ export const env = createEnv({
     ORBIT_API_TIMEOUT: process.env.ORBIT_API_TIMEOUT
       ? Number(process.env.ORBIT_API_TIMEOUT)
       : undefined,
+    ORBIT_API_KEY: process.env.ORBIT_API_KEY,
     NODE_ENV: process.env.NODE_ENV,
     LOG_LEVEL: process.env.LOG_LEVEL,
     PORT: process.env.PORT ? Number(process.env.PORT) : undefined,
     GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    LINEAR_TOKEN: process.env.LINEAR_TOKEN,
+    LINEAR_API_URL: process.env.LINEAR_API_URL,
+    GRAPHITE_TOKEN: process.env.GRAPHITE_TOKEN,
+    GRAPHITE_API_URL: process.env.GRAPHITE_API_URL,
     SENTRY_DSN: process.env.SENTRY_DSN,
     MAX_CONCURRENT_TASKS: process.env.MAX_CONCURRENT_TASKS
       ? Number(process.env.MAX_CONCURRENT_TASKS)
@@ -186,6 +214,7 @@ export function getEnvConfig() {
     orbit: {
       apiUrl: env.ORBIT_API_URL,
       timeout: env.ORBIT_API_TIMEOUT,
+      apiKey: env.ORBIT_API_KEY,
     },
     app: {
       nodeEnv: env.NODE_ENV,
@@ -194,8 +223,20 @@ export function getEnvConfig() {
     },
     github: env.GITHUB_TOKEN
       ? {
-        token: env.GITHUB_TOKEN,
-      }
+          token: env.GITHUB_TOKEN,
+        }
+      : undefined,
+    linear: env.LINEAR_TOKEN
+      ? {
+          token: env.LINEAR_TOKEN,
+          apiUrl: env.LINEAR_API_URL ?? "https://api.linear.app/graphql",
+        }
+      : undefined,
+    graphite: env.GRAPHITE_TOKEN
+      ? {
+          token: env.GRAPHITE_TOKEN,
+          apiUrl: env.GRAPHITE_API_URL ?? "https://graphite.dev/api",
+        }
       : undefined,
     limits: {
       maxConcurrentTasks: env.MAX_CONCURRENT_TASKS,

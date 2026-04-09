@@ -25,6 +25,8 @@ pub struct ApiServiceConfig {
     pub api_key: Option<String>,
     pub allowed_commands: Option<BTreeSet<String>>,
     pub command_timeout_ms: u64,
+    pub allow_insecure_bind: bool,
+    pub allow_dangerous_permissions: bool,
 }
 
 impl Default for ApiServiceConfig {
@@ -36,6 +38,8 @@ impl Default for ApiServiceConfig {
             api_key: None,
             allowed_commands: None,
             command_timeout_ms: 120_000,
+            allow_insecure_bind: false,
+            allow_dangerous_permissions: false,
         }
     }
 }
@@ -85,8 +89,26 @@ impl ApiServiceConfig {
             let parsed: u64 = timeout_ms.parse()?;
             config.command_timeout_ms = parsed;
         }
+        if let Ok(value) = env::var("ORBIT_API_ALLOW_INSECURE_BIND") {
+            config.allow_insecure_bind = parse_bool_env(&value);
+        }
+        if let Ok(value) = env::var("ORBIT_API_ALLOW_DANGEROUS_PERMISSIONS") {
+            config.allow_dangerous_permissions = parse_bool_env(&value);
+        }
 
         Ok(config)
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if !self.bind_addr.ip().is_loopback() && self.api_key.is_none() && !self.allow_insecure_bind
+        {
+            return Err(
+                "refusing to bind orbit-api to a non-loopback address without ORBIT_API_KEY; set ORBIT_API_ALLOW_INSECURE_BIND=true to override"
+                    .into(),
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -97,6 +119,7 @@ struct AppState {
     api_key: Option<String>,
     allowed_commands: Option<BTreeSet<String>>,
     command_timeout_ms: u64,
+    allow_dangerous_permissions: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,9 +163,88 @@ fn default_true() -> bool {
     true
 }
 
+fn parse_bool_env(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn constant_time_equals(expected: &str, provided: &str) -> bool {
+    let expected = expected.as_bytes();
+    let provided = provided.as_bytes();
+    let max_len = expected.len().max(provided.len());
+    let mut diff = expected.len() ^ provided.len();
+
+    for idx in 0..max_len {
+        let left = expected.get(idx).copied().unwrap_or(0);
+        let right = provided.get(idx).copied().unwrap_or(0);
+        diff |= usize::from(left ^ right);
+    }
+
+    diff == 0
+}
+
+fn is_dangerous_permission_mode(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("danger-full-access")
+}
+
+fn validate_permission_flags(
+    state: &AppState,
+    args: &[String],
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if state.allow_dangerous_permissions {
+        return Ok(());
+    }
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dangerously-skip-permissions" => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse {
+                        error: "dangerous permission overrides are disabled for orbit-api"
+                            .to_string(),
+                    }),
+                ));
+            }
+            "--permission-mode" if index + 1 < args.len() => {
+                if is_dangerous_permission_mode(&args[index + 1]) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(ErrorResponse {
+                            error: "danger-full-access is disabled for orbit-api".to_string(),
+                        }),
+                    ));
+                }
+                index += 2;
+                continue;
+            }
+            flag if flag.starts_with("--permission-mode=") => {
+                if let Some(value) = flag.split_once('=').map(|(_, value)| value) {
+                    if is_dangerous_permission_mode(value) {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            Json(ErrorResponse {
+                                error: "danger-full-access is disabled for orbit-api".to_string(),
+                            }),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+
+    Ok(())
+}
+
 pub async fn serve(
     config: ApiServiceConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    config.validate()?;
     let cli_bin = resolve_cli_bin(config.cli_bin)?;
     let display_cli_bin = cli_bin.display().to_string();
     let state = Arc::new(AppState {
@@ -151,6 +253,7 @@ pub async fn serve(
         api_key: config.api_key,
         allowed_commands: config.allowed_commands,
         command_timeout_ms: config.command_timeout_ms,
+        allow_dangerous_permissions: config.allow_dangerous_permissions,
     });
 
     let app = Router::new()
@@ -194,6 +297,7 @@ async fn run_cli(
         request.args = with_json_output(request.args);
     }
     authorize_command(&state, &request.args)?;
+    validate_permission_flags(&state, &request.args)?;
 
     let response = execute_cli(&state, request.args)
         .await
@@ -225,6 +329,14 @@ async fn run_prompt(
         args.extend(["--provider".to_string(), provider]);
     }
     if let Some(permission_mode) = request.permission_mode {
+        if !state.allow_dangerous_permissions && is_dangerous_permission_mode(&permission_mode) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "danger-full-access is disabled for orbit-api".to_string(),
+                }),
+            ));
+        }
         args.extend(["--permission-mode".to_string(), permission_mode]);
     }
     if let Some(allowed_tools) = request.allowed_tools {
@@ -234,6 +346,7 @@ async fn run_prompt(
     }
     args.push("prompt".to_string());
     args.push(request.prompt);
+    validate_permission_flags(&state, &args)?;
 
     let response = execute_cli(&state, with_json_output(args))
         .await
@@ -395,7 +508,11 @@ fn authorize(
                 .map(ToOwned::to_owned)
         });
 
-    if provided_key.as_deref() == Some(expected.as_str()) {
+    if provided_key
+        .as_deref()
+        .map(|provided| constant_time_equals(expected, provided))
+        .unwrap_or(false)
+    {
         Ok(())
     } else {
         Err((
@@ -467,7 +584,13 @@ fn detect_primary_command(args: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_primary_command, with_json_output};
+    use super::{
+        detect_primary_command, validate_permission_flags, with_json_output, ApiServiceConfig,
+        AppState,
+    };
+    use axum::{http::StatusCode, Json};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::path::PathBuf;
 
     #[test]
     fn json_output_flag_is_prepended_when_missing() {
@@ -504,5 +627,83 @@ mod tests {
             "status".to_string(),
         ];
         assert_eq!(detect_primary_command(&args), Some("status".to_string()));
+    }
+
+    #[test]
+    fn validate_rejects_non_loopback_bind_without_api_key() {
+        let config = ApiServiceConfig {
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8787),
+            ..ApiServiceConfig::default()
+        };
+
+        let error = config
+            .validate()
+            .expect_err("config should reject insecure bind");
+        assert!(error
+            .to_string()
+            .contains("refusing to bind orbit-api to a non-loopback address"));
+    }
+
+    #[test]
+    fn validate_allows_non_loopback_bind_with_api_key() {
+        let config = ApiServiceConfig {
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8787),
+            api_key: Some("top-secret".to_string()),
+            ..ApiServiceConfig::default()
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn dangerous_permission_overrides_are_blocked_by_default() {
+        let state = AppState {
+            cli_bin: PathBuf::from("orbit"),
+            working_dir: None,
+            api_key: None,
+            allowed_commands: None,
+            command_timeout_ms: 1_000,
+            allow_dangerous_permissions: false,
+        };
+
+        let result = validate_permission_flags(
+            &state,
+            &[
+                "--dangerously-skip-permissions".to_string(),
+                "status".to_string(),
+            ],
+        );
+
+        let (status, Json(body)) = result.expect_err("override should be rejected");
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            body.error,
+            "dangerous permission overrides are disabled for orbit-api"
+        );
+    }
+
+    #[test]
+    fn danger_full_access_mode_is_blocked_by_default() {
+        let state = AppState {
+            cli_bin: PathBuf::from("orbit"),
+            working_dir: None,
+            api_key: None,
+            allowed_commands: None,
+            command_timeout_ms: 1_000,
+            allow_dangerous_permissions: false,
+        };
+
+        let result = validate_permission_flags(
+            &state,
+            &[
+                "--permission-mode".to_string(),
+                "danger-full-access".to_string(),
+                "status".to_string(),
+            ],
+        );
+
+        let (status, Json(body)) = result.expect_err("danger mode should be rejected");
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body.error, "danger-full-access is disabled for orbit-api");
     }
 }

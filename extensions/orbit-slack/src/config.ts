@@ -12,6 +12,7 @@ export interface Config {
   orbit: {
     apiUrl: string;
     timeout: number;
+    apiKey?: string;
   };
 
   // Application Configuration

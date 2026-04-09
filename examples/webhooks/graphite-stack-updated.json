@@ -1,0 +1,11 @@
+{
+  "type": "stack.updated",
+  "stack_id": "stack_42",
+  "stack": {
+    "id": "stack_42",
+    "head": "feature/stack-head",
+    "base": "main"
+  },
+  "actor": { "id": "user_99" },
+  "task_id": null
+}

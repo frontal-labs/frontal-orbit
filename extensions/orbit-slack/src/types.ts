@@ -208,6 +208,13 @@ export interface OrbitCreateTaskRequest {
   repo_url?: string;
   base_ref?: string;
   branch?: string;
+   linear_issue_id?: string;
+   linear_issue_url?: string;
+   linear_issue_state?: string;
+   linear_issue_identifier?: string;
+   graphite_stack_id?: string;
+   graphite_head_branch?: string;
+   graphite_base_branch?: string;
   model?: string;
   provider?: string;
   permission_mode?: string;
@@ -268,6 +275,13 @@ export interface OrbitUpdateTaskContextRequest {
   channel_id?: string;
   thread_ts?: string;
   approval_message_ts?: string;
+  linear_issue_id?: string;
+  linear_issue_url?: string;
+  linear_issue_state?: string;
+  linear_issue_identifier?: string;
+  graphite_stack_id?: string;
+  graphite_head_branch?: string;
+  graphite_base_branch?: string;
 }
 
 export type OrbitEventTopic = OrbitGeneratedEventTopic;

@@ -19,7 +19,16 @@ export class OrbitEventsClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return;
     }
-    this.ws = new WebSocket(this.url);
+    this.ws = new WebSocket(
+      this.url,
+      config.orbit.apiKey
+        ? {
+            headers: {
+              "x-api-key": config.orbit.apiKey,
+            },
+          }
+        : undefined
+    );
     this.ws.on("open", () => {
       logger.info("Connected to Orbit event stream", { url: this.url });
     });

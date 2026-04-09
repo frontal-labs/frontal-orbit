@@ -191,6 +191,56 @@ async fn auth_rejects_missing_api_key_and_accepts_valid_key() {
 }
 
 #[tokio::test]
+async fn cli_run_rejects_dangerous_permission_override_by_default() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/cli/run", server.base_url))
+        .json(&serde_json::json!({
+            "args": ["--dangerously-skip-permissions", "status"],
+            "force_json_output": true
+        }))
+        .send()
+        .await
+        .expect("cli run request should return forbidden");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = response.json().await.expect("body should be JSON");
+    assert_eq!(
+        body["error"],
+        "dangerous permission overrides are disabled for orbit-api"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn prompt_rejects_danger_full_access_permission_mode_by_default() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/prompt", server.base_url))
+        .json(&serde_json::json!({
+            "prompt": "hello world",
+            "permission_mode": "danger-full-access"
+        }))
+        .send()
+        .await
+        .expect("prompt request should return forbidden");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = response.json().await.expect("body should be JSON");
+    assert_eq!(
+        body["error"],
+        "danger-full-access is disabled for orbit-api"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn cli_run_respects_allowed_commands() {
     let server =
         TestServer::start_with_env(&[("ORBIT_API_ALLOWED_COMMANDS", "status,version")]).await;

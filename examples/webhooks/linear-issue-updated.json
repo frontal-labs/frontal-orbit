@@ -1,0 +1,12 @@
+{
+  "type": "issue.updated",
+  "issue": {
+    "id": "iss_123456",
+    "identifier": "ENG-123",
+    "url": "https://linear.app/acme/issue/ENG-123/fix-crash",
+    "state": "In Progress",
+    "title": "Fix crash on startup"
+  },
+  "actor": { "id": "usr_abc" },
+  "task_id": null
+}

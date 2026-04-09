@@ -11,7 +11,7 @@ The Orbit Slack bot provides autonomous engineering capabilities directly within
 
 ## Prerequisites
 
-1. **Node.js 18+** installed on the deployment machine
+1. **Node.js 20+** installed on the deployment machine
 2. **Orbit Server** running and accessible from the internet
 3. **Slack App** created in your Slack workspace
 4. **GitHub App** configured with appropriate permissions
@@ -67,14 +67,17 @@ SLACK_BOT_TOKEN=xoxb-your-bot-token-here
 SLACK_SIGNING_SECRET=your-signing-secret-here
 SLACK_APP_ID=A0123456789012
 
-# Orbit Server Configuration  
-ORBIT_SERVER_URL=https://your-orbit-server.com
+# Orbit Server Configuration
+ORBIT_API_URL=https://your-orbit-server.com
 ORBIT_API_KEY=your-orbit-api-key-here
 
 # Optional: GitHub Integration
 GITHUB_APP_ID=your-github-app-id
 GITHUB_PRIVATE_KEY_PATH=/path/to/github/private/key.pem
 ```
+
+Set the same shared secret value as `ORBIT_SERVER_API_KEY` on the hosted server and
+`ORBIT_API_KEY` on the Slack connector so authenticated control-plane calls succeed.
 
 ### 4. Install Dependencies and Build
 

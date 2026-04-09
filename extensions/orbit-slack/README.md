@@ -65,6 +65,10 @@ PORT=3000
 
 # Optional
 GITHUB_TOKEN=
+LINEAR_TOKEN=
+LINEAR_API_URL=https://api.linear.app/graphql
+GRAPHITE_TOKEN=
+GRAPHITE_API_URL=https://graphite.dev/api
 SENTRY_DSN=
 MAX_CONCURRENT_TASKS=10
 TASK_TIMEOUT=3600000
@@ -75,7 +79,7 @@ HEALTH_CHECK_INTERVAL=30000
 
 Prerequisites:
 
-- Node.js 18+
+- Node.js 20+
 - a running Orbit server with hosted task APIs enabled
 - Slack app configured for Socket Mode
 
@@ -105,10 +109,11 @@ bun run format
 2. Configure a slash command for `/ai`.
 3. Add bot token scopes:
    - `commands`
-   - `chat:write`
-   - `chat:write.public`
-   - `users:read`
-   - `channels:read`
+- `chat:write`
+- `chat:write.public`
+- `users:read`
+- `channels:read`
+- If you use Linear/Graphite status mirroring, add the corresponding API tokens above so the connector can post status updates back to those systems.
 4. Subscribe to the message events your workspace flow requires.
 
 ## Operator Workflows

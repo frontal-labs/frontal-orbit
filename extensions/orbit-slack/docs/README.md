@@ -97,7 +97,7 @@ HEALTH_CHECK_INTERVAL=30000
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - Bun package manager
 - Running Orbit server
 - Slack app with Socket Mode enabled

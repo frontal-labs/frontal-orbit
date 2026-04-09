@@ -33,14 +33,18 @@ export class OrbitApiClient {
   constructor() {
     this.baseUrl = config.orbit.apiUrl;
     this.timeout = config.orbit.timeout;
+    const defaultHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+      "User-Agent": "orbit-slack-bot/1.0.0",
+    };
+    if (config.orbit.apiKey) {
+      defaultHeaders["x-api-key"] = config.orbit.apiKey;
+    }
 
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: this.timeout,
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "orbit-slack-bot/1.0.0",
-      },
+      headers: defaultHeaders,
     });
 
     // Request interceptor for logging
@@ -294,6 +298,15 @@ export class OrbitApiClient {
     return url.toString();
   }
 
+  getEventsWebSocketHeaders(): Record<string, string> | undefined {
+    if (!config.orbit.apiKey) {
+      return undefined;
+    }
+    return {
+      "x-api-key": config.orbit.apiKey,
+    };
+  }
+
   async sendConnectorInteraction(
     connector: string,
     request: {
@@ -361,6 +374,35 @@ export class OrbitApiClient {
       logger.error("Slack event processing failed", error as Error);
       throw error;
     }
+  }
+
+  async postLinearStatus(params: {
+    issueId?: string;
+    identifier?: string;
+    url?: string;
+    state?: string;
+    taskId?: string;
+    message: string;
+  }): Promise<void> {
+    await this.sendConnectorEvent("linear", {
+      type: "orbit.status",
+      userId: params.taskId ?? "",
+      data: params,
+    });
+  }
+
+  async postGraphiteStatus(params: {
+    stackId?: string;
+    headBranch?: string;
+    baseBranch?: string;
+    taskId?: string;
+    message: string;
+  }): Promise<void> {
+    await this.sendConnectorEvent("graphite", {
+      type: "orbit.status",
+      userId: params.taskId ?? "",
+      data: params,
+    });
   }
 
   async checkSandboxStatus(): Promise<OrbitSandboxResponse> {

@@ -12,9 +12,13 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::tracker_reporting::{maybe_spawn_tracker_report, TrackerEvent};
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::Request;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -40,8 +44,14 @@ use orbit_tools::{
     HostedAgentCancellationSource, HostedAgentLaunchRequest, HostedAgentLocator,
     HostedAgentStatusSnapshot,
 };
+mod graphite_client;
+mod linear_client;
+mod tracker_reporting;
+use hex;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::Sha256;
 use tokio::sync::broadcast;
 
 const DEFAULT_EVENT_REPLAY_LIMIT: usize = 100;
@@ -116,6 +126,7 @@ pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub event_replay_limit: usize,
     pub lane_transport_kind: LaneTransportKind,
+    pub api_key: Option<String>,
     pub workspace_root: PathBuf,
     pub docker_image: String,
     pub docker_server_url: String,
@@ -140,6 +151,7 @@ impl Default for ServerConfig {
             bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8788),
             event_replay_limit: DEFAULT_EVENT_REPLAY_LIMIT,
             lane_transport_kind: LaneTransportKind::InMemory,
+            api_key: None,
             workspace_root: default_server_workspace_root(),
             docker_image: default_server_docker_image(),
             docker_server_url: default_server_docker_server_url(),
@@ -178,6 +190,13 @@ impl ServerConfig {
                 "tools-agent" | "tools_agent" | "agent" => LaneTransportKind::ToolsAgent,
                 _ => LaneTransportKind::InMemory,
             };
+        }
+
+        if let Ok(api_key) = env::var("ORBIT_SERVER_API_KEY") {
+            let api_key = api_key.trim();
+            if !api_key.is_empty() {
+                config.api_key = Some(api_key.to_string());
+            }
         }
 
         if let Ok(path) = env::var("ORBIT_SERVER_WORKSPACE_ROOT") {
@@ -245,6 +264,7 @@ pub struct ServerState {
     tasks: TaskRegistry,
     lane_transport_kind: LaneTransportKind,
     lane_transport: Arc<dyn LaneWorkerTransport>,
+    control_plane_api_key: Option<String>,
     contexts: Arc<Mutex<HashMap<String, HostedTaskContext>>>,
     persistence: Option<Arc<ServerStatePersistence>>,
     event_sender: broadcast::Sender<EventEnvelope>,
@@ -290,6 +310,7 @@ impl ServerState {
             event_replay_limit,
             lane_transport_kind,
             state_file,
+            None,
             DEFAULT_ORPHAN_APPROVAL_DELAY,
             None,
             None,
@@ -305,6 +326,7 @@ impl ServerState {
         event_replay_limit: usize,
         lane_transport_kind: LaneTransportKind,
         state_file: Option<PathBuf>,
+        control_plane_api_key: Option<String>,
         orphan_approval_delay: Duration,
         orphan_auto_retry_after: Option<Duration>,
         orphan_auto_cancel_after: Option<Duration>,
@@ -319,6 +341,7 @@ impl ServerState {
                 workspace_root,
                 docker_image,
                 docker_server_url,
+                control_plane_api_key.clone(),
             )),
             LaneTransportKind::ToolsAgent => Arc::new(HostedAgentLaneWorkerTransport),
         };
@@ -326,6 +349,7 @@ impl ServerState {
             event_replay_limit,
             lane_transport_kind,
             lane_transport,
+            control_plane_api_key,
             state_file,
             orphan_approval_delay,
             orphan_auto_retry_after,
@@ -339,6 +363,7 @@ impl ServerState {
         event_replay_limit: usize,
         lane_transport_kind: LaneTransportKind,
         lane_transport: Arc<dyn LaneWorkerTransport>,
+        control_plane_api_key: Option<String>,
         state_file: Option<PathBuf>,
         orphan_approval_delay: Duration,
         orphan_auto_retry_after: Option<Duration>,
@@ -369,6 +394,7 @@ impl ServerState {
             tasks,
             lane_transport_kind,
             lane_transport,
+            control_plane_api_key,
             contexts: Arc::new(Mutex::new(contexts)),
             persistence,
             event_sender,
@@ -408,6 +434,7 @@ impl ServerState {
             lane_transport_kind,
             lane_transport,
             None,
+            None,
             DEFAULT_ORPHAN_APPROVAL_DELAY,
             None,
             None,
@@ -426,6 +453,7 @@ impl ServerState {
             event_replay_limit,
             LaneTransportKind::InMemory,
             lane_transport,
+            None,
             Some(state_file),
             DEFAULT_ORPHAN_APPROVAL_DELAY,
             None,
@@ -447,6 +475,7 @@ impl ServerState {
             event_replay_limit,
             LaneTransportKind::InMemory,
             lane_transport,
+            None,
             None,
             orphan_approval_delay,
             orphan_auto_retry_after,
@@ -470,11 +499,19 @@ impl ServerState {
             LaneTransportKind::InMemory,
             lane_transport,
             None,
+            None,
             orphan_approval_delay,
             orphan_auto_retry_after,
             orphan_auto_cancel_after,
             orphan_policy_rules,
         )
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    fn with_control_plane_api_key(mut self, api_key: Option<String>) -> Self {
+        self.control_plane_api_key = api_key;
+        self
     }
 
     fn record_context(&self, task_id: &str, context: HostedTaskContext) {
@@ -631,7 +668,7 @@ fn default_server_workspace_root() -> PathBuf {
 }
 
 fn default_server_docker_image() -> String {
-    "orbit-worker:latest".to_string()
+    "orbit-worker:local".to_string()
 }
 
 fn default_server_docker_server_url() -> String {
@@ -833,6 +870,13 @@ fn build_event_payload(
         github_review_state: context.github_review_state.clone(),
         github_feedback_required: context.github_feedback_required,
         github_feedback_reason: context.github_feedback_reason.clone(),
+        linear_issue_id: context.linear_issue_id.clone(),
+        linear_issue_url: context.linear_issue_url.clone(),
+        linear_issue_state: context.linear_issue_state.clone(),
+        linear_issue_identifier: context.linear_issue_identifier.clone(),
+        graphite_stack_id: context.graphite_stack_id.clone(),
+        graphite_head_branch: context.graphite_head_branch.clone(),
+        graphite_base_branch: context.graphite_base_branch.clone(),
         execution_backend: context.execution_backend.clone(),
         priority: context.priority.clone(),
         plan_id: context.plan_id.clone(),
@@ -969,6 +1013,20 @@ pub struct HostedTaskContext {
     pub github_feedback_required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_feedback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_identifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_stack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_head_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_base_branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_api_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1115,6 +1173,20 @@ pub struct HostedTaskSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_feedback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_issue_identifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_stack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_head_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphite_base_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_api_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_head_ref: Option<String>,
@@ -1175,6 +1247,13 @@ impl HostedTaskSnapshot {
             github_review_state: context.github_review_state,
             github_feedback_required: context.github_feedback_required,
             github_feedback_reason: context.github_feedback_reason,
+            linear_issue_id: context.linear_issue_id,
+            linear_issue_url: context.linear_issue_url,
+            linear_issue_state: context.linear_issue_state,
+            linear_issue_identifier: context.linear_issue_identifier,
+            graphite_stack_id: context.graphite_stack_id,
+            graphite_head_branch: context.graphite_head_branch,
+            graphite_base_branch: context.graphite_base_branch,
             pr_api_url: context.pr_api_url,
             pr_head_ref: context.pr_head_ref,
             pr_base_ref: context.pr_base_ref,
@@ -1196,6 +1275,13 @@ pub struct CreateTaskRequest {
     pub repo_url: Option<String>,
     pub base_ref: Option<String>,
     pub branch: Option<String>,
+    pub linear_issue_id: Option<String>,
+    pub linear_issue_url: Option<String>,
+    pub linear_issue_state: Option<String>,
+    pub linear_issue_identifier: Option<String>,
+    pub graphite_stack_id: Option<String>,
+    pub graphite_head_branch: Option<String>,
+    pub graphite_base_branch: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
     pub permission_mode: Option<String>,
@@ -1266,6 +1352,13 @@ pub struct UpdateTaskContextRequest {
     pub channel_id: Option<String>,
     pub thread_ts: Option<String>,
     pub approval_message_ts: Option<String>,
+    pub linear_issue_id: Option<String>,
+    pub linear_issue_url: Option<String>,
+    pub linear_issue_state: Option<String>,
+    pub linear_issue_identifier: Option<String>,
+    pub graphite_stack_id: Option<String>,
+    pub graphite_head_branch: Option<String>,
+    pub graphite_base_branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1436,9 +1529,58 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
+fn constant_time_equals(expected: &str, provided: &str) -> bool {
+    let expected = expected.as_bytes();
+    let provided = provided.as_bytes();
+    let max_len = expected.len().max(provided.len());
+    let mut diff = expected.len() ^ provided.len();
+
+    for idx in 0..max_len {
+        let left = expected.get(idx).copied().unwrap_or(0);
+        let right = provided.get(idx).copied().unwrap_or(0);
+        diff |= usize::from(left ^ right);
+    }
+
+    diff == 0
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+        })
+}
+
+fn is_control_plane_authorized(state: &ServerState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.control_plane_api_key.as_deref() else {
+        return true;
+    };
+
+    extract_api_key(headers)
+        .map(|provided| constant_time_equals(expected, provided))
+        .unwrap_or(false)
+}
+
+async fn require_control_plane_auth(
+    State(state): State<Arc<ServerState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    if is_control_plane_authorized(state.as_ref(), request.headers()) {
+        Ok(next.run(request).await)
+    } else {
+        Err(AppError::unauthorized("missing or invalid API key"))
+    }
+}
+
 pub fn app(state: Arc<ServerState>) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    let protected_state = state.clone();
+    let protected = Router::new()
         .route("/v1/status", get(status))
         .route("/v1/version", get(version))
         .route("/v1/policies/orphans", get(get_orphan_policy))
@@ -1460,7 +1602,18 @@ pub fn app(state: Arc<ServerState>) -> Router {
             post(connector_interaction),
         )
         .route("/v1/connectors/:connector/events", post(connector_event))
+        .route_layer(middleware::from_fn_with_state(
+            protected_state.clone(),
+            require_control_plane_auth,
+        ))
+        .with_state(protected_state);
+
+    Router::new()
+        .route("/health", get(health))
         .route("/v1/webhooks/github", post(github_webhook))
+        .route("/v1/webhooks/linear", post(linear_webhook))
+        .route("/v1/webhooks/graphite", post(graphite_webhook))
+        .merge(protected)
         .with_state(state)
 }
 
@@ -1470,6 +1623,7 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
             config.event_replay_limit,
             config.lane_transport_kind,
             config.state_file.clone(),
+            config.api_key.clone(),
             config.orphan_approval_delay,
             config.orphan_auto_retry_after,
             config.orphan_auto_cancel_after,
@@ -1641,6 +1795,27 @@ async fn update_task_context(
     }
     if let Some(approval_message_ts) = request.approval_message_ts {
         context.approval_message_ts = Some(approval_message_ts);
+    }
+    if let Some(linear_issue_id) = request.linear_issue_id {
+        context.linear_issue_id = Some(linear_issue_id);
+    }
+    if let Some(linear_issue_url) = request.linear_issue_url {
+        context.linear_issue_url = Some(linear_issue_url);
+    }
+    if let Some(linear_issue_state) = request.linear_issue_state {
+        context.linear_issue_state = Some(linear_issue_state);
+    }
+    if let Some(linear_issue_identifier) = request.linear_issue_identifier {
+        context.linear_issue_identifier = Some(linear_issue_identifier);
+    }
+    if let Some(graphite_stack_id) = request.graphite_stack_id {
+        context.graphite_stack_id = Some(graphite_stack_id);
+    }
+    if let Some(graphite_head_branch) = request.graphite_head_branch {
+        context.graphite_head_branch = Some(graphite_head_branch);
+    }
+    if let Some(graphite_base_branch) = request.graphite_base_branch {
+        context.graphite_base_branch = Some(graphite_base_branch);
     }
 
     state.record_context(&task_id, context);
@@ -2433,6 +2608,13 @@ async fn complete_task(
                 .tasks
                 .set_status(&task_id, TaskStatus::Completed)
                 .map_err(AppError::internal)?;
+            maybe_spawn_tracker_report(
+                task_id.clone(),
+                context.clone(),
+                TrackerEvent::Completed {
+                    result: request.result.as_deref(),
+                },
+            );
             state.broadcast_event(EventEnvelope::new(
                 HostedEventName::LaneGreen,
                 HostedEventStatus::Completed,
@@ -2468,6 +2650,13 @@ async fn complete_task(
                     .append_output(&task_id, error)
                     .map_err(AppError::internal)?;
             }
+            maybe_spawn_tracker_report(
+                task_id.clone(),
+                context.clone(),
+                TrackerEvent::Failed {
+                    error: failure_error.as_deref(),
+                },
+            );
             state.broadcast_event(EventEnvelope::new(
                 HostedEventName::LaneFailed,
                 HostedEventStatus::Failed,
@@ -2603,6 +2792,25 @@ async fn connector_event(
         None,
     ));
     StatusCode::ACCEPTED
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn verify_hmac_signature(secret: &str, signature_header: Option<&str>, body: &[u8]) -> bool {
+    let signature = match signature_header {
+        Some(sig) => sig,
+        None => return false,
+    };
+    let hex_sig = signature.strip_prefix("sha256=").unwrap_or(signature);
+    let Ok(expected) = hex::decode(hex_sig) else {
+        return false;
+    };
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(mac) => mac,
+        Err(_) => return false,
+    };
+    mac.update(body);
+    mac.verify_slice(&expected).is_ok()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2886,8 +3094,21 @@ fn find_task_for_github_webhook(
 async fn github_webhook(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    body: Bytes,
 ) -> StatusCode {
+    if let Ok(secret) = env::var("ORBIT_GITHUB_WEBHOOK_SECRET") {
+        let signature = headers
+            .get("x-hub-signature-256")
+            .and_then(|h| h.to_str().ok());
+        if !verify_hmac_signature(&secret, signature, &body) {
+            return StatusCode::UNAUTHORIZED;
+        }
+    }
+
+    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
+
     let webhook = summarize_github_webhook(&headers, &payload);
     let event_type = match webhook.action.as_deref() {
         Some(action) if !action.is_empty() => format!("{}.{}", webhook.event_name, action),
@@ -2947,6 +3168,13 @@ async fn github_webhook(
         ));
         if let Some(followup_change) = followup_change {
             if followup_change.required {
+                maybe_spawn_tracker_report(
+                    task_id.clone(),
+                    context.clone(),
+                    TrackerEvent::ApprovalRequested {
+                        reason: followup_change.reason.as_deref(),
+                    },
+                );
                 state.broadcast_event(EventEnvelope::new(
                     HostedEventName::ApprovalRequested,
                     HostedEventStatus::Pending,
@@ -2995,6 +3223,410 @@ async fn github_webhook(
                 ));
             }
         }
+        let _ = state.persist_state();
+    } else {
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers::default(),
+            Some(
+                serde_json::to_value(connector_payload)
+                    .expect("connector event payload should serialize"),
+            ),
+            None,
+        ));
+    }
+
+    StatusCode::ACCEPTED
+}
+
+#[derive(Debug, Clone, Default)]
+struct LinearWebhookSummary {
+    event_type: String,
+    issue_id: Option<String>,
+    issue_url: Option<String>,
+    issue_state: Option<String>,
+    issue_identifier: Option<String>,
+    task_id: Option<String>,
+    actor: Option<String>,
+}
+
+fn summarize_linear_webhook(payload: &Value) -> LinearWebhookSummary {
+    LinearWebhookSummary {
+        event_type: payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| "linear.event".to_string()),
+        issue_id: payload
+            .get("issue")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("issue_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        issue_url: payload
+            .get("issue")
+            .and_then(|v| v.get("url"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("issue_url")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        issue_state: payload
+            .get("issue")
+            .and_then(|v| v.get("state"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("issue_state")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        issue_identifier: payload
+            .get("issue")
+            .and_then(|v| v.get("identifier"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("issue_identifier")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        task_id: payload
+            .get("task_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        actor: payload
+            .get("actor")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("user_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+    }
+}
+
+fn apply_linear_webhook_to_context(
+    context: &mut HostedTaskContext,
+    webhook: &LinearWebhookSummary,
+) {
+    if let Some(id) = webhook.issue_id.clone() {
+        context.linear_issue_id = Some(id);
+    }
+    if let Some(url) = webhook.issue_url.clone() {
+        context.linear_issue_url = Some(url);
+    }
+    if let Some(state) = webhook.issue_state.clone() {
+        context.linear_issue_state = Some(state);
+    }
+    if let Some(identifier) = webhook.issue_identifier.clone() {
+        context.linear_issue_identifier = Some(identifier);
+    }
+}
+
+fn matches_linear_webhook_to_context(
+    context: &HostedTaskContext,
+    webhook: &LinearWebhookSummary,
+) -> bool {
+    if let Some(task_id) = webhook.task_id.as_deref() {
+        return context
+            .work_item_id
+            .as_deref()
+            .map(|id| id == task_id)
+            .unwrap_or(false)
+            || context
+                .lane_id
+                .as_deref()
+                .map(|id| id == task_id)
+                .unwrap_or(false);
+    }
+
+    if let Some(issue_id) = webhook.issue_id.as_deref() {
+        return context.linear_issue_id.as_deref() == Some(issue_id);
+    }
+    if let Some(identifier) = webhook.issue_identifier.as_deref() {
+        return context.linear_issue_identifier.as_deref() == Some(identifier);
+    }
+
+    false
+}
+
+fn find_task_for_linear_webhook(
+    state: &ServerState,
+    webhook: &LinearWebhookSummary,
+) -> Option<(String, HostedTaskContext)> {
+    if let Some(task_id) = webhook.task_id.as_deref() {
+        if let Some(context) = state.context_for(task_id) {
+            return Some((task_id.to_string(), context));
+        }
+    }
+    let contexts = state.contexts.lock().ok()?;
+    contexts.iter().find_map(|(task_id, context)| {
+        matches_linear_webhook_to_context(context, webhook)
+            .then(|| (task_id.clone(), context.clone()))
+    })
+}
+
+async fn linear_webhook(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    if let Ok(secret) = env::var("ORBIT_LINEAR_WEBHOOK_SECRET") {
+        let signature = headers
+            .get("x-linear-signature")
+            .and_then(|h| h.to_str().ok());
+        if !verify_hmac_signature(&secret, signature, &body) {
+            return StatusCode::UNAUTHORIZED;
+        }
+    }
+
+    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
+
+    let webhook = summarize_linear_webhook(&payload);
+    let connector_payload = ConnectorEventPayload::new(
+        "linear",
+        webhook.event_type.clone(),
+        webhook.actor.clone(),
+        payload.clone(),
+    );
+
+    if let Some((task_id, mut context)) = find_task_for_linear_webhook(state.as_ref(), &webhook) {
+        apply_linear_webhook_to_context(&mut context, &webhook);
+        state.record_context(&task_id, context.clone());
+        let task_status = state
+            .tasks
+            .get(&task_id)
+            .map(|task| hosted_task_status_label(HostedTaskStatus::from_runtime(task.status)));
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers {
+                repo_id: context.repository.clone(),
+                lane_id: context.lane_id.clone(),
+                task_id: Some(task_id.clone()),
+                ..EventIdentifiers::default()
+            },
+            build_event_payload(
+                &context,
+                task_status,
+                Some(serialize_event_extra(connector_payload.clone())),
+            ),
+            None,
+        ));
+        let _ = state.persist_state();
+    } else {
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers::default(),
+            Some(
+                serde_json::to_value(connector_payload)
+                    .expect("connector event payload should serialize"),
+            ),
+            None,
+        ));
+    }
+
+    StatusCode::ACCEPTED
+}
+
+#[derive(Debug, Clone, Default)]
+struct GraphiteWebhookSummary {
+    event_type: String,
+    stack_id: Option<String>,
+    head_branch: Option<String>,
+    base_branch: Option<String>,
+    task_id: Option<String>,
+    actor: Option<String>,
+}
+
+fn summarize_graphite_webhook(payload: &Value) -> GraphiteWebhookSummary {
+    GraphiteWebhookSummary {
+        event_type: payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| "graphite.event".to_string()),
+        stack_id: payload
+            .get("stack_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("stackId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                payload
+                    .get("stack")
+                    .and_then(|v| v.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        head_branch: payload
+            .get("stack")
+            .and_then(|v| v.get("head"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("head_branch")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        base_branch: payload
+            .get("stack")
+            .and_then(|v| v.get("base"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("base_branch")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        task_id: payload
+            .get("task_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        actor: payload
+            .get("actor")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("user_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+    }
+}
+
+fn apply_graphite_webhook_to_context(
+    context: &mut HostedTaskContext,
+    webhook: &GraphiteWebhookSummary,
+) {
+    if let Some(stack_id) = webhook.stack_id.clone() {
+        context.graphite_stack_id = Some(stack_id);
+    }
+    if let Some(head) = webhook.head_branch.clone() {
+        context.graphite_head_branch = Some(head);
+    }
+    if let Some(base) = webhook.base_branch.clone() {
+        context.graphite_base_branch = Some(base);
+    }
+}
+
+fn matches_graphite_webhook_to_context(
+    context: &HostedTaskContext,
+    webhook: &GraphiteWebhookSummary,
+) -> bool {
+    if let Some(task_id) = webhook.task_id.as_deref() {
+        return context
+            .work_item_id
+            .as_deref()
+            .map(|id| id == task_id)
+            .unwrap_or(false)
+            || context
+                .lane_id
+                .as_deref()
+                .map(|id| id == task_id)
+                .unwrap_or(false);
+    }
+    if let Some(stack_id) = webhook.stack_id.as_deref() {
+        return context.graphite_stack_id.as_deref() == Some(stack_id);
+    }
+    false
+}
+
+fn find_task_for_graphite_webhook(
+    state: &ServerState,
+    webhook: &GraphiteWebhookSummary,
+) -> Option<(String, HostedTaskContext)> {
+    if let Some(task_id) = webhook.task_id.as_deref() {
+        if let Some(context) = state.context_for(task_id) {
+            return Some((task_id.to_string(), context));
+        }
+    }
+    let contexts = state.contexts.lock().ok()?;
+    contexts.iter().find_map(|(task_id, context)| {
+        matches_graphite_webhook_to_context(context, webhook)
+            .then(|| (task_id.clone(), context.clone()))
+    })
+}
+
+async fn graphite_webhook(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    if let Ok(secret) = env::var("ORBIT_GRAPHITE_WEBHOOK_SECRET") {
+        let signature = headers
+            .get("x-graphite-signature")
+            .and_then(|h| h.to_str().ok());
+        if !verify_hmac_signature(&secret, signature, &body) {
+            return StatusCode::UNAUTHORIZED;
+        }
+    }
+
+    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
+
+    let webhook = summarize_graphite_webhook(&payload);
+    let connector_payload = ConnectorEventPayload::new(
+        "graphite",
+        webhook.event_type.clone(),
+        webhook.actor.clone(),
+        payload.clone(),
+    );
+
+    if let Some((task_id, mut context)) = find_task_for_graphite_webhook(state.as_ref(), &webhook) {
+        apply_graphite_webhook_to_context(&mut context, &webhook);
+        state.record_context(&task_id, context.clone());
+        let task_status = state
+            .tasks
+            .get(&task_id)
+            .map(|task| hosted_task_status_label(HostedTaskStatus::from_runtime(task.status)));
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers {
+                repo_id: context.repository.clone(),
+                lane_id: context.lane_id.clone(),
+                task_id: Some(task_id.clone()),
+                ..EventIdentifiers::default()
+            },
+            build_event_payload(
+                &context,
+                task_status,
+                Some(serialize_event_extra(connector_payload.clone())),
+            ),
+            None,
+        ));
         let _ = state.persist_state();
     } else {
         state.broadcast_event(EventEnvelope::new(
@@ -3402,15 +4034,22 @@ struct LocalDockerLaneWorkerTransport {
     workspace_root: PathBuf,
     image: String,
     server_url: String,
+    server_api_key: Option<String>,
     docker: Arc<dyn DockerRunner>,
 }
 
 impl LocalDockerLaneWorkerTransport {
-    fn new(workspace_root: PathBuf, image: String, server_url: String) -> Self {
+    fn new(
+        workspace_root: PathBuf,
+        image: String,
+        server_url: String,
+        server_api_key: Option<String>,
+    ) -> Self {
         Self {
             workspace_root,
             image,
             server_url,
+            server_api_key,
             docker: Arc::new(CliDockerRunner),
         }
     }
@@ -3420,12 +4059,14 @@ impl LocalDockerLaneWorkerTransport {
         workspace_root: PathBuf,
         image: String,
         server_url: String,
+        server_api_key: Option<String>,
         docker: Arc<dyn DockerRunner>,
     ) -> Self {
         Self {
             workspace_root,
             image,
             server_url,
+            server_api_key,
             docker,
         }
     }
@@ -3455,6 +4096,9 @@ impl LaneWorkerTransport for LocalDockerLaneWorkerTransport {
                 "/workspace/.orbit-hosted/task.json".to_string(),
             ),
         ]);
+        if let Some(api_key) = &self.server_api_key {
+            container_env.insert("ORBIT_SERVER_API_KEY".to_string(), api_key.clone());
+        }
         for key in [
             "GITHUB_TOKEN",
             "ORBIT_GITHUB_API_BASE",
@@ -3633,6 +4277,13 @@ fn create_task_internal(state: &ServerState, request: CreateTaskRequest) -> Resu
         github_review_state: None,
         github_feedback_required: None,
         github_feedback_reason: None,
+        linear_issue_id: request.linear_issue_id,
+        linear_issue_url: request.linear_issue_url,
+        linear_issue_state: request.linear_issue_state,
+        linear_issue_identifier: request.linear_issue_identifier,
+        graphite_stack_id: request.graphite_stack_id,
+        graphite_head_branch: request.graphite_head_branch,
+        graphite_base_branch: request.graphite_base_branch,
         pr_api_url: None,
         pr_head_ref: None,
         pr_base_ref: None,
@@ -3909,6 +4560,41 @@ fn build_work_item_context(request: &CreateTaskRequest) -> WorkItemContext {
     insert_metadata(&mut metadata, "repo_url", request.repo_url.clone());
     insert_metadata(&mut metadata, "base_ref", request.base_ref.clone());
     insert_metadata(&mut metadata, "branch", request.branch.clone());
+    insert_metadata(
+        &mut metadata,
+        "linear_issue_id",
+        request.linear_issue_id.clone(),
+    );
+    insert_metadata(
+        &mut metadata,
+        "linear_issue_url",
+        request.linear_issue_url.clone(),
+    );
+    insert_metadata(
+        &mut metadata,
+        "linear_issue_state",
+        request.linear_issue_state.clone(),
+    );
+    insert_metadata(
+        &mut metadata,
+        "linear_issue_identifier",
+        request.linear_issue_identifier.clone(),
+    );
+    insert_metadata(
+        &mut metadata,
+        "graphite_stack_id",
+        request.graphite_stack_id.clone(),
+    );
+    insert_metadata(
+        &mut metadata,
+        "graphite_head_branch",
+        request.graphite_head_branch.clone(),
+    );
+    insert_metadata(
+        &mut metadata,
+        "graphite_base_branch",
+        request.graphite_base_branch.clone(),
+    );
     insert_metadata(&mut metadata, "source", request.source.clone());
     insert_metadata(&mut metadata, "user_id", request.user_id.clone());
     insert_metadata(&mut metadata, "channel_id", request.channel_id.clone());
@@ -4015,6 +4701,13 @@ impl AppError {
         }
     }
 
+    fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            message: message.into(),
+        }
+    }
+
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -4051,6 +4744,33 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use tower::util::ServiceExt;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    static GITHUB_WEBHOOK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = env::var_os(key);
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.as_ref() {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     #[derive(Debug)]
     struct FailingLaneWorkerTransport;
@@ -4635,6 +5355,7 @@ mod tests {
                 workspace_root.clone(),
                 "orbit-worker:test".to_string(),
                 "http://host.docker.internal:8788".to_string(),
+                Some("server-secret".to_string()),
                 docker.clone(),
             )),
         ));
@@ -4755,6 +5476,13 @@ mod tests {
                 .map(String::as_str),
             Some("/workspace/.orbit-hosted/task.json")
         );
+        assert_eq!(
+            launched[0]
+                .env
+                .get("ORBIT_SERVER_API_KEY")
+                .map(String::as_str),
+            Some("server-secret")
+        );
 
         let task_payload: HostedDockerTaskPayload = serde_json::from_slice(
             &fs::read(checkout_root.join(".orbit-hosted").join("task.json")).unwrap(),
@@ -4820,6 +5548,7 @@ mod tests {
                 workspace_root,
                 "orbit-worker:test".to_string(),
                 "http://host.docker.internal:8788".to_string(),
+                None,
                 docker,
             )),
         ));
@@ -7000,6 +7729,8 @@ mod tests {
 
     #[tokio::test]
     async fn github_webhook_route_correlates_pull_request_event_to_hosted_task() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7153,6 +7884,8 @@ mod tests {
 
     #[tokio::test]
     async fn github_webhook_route_persists_closed_merge_state_for_hosted_task() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7268,6 +8001,8 @@ mod tests {
 
     #[tokio::test]
     async fn github_review_webhook_requests_followup_for_hosted_task() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7382,6 +8117,8 @@ mod tests {
 
     #[tokio::test]
     async fn github_review_approval_webhook_clears_followup_for_hosted_task() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7489,6 +8226,8 @@ mod tests {
 
     #[tokio::test]
     async fn github_webhook_route_emits_unmatched_event_without_task_binding() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7547,6 +8286,177 @@ mod tests {
                 .and_then(Value::as_str),
             Some("Looks good to me")
         );
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_rejects_invalid_signature_when_secret_set() {
+        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", Some("secret"));
+        let state = Arc::new(
+            ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
+                10,
+                LaneTransportKind::InMemory,
+                None,
+                None,
+                Duration::from_secs(0),
+                None,
+                None,
+                Vec::new(),
+                default_server_workspace_root(),
+                default_server_docker_image(),
+                default_server_docker_server_url(),
+            ),
+        );
+
+        let payload = json!({
+            "type": "issue.updated",
+            "issue": { "id": "iss_123", "identifier": "LIN-123" }
+        });
+
+        let response = super::app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/linear")
+                    .header("content-type", "application/json")
+                    .header("x-linear-signature", "sha256=deadbeef")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn graphite_webhook_rejects_invalid_signature_when_secret_set() {
+        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", Some("secret"));
+        let state = Arc::new(
+            ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
+                10,
+                LaneTransportKind::InMemory,
+                None,
+                None,
+                Duration::from_secs(0),
+                None,
+                None,
+                Vec::new(),
+                default_server_workspace_root(),
+                default_server_docker_image(),
+                default_server_docker_server_url(),
+            ),
+        );
+
+        let payload = json!({
+            "type": "stack.updated",
+            "stack_id": "stack-1"
+        });
+
+        let response = super::app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/graphite")
+                    .header("content-type", "application/json")
+                    .header("x-graphite-signature", "sha256=deadbeef")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn github_webhook_rejects_invalid_signature_when_secret_set() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some("secret"));
+        let state = Arc::new(ServerState::new(10));
+
+        let payload = json!({
+            "action": "opened",
+            "repository": { "full_name": "acme/orbit" },
+            "pull_request": { "number": 42 }
+        });
+
+        let response = super::app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "pull_request")
+                    .header("x-hub-signature-256", "sha256=deadbeef")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn control_plane_routes_require_api_key_when_configured() {
+        let state = Arc::new(
+            ServerState::new(10).with_control_plane_api_key(Some("top-secret".to_string())),
+        );
+        let router = super::app(state);
+
+        let unauthorized = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/status")
+                    .header("x-api-key", "top-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn webhook_routes_remain_public_when_control_plane_api_key_is_configured() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let state = Arc::new(
+            ServerState::new(10).with_control_plane_api_key(Some("top-secret".to_string())),
+        );
+
+        let payload = json!({
+            "action": "opened",
+            "repository": { "full_name": "acme/orbit" },
+            "pull_request": { "number": 42 }
+        });
+
+        let response = super::app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "pull_request")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
@@ -8558,6 +9468,13 @@ mod tests {
             repo_url: Some("https://github.com/acme/payments.git".to_string()),
             base_ref: Some("main".to_string()),
             branch: Some("orbit/repo-aware".to_string()),
+            linear_issue_id: None,
+            linear_issue_url: None,
+            linear_issue_state: None,
+            linear_issue_identifier: None,
+            graphite_stack_id: None,
+            graphite_head_branch: None,
+            graphite_base_branch: None,
             model: Some("gpt-5.4".to_string()),
             provider: Some("openai".to_string()),
             permission_mode: Some("workspace-write".to_string()),

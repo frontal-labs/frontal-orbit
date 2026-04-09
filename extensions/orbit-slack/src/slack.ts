@@ -60,8 +60,9 @@ export class SlackInterface {
     });
 
     this.orbitApi = new OrbitApiClient();
-    this.orbitEvents = new OrbitEventsClient((query) =>
-      this.orbitApi.getEventsWebSocketUrl(query)
+    this.orbitEvents = new OrbitEventsClient(
+      (query) => this.orbitApi.getEventsWebSocketUrl(query),
+      () => this.orbitApi.getEventsWebSocketHeaders()
     );
     this.orbitEvents.onTrackedTaskEvent(async (event, task) => {
       await this.handleOrbitTaskEvent(event, task);
@@ -456,6 +457,8 @@ export class SlackInterface {
       return;
     }
 
+    await this.postExternalStatusUpdates(event, message.text);
+
     if (
       event.event === "approval.requested" &&
       this.approvalResolved.has(nextTask.taskId)
@@ -513,6 +516,75 @@ export class SlackInterface {
     if (this.isTerminalOrbitEvent(event)) {
       await this.cleanupTaskState(nextTask.taskId);
     }
+  }
+
+  private async postExternalStatusUpdates(
+    event: OrbitEventEnvelope,
+    fallbackText: string
+  ): Promise<void> {
+    const payload = event.payload;
+    if (!payload) return;
+
+    const hasLinear =
+      payload.linear_issue_id ||
+      payload.linear_issue_identifier ||
+      payload.linear_issue_url;
+    const hasGraphite =
+      payload.graphite_stack_id ||
+      payload.graphite_head_branch ||
+      payload.graphite_base_branch;
+    if (!hasLinear && !hasGraphite) return;
+
+    const message =
+      this.buildExternalStatusMessage(event) ?? fallbackText ?? undefined;
+    if (!message) return;
+
+    if (hasLinear) {
+      try {
+        await this.orbitApi.postLinearStatus({
+          issueId: payload.linear_issue_id,
+          identifier: payload.linear_issue_identifier,
+          url: payload.linear_issue_url,
+          state: payload.linear_issue_state,
+          taskId: event.task_id,
+          message,
+        });
+      } catch (error) {
+        logger.warn("Failed to post Linear status", {
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    if (hasGraphite) {
+      try {
+        await this.orbitApi.postGraphiteStatus({
+          stackId: payload.graphite_stack_id,
+          headBranch: payload.graphite_head_branch,
+          baseBranch: payload.graphite_base_branch,
+          taskId: event.task_id,
+          message,
+        });
+      } catch (error) {
+        logger.warn("Failed to post Graphite status", {
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  private buildExternalStatusMessage(
+    event: OrbitEventEnvelope
+  ): string | undefined {
+    const summary = this.readEventTaskSummary(event);
+    const syntheticTask: OrbitTrackedTask = {
+      taskId: event.task_id || summary?.work_item_id || "task",
+      channelId: summary?.channel_id || "external",
+      threadTs: summary?.thread_ts || undefined,
+      userId: summary?.user_id || "",
+    };
+    const formatted = this.formatOrbitEvent(event, syntheticTask);
+    return formatted?.text;
   }
 
   private async resolveTrackedTaskForEvent(

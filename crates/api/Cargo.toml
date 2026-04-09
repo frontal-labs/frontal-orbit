@@ -10,6 +10,7 @@ name = "orbit-api"
 path = "src/main.rs"
 
 [dependencies]
+orbit-core = { path = "../core" }
 orbit-providers = { path = "../providers" }
 axum = "0.7"
 serde = { version = "1", features = ["derive"] }

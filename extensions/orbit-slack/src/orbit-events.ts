@@ -11,6 +11,7 @@ type TrackedTaskHandler = (
   task?: OrbitTrackedTask
 ) => Promise<void> | void;
 type OrbitEventsUrlBuilder = (query?: OrbitEventStreamQuery) => string;
+type OrbitEventsHeadersBuilder = () => Record<string, string> | undefined;
 
 const RECENT_EVENTS_PER_TASK = 12;
 const MAX_SEEN_EVENT_KEYS = 512;
@@ -18,6 +19,7 @@ const RECONNECT_DELAY_MS = 2_000;
 
 export class OrbitEventsClient {
   private readonly urlBuilder: OrbitEventsUrlBuilder;
+  private readonly headersBuilder: OrbitEventsHeadersBuilder;
   private readonly taskHints = new Map<string, OrbitTrackedTask>();
   private readonly handlers = new Set<TrackedTaskHandler>();
   private readonly recentEvents = new Map<string, OrbitEventEnvelope[]>();
@@ -29,8 +31,12 @@ export class OrbitEventsClient {
   private restartRequested = false;
   private currentUrl?: string;
 
-  constructor(urlBuilder: OrbitEventsUrlBuilder) {
+  constructor(
+    urlBuilder: OrbitEventsUrlBuilder,
+    headersBuilder: OrbitEventsHeadersBuilder = () => undefined
+  ) {
     this.urlBuilder = urlBuilder;
+    this.headersBuilder = headersBuilder;
   }
 
   async connect(): Promise<void> {
@@ -80,9 +86,10 @@ export class OrbitEventsClient {
 
   private async openSocket(): Promise<void> {
     const nextUrl = this.buildSocketUrl();
+    const headers = this.headersBuilder();
     this.currentUrl = nextUrl;
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(nextUrl);
+      const socket = new WebSocket(nextUrl, headers ? { headers } : undefined);
       this.socket = socket;
 
       socket.once("open", () => {

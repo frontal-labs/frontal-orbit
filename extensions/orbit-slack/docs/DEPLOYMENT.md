@@ -14,7 +14,7 @@ Docker provides a consistent, isolated environment for running the extension.
 
 ```bash
 # Build the Docker image
-docker build -t orbit-slack:latest .
+docker build -t orbit-slack:v0.1.0 .
 
 # Build with specific tag
 docker build -t orbit-slack:v0.1.0 .
@@ -28,7 +28,7 @@ docker run -d \
   --name orbit-slack \
   -p 3000:3000 \
   --env-file .env \
-  orbit-slack:latest
+orbit-slack:v0.1.0
 
 # With volume for logs
 docker run -d \
@@ -36,7 +36,7 @@ docker run -d \
   -p 3000:3000 \
   --env-file .env \
   -v /path/to/logs:/app/logs \
-  orbit-slack:latest
+orbit-slack:v0.1.0
 ```
 
 #### Docker Compose
@@ -87,7 +87,7 @@ spec:
     spec:
       containers:
       - name: orbit-slack
-        image: orbit-slack:latest
+        image: orbit-slack:v0.1.0
         ports:
         - containerPort: 3000
         env:
@@ -161,12 +161,12 @@ For simple deployments without containerization.
 #### Prerequisites
 
 ```bash
-# Install Node.js 18+
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+# Install Node.js 20 LTS
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# Install Bun globally
-npm install -g bun
+# Install Bun from an official release and ensure `bun` is on PATH.
+# Avoid installing Bun via npm in production automation.
 
 # Create system user
 sudo useradd -r -s /bin/false orbit
@@ -501,7 +501,7 @@ cp bunfig.toml "$BACKUP_DIR/"
 cp -r logs/ "$BACKUP_DIR/"
 
 # Backup Docker image
-docker save orbit-slack:latest | gzip > "$BACKUP_DIR/orbit-slack.tar.gz"
+docker save orbit-slack:v0.1.0 | gzip > "$BACKUP_DIR/orbit-slack.tar.gz"
 
 echo "Backup completed: $BACKUP_DIR"
 ```
@@ -634,17 +634,17 @@ grep "WebSocket" logs/app.log | tail -f
 bun update
 
 # Check for security vulnerabilities
-bun audit
+npm audit --omit=dev --package-lock-only
 
 # Update Docker base image
-FROM node:18-alpine@sha256:<new-sha>
+FROM node:20-alpine@sha256:<new-sha>
 ```
 
 ### Security Patching
 
 ```bash
 # Check for security updates
-bun audit
+npm audit --omit=dev --package-lock-only
 
 # Apply security patches
 bun update --latest
