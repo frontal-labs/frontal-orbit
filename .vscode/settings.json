@@ -22,7 +22,7 @@
   "files.exclude": {
     "**/target": true,
     "**/Cargo.lock": true,
-    "**/.orbit": true,
+    "**/.orbit": false,
     "**/.sandbox-home": true,
     "**/*.pdb": true,
     "**/*.exe": true,
