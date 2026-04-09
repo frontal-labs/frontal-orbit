@@ -12,53 +12,83 @@ export const env = createEnv({
     SLACK_BOT_TOKEN: z
       .string()
       .min(1, "Slack bot token is required")
-      .startsWith("xoxb-", "Slack bot token must start with xoxb-"),
+      .startsWith("xoxb-", "Slack bot token must start with xoxb-")
+      .describe("Slack bot token for API access"),
     SLACK_APP_TOKEN: z
       .string()
       .min(1, "Slack app token is required")
-      .startsWith("xapp-", "Slack app token must start with xapp-"),
+      .startsWith("xapp-", "Slack app token must start with xapp-")
+      .describe("Slack app token for socket mode"),
     SLACK_SIGNING_SECRET: z
       .string()
-      .min(32, "Slack signing secret must be at least 32 characters"),
+      .min(32, "Slack signing secret must be at least 32 characters")
+      .describe("Slack signing secret for request verification"),
 
     // Orbit API Configuration
-    ORBIT_API_URL: z.string().url().default("http://orbit-api:8787"),
+    ORBIT_API_URL: z.string().url().default("http://orbit-api:8787").describe("Orbit API base URL"),
     ORBIT_API_TIMEOUT: z.coerce
       .number()
       .int()
       .min(1000)
       .max(300000)
-      .default(30000),
+      .default(30000)
+      .describe("Orbit API request timeout in milliseconds"),
 
     // Application Configuration
     NODE_ENV: z
       .enum(["development", "production", "test"])
-      .default("development"),
+      .default("development")
+      .describe("Node environment"),
     LOG_LEVEL: z
       .enum(["error", "warn", "info", "http", "debug"])
-      .default("info"),
-    PORT: z.coerce.number().int().min(1000).max(65535).default(3000),
+      .default("info")
+      .optional()
+      .describe("Logging level"),
+    PORT: z
+      .coerce.number()
+      .int()
+      .min(1000)
+      .max(65535)
+      .default(3000)
+      .optional()
+      .describe("Server port"),
 
     // GitHub Configuration (Optional)
-    GITHUB_TOKEN: z.string().min(1).optional(),
+    GITHUB_TOKEN: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("GitHub personal access token"),
 
     // Sentry Configuration (Optional)
-    SENTRY_DSN: z.string().url().optional(),
+    SENTRY_DSN: z
+      .string()
+      .url()
+      .optional()
+      .describe("Sentry DSN for error tracking"),
 
     // Advanced Configuration
-    MAX_CONCURRENT_TASKS: z.coerce.number().int().min(1).max(100).default(10),
-    TASK_TIMEOUT: z.coerce
-      .number()
+    MAX_CONCURRENT_TASKS: z
+      .coerce.number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(10)
+      .describe("Maximum number of concurrent tasks"),
+    TASK_TIMEOUT: z
+      .coerce.number()
       .int()
       .min(60000)
       .max(7200000)
-      .default(3600000), // 1 min to 2 hours
-    HEALTH_CHECK_INTERVAL: z.coerce
-      .number()
+      .default(3600000)
+      .describe("Task timeout in milliseconds (1 min to 2 hours)"),
+    HEALTH_CHECK_INTERVAL: z
+      .coerce.number()
       .int()
       .min(5000)
       .max(300000)
-      .default(30000), // 5s to 5min
+      .default(30000)
+      .describe("Health check interval in milliseconds (5s to 5min)"),
   },
 
   /**
@@ -164,8 +194,8 @@ export function getEnvConfig() {
     },
     github: env.GITHUB_TOKEN
       ? {
-          token: env.GITHUB_TOKEN,
-        }
+        token: env.GITHUB_TOKEN,
+      }
       : undefined,
     limits: {
       maxConcurrentTasks: env.MAX_CONCURRENT_TASKS,

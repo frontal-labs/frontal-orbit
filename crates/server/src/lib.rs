@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -662,6 +662,10 @@ fn task_matches_query(task: &HostedTaskSnapshot, query: &ListTasksQuery) -> bool
         && matches_optional_filter(query.channel_id.as_deref(), task.channel_id.as_deref())
         && matches_optional_filter(query.thread_ts.as_deref(), task.thread_ts.as_deref())
         && matches_optional_filter(query.repository.as_deref(), task.repository.as_deref())
+        && match query.needs_followup {
+            Some(true) => task.github_feedback_required.unwrap_or(false),
+            _ => true,
+        }
 }
 
 fn event_matches_query(
@@ -692,6 +696,7 @@ fn event_matches_query(
         && query.channel_id.is_none()
         && query.thread_ts.is_none()
         && query.repository.is_none()
+        && query.needs_followup.is_none()
     {
         return true;
     }
@@ -709,6 +714,10 @@ fn event_matches_query(
             query.repository.as_deref(),
             context.repository.as_deref().or(event.repo_id.as_deref()),
         )
+        && match query.needs_followup {
+            Some(true) => context.github_feedback_required.unwrap_or(false),
+            _ => true,
+        }
 }
 
 fn matches_optional_filter(expected: Option<&str>, actual: Option<&str>) -> bool {
@@ -816,6 +825,14 @@ fn build_event_payload(
         published_branch: context.published_branch.clone(),
         pr_url: context.pr_url.clone(),
         pr_number: context.pr_number,
+        pr_state: context.pr_state.clone(),
+        pr_merged: context.pr_merged,
+        pr_closed_at: context.pr_closed_at.clone(),
+        pr_merged_at: context.pr_merged_at.clone(),
+        published_commit_sha: context.published_commit_sha.clone(),
+        github_review_state: context.github_review_state.clone(),
+        github_feedback_required: context.github_feedback_required,
+        github_feedback_reason: context.github_feedback_reason.clone(),
         execution_backend: context.execution_backend.clone(),
         priority: context.priority.clone(),
         plan_id: context.plan_id.clone(),
@@ -938,6 +955,20 @@ pub struct HostedTaskContext {
     pub pr_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_closed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_review_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_feedback_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_feedback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_api_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1070,6 +1101,20 @@ pub struct HostedTaskSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_closed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_review_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_feedback_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_feedback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_api_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_head_ref: Option<String>,
@@ -1123,6 +1168,13 @@ impl HostedTaskSnapshot {
             published_remote: context.published_remote,
             pr_number: context.pr_number,
             pr_url: context.pr_url,
+            pr_state: context.pr_state,
+            pr_merged: context.pr_merged,
+            pr_closed_at: context.pr_closed_at,
+            pr_merged_at: context.pr_merged_at,
+            github_review_state: context.github_review_state,
+            github_feedback_required: context.github_feedback_required,
+            github_feedback_reason: context.github_feedback_reason,
             pr_api_url: context.pr_api_url,
             pr_head_ref: context.pr_head_ref,
             pr_base_ref: context.pr_base_ref,
@@ -1164,6 +1216,7 @@ pub struct ListTasksQuery {
     pub thread_ts: Option<String>,
     pub repository: Option<String>,
     pub limit: Option<usize>,
+    pub needs_followup: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1179,6 +1232,7 @@ pub struct EventStreamQuery {
     pub thread_ts: Option<String>,
     pub repository: Option<String>,
     pub limit: Option<usize>,
+    pub needs_followup: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -1221,6 +1275,10 @@ pub struct UpdateTaskGithubRequest {
     pub published_remote: Option<String>,
     pub pr_number: Option<u64>,
     pub pr_url: Option<String>,
+    pub pr_state: Option<String>,
+    pub pr_merged: Option<bool>,
+    pub pr_closed_at: Option<String>,
+    pub pr_merged_at: Option<String>,
     pub pr_api_url: Option<String>,
     pub pr_head_ref: Option<String>,
     pub pr_base_ref: Option<String>,
@@ -1242,6 +1300,14 @@ pub struct TaskGithubResponse {
     pub pr_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_closed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_api_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1265,6 +1331,10 @@ fn task_github_response_for_context(context: &HostedTaskContext) -> TaskGithubRe
         published_commit_sha: context.published_commit_sha.clone(),
         pr_number: context.pr_number,
         pr_url: context.pr_url.clone(),
+        pr_state: context.pr_state.clone(),
+        pr_merged: context.pr_merged,
+        pr_closed_at: context.pr_closed_at.clone(),
+        pr_merged_at: context.pr_merged_at.clone(),
         pr_api_url: context.pr_api_url.clone(),
         pr_head_ref: context.pr_head_ref.clone(),
         pr_base_ref: context.pr_base_ref.clone(),
@@ -1390,6 +1460,7 @@ pub fn app(state: Arc<ServerState>) -> Router {
             post(connector_interaction),
         )
         .route("/v1/connectors/:connector/events", post(connector_event))
+        .route("/v1/webhooks/github", post(github_webhook))
         .with_state(state)
 }
 
@@ -1614,6 +1685,18 @@ async fn update_task_github(
     }
     if let Some(pr_url) = request.pr_url {
         context.pr_url = Some(pr_url);
+    }
+    if let Some(pr_state) = request.pr_state {
+        context.pr_state = Some(pr_state);
+    }
+    if let Some(pr_merged) = request.pr_merged {
+        context.pr_merged = Some(pr_merged);
+    }
+    if let Some(pr_closed_at) = request.pr_closed_at {
+        context.pr_closed_at = Some(pr_closed_at);
+    }
+    if let Some(pr_merged_at) = request.pr_merged_at {
+        context.pr_merged_at = Some(pr_merged_at);
     }
     if let Some(pr_api_url) = request.pr_api_url {
         context.pr_api_url = Some(pr_api_url);
@@ -2173,62 +2256,142 @@ async fn resolve_approval(
     State(state): State<Arc<ServerState>>,
     Json(request): Json<ResolveApprovalRequest>,
 ) -> Result<Json<HostedTaskSnapshot>, AppError> {
-    if request.approval_kind != "orphaned_hosted_agent" {
-        return Err(AppError::bad_request(format!(
+    match request.approval_kind.as_str() {
+        "orphaned_hosted_agent" => {
+            if request.action != "cancel" && request.action != "retry" {
+                return Err(AppError::bad_request(format!(
+                    "unsupported approval action for orphaned hosted agent: {}",
+                    request.action
+                )));
+            }
+
+            let context = state
+                .context_for(&task_id)
+                .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+            if context.worker_status.as_deref() != Some(ORPHANED_WORKER_STATUS) {
+                return Err(AppError::bad_request(format!(
+                    "task {task_id} is not awaiting orphaned hosted agent approval"
+                )));
+            }
+
+            let snapshot = if request.action == "cancel" {
+                cancel_task_internal(state.as_ref(), &task_id)?
+            } else {
+                retry_task_lane_internal(state.as_ref(), &task_id, true)?
+            };
+            let refreshed_context = state
+                .context_for(&task_id)
+                .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+            state.broadcast_event(EventEnvelope::new(
+                HostedEventName::ApprovalResolved,
+                HostedEventStatus::Completed,
+                HostedEventTopic::Approval,
+                EventIdentifiers {
+                    repo_id: refreshed_context.repository.clone(),
+                    lane_id: refreshed_context.lane_id.clone(),
+                    task_id: Some(task_id.clone()),
+                    ..EventIdentifiers::default()
+                },
+                build_event_payload(
+                    &refreshed_context,
+                    Some(hosted_task_status_label(snapshot.status)),
+                    Some(serialize_event_extra(ApprovalResolvedEventPayload {
+                        approval_kind: request.approval_kind,
+                        action: request.action,
+                        resolved_by: request.resolved_by,
+                        reason: request.reason,
+                        extra: Map::new(),
+                    })),
+                ),
+                None,
+            ));
+            state.persist_state().map_err(AppError::internal)?;
+
+            Ok(Json(snapshot))
+        }
+        "github_review_followup" => {
+            if request.action != "ack" && request.action != "retry" {
+                return Err(AppError::bad_request(format!(
+                    "unsupported approval action for github_review_followup: {} (expected ack or retry)",
+                    request.action
+                )));
+            }
+            let mut context = state
+                .context_for(&task_id)
+                .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+
+            context.github_feedback_required = Some(false);
+            context.github_feedback_reason = None;
+            state.record_context(&task_id, context.clone());
+            let mut snapshot = state
+                .tasks
+                .get(&task_id)
+                .map(|task| state.task_snapshot(task))
+                .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+
+            if request.action == "retry" {
+                snapshot = retry_task_lane_internal(state.as_ref(), &task_id, true)?;
+                let refreshed_context = state
+                    .context_for(&task_id)
+                    .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+                state.broadcast_event(EventEnvelope::new(
+                    HostedEventName::ApprovalResolved,
+                    HostedEventStatus::Completed,
+                    HostedEventTopic::Approval,
+                    EventIdentifiers {
+                        repo_id: refreshed_context.repository.clone(),
+                        lane_id: refreshed_context.lane_id.clone(),
+                        task_id: Some(task_id.clone()),
+                        ..EventIdentifiers::default()
+                    },
+                    build_event_payload(
+                        &refreshed_context,
+                        Some(hosted_task_status_label(snapshot.status)),
+                        Some(serialize_event_extra(ApprovalResolvedEventPayload {
+                            approval_kind: request.approval_kind,
+                            action: request.action,
+                            resolved_by: request.resolved_by,
+                            reason: request.reason,
+                            extra: Map::from_iter([("connector".to_string(), json!("github"))]),
+                        })),
+                    ),
+                    None,
+                ));
+                state.persist_state().map_err(AppError::internal)?;
+                return Ok(Json(snapshot));
+            }
+
+            state.broadcast_event(EventEnvelope::new(
+                HostedEventName::ApprovalResolved,
+                HostedEventStatus::Completed,
+                HostedEventTopic::Approval,
+                EventIdentifiers {
+                    repo_id: context.repository.clone(),
+                    lane_id: context.lane_id.clone(),
+                    task_id: Some(task_id.clone()),
+                    ..EventIdentifiers::default()
+                },
+                build_event_payload(
+                    &context,
+                    Some(hosted_task_status_label(snapshot.status)),
+                    Some(serialize_event_extra(ApprovalResolvedEventPayload {
+                        approval_kind: request.approval_kind,
+                        action: request.action,
+                        resolved_by: request.resolved_by,
+                        reason: request.reason,
+                        extra: Map::from_iter([("connector".to_string(), json!("github"))]),
+                    })),
+                ),
+                None,
+            ));
+            state.persist_state().map_err(AppError::internal)?;
+            Ok(Json(snapshot))
+        }
+        _ => Err(AppError::bad_request(format!(
             "unsupported approval kind: {}",
             request.approval_kind
-        )));
+        ))),
     }
-    if request.action != "cancel" && request.action != "retry" {
-        return Err(AppError::bad_request(format!(
-            "unsupported approval action for orphaned hosted agent: {}",
-            request.action
-        )));
-    }
-
-    let context = state
-        .context_for(&task_id)
-        .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
-    if context.worker_status.as_deref() != Some(ORPHANED_WORKER_STATUS) {
-        return Err(AppError::bad_request(format!(
-            "task {task_id} is not awaiting orphaned hosted agent approval"
-        )));
-    }
-
-    let snapshot = if request.action == "cancel" {
-        cancel_task_internal(state.as_ref(), &task_id)?
-    } else {
-        retry_task_lane_internal(state.as_ref(), &task_id, true)?
-    };
-    let refreshed_context = state
-        .context_for(&task_id)
-        .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
-    state.broadcast_event(EventEnvelope::new(
-        HostedEventName::ApprovalResolved,
-        HostedEventStatus::Completed,
-        HostedEventTopic::Approval,
-        EventIdentifiers {
-            repo_id: refreshed_context.repository.clone(),
-            lane_id: refreshed_context.lane_id.clone(),
-            task_id: Some(task_id.clone()),
-            ..EventIdentifiers::default()
-        },
-        build_event_payload(
-            &refreshed_context,
-            Some(hosted_task_status_label(snapshot.status)),
-            Some(serialize_event_extra(ApprovalResolvedEventPayload {
-                approval_kind: request.approval_kind,
-                action: request.action,
-                resolved_by: request.resolved_by,
-                reason: request.reason,
-                extra: Map::new(),
-            })),
-        ),
-        None,
-    ));
-    state.persist_state().map_err(AppError::internal)?;
-
-    Ok(Json(snapshot))
 }
 
 async fn complete_task(
@@ -2442,6 +2605,414 @@ async fn connector_event(
     StatusCode::ACCEPTED
 }
 
+#[derive(Debug, Clone, Default)]
+struct GitHubWebhookSummary {
+    event_name: String,
+    action: Option<String>,
+    repository: Option<String>,
+    pr_number: Option<u64>,
+    pr_state: Option<String>,
+    pr_merged: Option<bool>,
+    pr_closed_at: Option<String>,
+    pr_merged_at: Option<String>,
+    pr_head_ref: Option<String>,
+    pr_base_ref: Option<String>,
+    pr_head_sha: Option<String>,
+    sender_login: Option<String>,
+    comment_body: Option<String>,
+    review_state: Option<String>,
+    review_body: Option<String>,
+    html_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitHubFollowupStateChange {
+    required: bool,
+    reason: Option<String>,
+    detail: Option<String>,
+}
+
+fn summarize_github_webhook(headers: &HeaderMap, payload: &Value) -> GitHubWebhookSummary {
+    GitHubWebhookSummary {
+        event_name: headers
+            .get("x-github-event")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string(),
+        action: payload
+            .get("action")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        repository: payload
+            .get("repository")
+            .and_then(|value| value.get("full_name"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        pr_number: payload
+            .get("pull_request")
+            .and_then(|value| value.get("number"))
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .get("issue")
+                    .and_then(|value| value.get("number"))
+                    .and_then(Value::as_u64)
+            }),
+        pr_state: payload
+            .get("pull_request")
+            .and_then(|value| value.get("state"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        pr_merged: payload
+            .get("pull_request")
+            .and_then(|value| value.get("merged"))
+            .and_then(Value::as_bool),
+        pr_closed_at: payload
+            .get("pull_request")
+            .and_then(|value| value.get("closed_at"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        pr_merged_at: payload
+            .get("pull_request")
+            .and_then(|value| value.get("merged_at"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        pr_head_ref: payload
+            .get("pull_request")
+            .and_then(|value| value.get("head"))
+            .and_then(|value| value.get("ref"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        pr_base_ref: payload
+            .get("pull_request")
+            .and_then(|value| value.get("base"))
+            .and_then(|value| value.get("ref"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        pr_head_sha: payload
+            .get("pull_request")
+            .and_then(|value| value.get("head"))
+            .and_then(|value| value.get("sha"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        sender_login: payload
+            .get("sender")
+            .and_then(|value| value.get("login"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        comment_body: payload
+            .get("comment")
+            .and_then(|value| value.get("body"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        review_state: payload
+            .get("review")
+            .and_then(|value| value.get("state"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        review_body: payload
+            .get("review")
+            .and_then(|value| value.get("body"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        html_url: payload
+            .get("pull_request")
+            .and_then(|value| value.get("html_url"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("review")
+                    .and_then(|value| value.get("html_url"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                payload
+                    .get("comment")
+                    .and_then(|value| value.get("html_url"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+    }
+}
+
+fn apply_github_webhook_to_context(
+    context: &mut HostedTaskContext,
+    webhook: &GitHubWebhookSummary,
+) {
+    if let Some(pr_number) = webhook.pr_number {
+        context.pr_number = Some(pr_number);
+    }
+    if let Some(html_url) = webhook.html_url.clone() {
+        context.pr_url = Some(html_url);
+    }
+    if let Some(pr_state) = webhook.pr_state.clone() {
+        context.pr_state = Some(pr_state);
+    }
+    if let Some(pr_merged) = webhook.pr_merged {
+        context.pr_merged = Some(pr_merged);
+    }
+    if let Some(pr_closed_at) = webhook.pr_closed_at.clone() {
+        context.pr_closed_at = Some(pr_closed_at);
+    }
+    if let Some(pr_merged_at) = webhook.pr_merged_at.clone() {
+        context.pr_merged_at = Some(pr_merged_at);
+    }
+    if let Some(pr_head_ref) = webhook.pr_head_ref.clone() {
+        context.pr_head_ref = Some(pr_head_ref.clone());
+        if context.published_branch.is_none() {
+            context.published_branch = Some(pr_head_ref);
+        }
+    }
+    if let Some(pr_base_ref) = webhook.pr_base_ref.clone() {
+        context.pr_base_ref = Some(pr_base_ref);
+    }
+    if let Some(pr_head_sha) = webhook.pr_head_sha.clone() {
+        context.published_commit_sha = Some(pr_head_sha);
+    }
+}
+
+fn apply_github_followup_signal(
+    context: &mut HostedTaskContext,
+    webhook: &GitHubWebhookSummary,
+) -> Option<GitHubFollowupStateChange> {
+    let previous_required = context.github_feedback_required.unwrap_or(false);
+    let previous_reason = context.github_feedback_reason.clone();
+
+    let next = match webhook.event_name.as_str() {
+        "pull_request_review" => {
+            let review_state = webhook
+                .review_state
+                .clone()
+                .map(|state| state.to_ascii_lowercase());
+            context.github_review_state = review_state.clone();
+            match review_state.as_deref() {
+                Some("changes_requested") => Some(GitHubFollowupStateChange {
+                    required: true,
+                    reason: Some("GitHub review requested changes.".to_string()),
+                    detail: webhook
+                        .review_body
+                        .clone()
+                        .or_else(|| webhook.html_url.clone()),
+                }),
+                Some("commented") => Some(GitHubFollowupStateChange {
+                    required: true,
+                    reason: Some("GitHub review feedback requires follow-up.".to_string()),
+                    detail: webhook
+                        .review_body
+                        .clone()
+                        .or_else(|| webhook.html_url.clone()),
+                }),
+                Some("approved") => Some(GitHubFollowupStateChange {
+                    required: false,
+                    reason: Some("GitHub review follow-up cleared.".to_string()),
+                    detail: webhook.html_url.clone(),
+                }),
+                _ => None,
+            }
+        }
+        "issue_comment" if webhook.action.as_deref() == Some("created") => {
+            Some(GitHubFollowupStateChange {
+                required: true,
+                reason: Some("GitHub PR comment requires follow-up.".to_string()),
+                detail: webhook
+                    .comment_body
+                    .clone()
+                    .or_else(|| webhook.html_url.clone()),
+            })
+        }
+        "pull_request"
+            if webhook.action.as_deref() == Some("closed") && webhook.pr_merged == Some(true) =>
+        {
+            Some(GitHubFollowupStateChange {
+                required: false,
+                reason: Some("GitHub PR merged; follow-up cleared.".to_string()),
+                detail: webhook.html_url.clone(),
+            })
+        }
+        _ => None,
+    }?;
+
+    context.github_feedback_required = Some(next.required);
+    if next.required {
+        context.github_feedback_reason = next.reason.clone();
+    } else {
+        context.github_feedback_reason = None;
+    }
+
+    if previous_required == next.required
+        && (next.required || previous_reason == context.github_feedback_reason)
+    {
+        return None;
+    }
+
+    Some(next)
+}
+
+fn matches_github_webhook_to_context(
+    context: &HostedTaskContext,
+    webhook: &GitHubWebhookSummary,
+) -> bool {
+    let Some(repository) = webhook.repository.as_deref() else {
+        return false;
+    };
+    let repository_matches = context.repository.as_deref() == Some(repository)
+        || github_repo_ref_for_context(context)
+            .map(|repo| format!("{}/{}", repo.owner, repo.repo) == repository)
+            .unwrap_or(false);
+    if !repository_matches {
+        return false;
+    }
+    match webhook.pr_number {
+        Some(pr_number) => context.pr_number == Some(pr_number),
+        None => false,
+    }
+}
+
+fn find_task_for_github_webhook(
+    state: &ServerState,
+    webhook: &GitHubWebhookSummary,
+) -> Option<(String, HostedTaskContext)> {
+    let contexts = state.contexts.lock().ok()?;
+    contexts.iter().find_map(|(task_id, context)| {
+        matches_github_webhook_to_context(context, webhook)
+            .then(|| (task_id.clone(), context.clone()))
+    })
+}
+
+async fn github_webhook(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> StatusCode {
+    let webhook = summarize_github_webhook(&headers, &payload);
+    let event_type = match webhook.action.as_deref() {
+        Some(action) if !action.is_empty() => format!("{}.{}", webhook.event_name, action),
+        _ => webhook.event_name.clone(),
+    };
+    let connector_payload = ConnectorEventPayload::new(
+        "github",
+        event_type,
+        webhook.sender_login.clone(),
+        json!({
+            "repository": webhook.repository,
+            "action": webhook.action,
+            "pr_number": webhook.pr_number,
+            "pr_state": webhook.pr_state,
+            "pr_merged": webhook.pr_merged,
+            "pr_closed_at": webhook.pr_closed_at,
+            "pr_merged_at": webhook.pr_merged_at,
+            "pr_head_ref": webhook.pr_head_ref,
+            "pr_base_ref": webhook.pr_base_ref,
+            "pr_head_sha": webhook.pr_head_sha,
+            "comment_body": webhook.comment_body,
+            "review_state": webhook.review_state,
+            "review_body": webhook.review_body,
+            "html_url": webhook.html_url,
+            "payload": payload,
+        }),
+    );
+
+    if let Some((task_id, context)) = find_task_for_github_webhook(state.as_ref(), &webhook) {
+        let mut context = context;
+        apply_github_webhook_to_context(&mut context, &webhook);
+        let followup_change = apply_github_followup_signal(&mut context, &webhook);
+        state.record_context(&task_id, context.clone());
+        let task_status = state
+            .tasks
+            .get(&task_id)
+            .map(|task| hosted_task_status_label(HostedTaskStatus::from_runtime(task.status)));
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers {
+                repo_id: context.repository.clone(),
+                lane_id: context.lane_id.clone(),
+                task_id: Some(task_id.clone()),
+                ..EventIdentifiers::default()
+            },
+            build_event_payload(
+                &context,
+                task_status,
+                Some(
+                    serde_json::to_value(connector_payload)
+                        .expect("connector event payload should serialize"),
+                ),
+            ),
+            None,
+        ));
+        if let Some(followup_change) = followup_change {
+            if followup_change.required {
+                state.broadcast_event(EventEnvelope::new(
+                    HostedEventName::ApprovalRequested,
+                    HostedEventStatus::Pending,
+                    HostedEventTopic::Approval,
+                    EventIdentifiers {
+                        repo_id: context.repository.clone(),
+                        lane_id: context.lane_id.clone(),
+                        task_id: Some(task_id.clone()),
+                        ..EventIdentifiers::default()
+                    },
+                    build_event_payload(
+                        &context,
+                        task_status,
+                        Some(serialize_event_extra(ApprovalRequestedEventPayload {
+                            approval_kind: "github_review_followup".to_string(),
+                            reason: followup_change.reason,
+                            detail: followup_change.detail,
+                            extra: Map::from_iter([("connector".to_string(), json!("github"))]),
+                        })),
+                    ),
+                    None,
+                ));
+            } else {
+                state.broadcast_event(EventEnvelope::new(
+                    HostedEventName::ApprovalResolved,
+                    HostedEventStatus::Completed,
+                    HostedEventTopic::Approval,
+                    EventIdentifiers {
+                        repo_id: context.repository.clone(),
+                        lane_id: context.lane_id.clone(),
+                        task_id: Some(task_id.clone()),
+                        ..EventIdentifiers::default()
+                    },
+                    build_event_payload(
+                        &context,
+                        task_status,
+                        Some(serialize_event_extra(ApprovalResolvedEventPayload {
+                            approval_kind: "github_review_followup".to_string(),
+                            action: "cleared".to_string(),
+                            resolved_by: webhook.sender_login.clone(),
+                            reason: followup_change.reason,
+                            extra: Map::from_iter([("connector".to_string(), json!("github"))]),
+                        })),
+                    ),
+                    None,
+                ));
+            }
+        }
+        let _ = state.persist_state();
+    } else {
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers::default(),
+            Some(
+                serde_json::to_value(connector_payload)
+                    .expect("connector event payload should serialize"),
+            ),
+            None,
+        ));
+    }
+
+    StatusCode::ACCEPTED
+}
+
 async fn stream_events(socket: WebSocket, state: Arc<ServerState>, query: EventStreamQuery) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -2554,6 +3125,14 @@ struct DockerLaunchSpec {
 struct HostedDockerTaskPayload {
     task_id: String,
     prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2869,6 +3448,25 @@ impl LaneWorkerTransport for LocalDockerLaneWorkerTransport {
         let task_file = write_local_docker_task_payload(&prepared.checkout_root, request)
             .map_err(|error| format!("failed to write hosted docker task payload: {error}"))?;
         let image = self.image.clone();
+        let mut container_env = BTreeMap::from([
+            ("ORBIT_SERVER_URL".to_string(), self.server_url.clone()),
+            (
+                "ORBIT_HOSTED_TASK_FILE".to_string(),
+                "/workspace/.orbit-hosted/task.json".to_string(),
+            ),
+        ]);
+        for key in [
+            "GITHUB_TOKEN",
+            "ORBIT_GITHUB_API_BASE",
+            "ORBIT_GIT_AUTHOR_NAME",
+            "ORBIT_GIT_AUTHOR_EMAIL",
+        ] {
+            if let Ok(value) = env::var(key) {
+                if !value.trim().is_empty() {
+                    container_env.insert(key.to_string(), value);
+                }
+            }
+        }
         let launch = self.docker.launch(&DockerLaunchSpec {
             image: image.clone(),
             checkout_root: prepared.checkout_root.clone(),
@@ -2880,13 +3478,7 @@ impl LaneWorkerTransport for LocalDockerLaneWorkerTransport {
                 "run".to_string(),
                 request.task_id.clone(),
             ],
-            env: BTreeMap::from([
-                ("ORBIT_SERVER_URL".to_string(), self.server_url.clone()),
-                (
-                    "ORBIT_HOSTED_TASK_FILE".to_string(),
-                    "/workspace/.orbit-hosted/task.json".to_string(),
-                ),
-            ]),
+            env: container_env,
         })?;
 
         Ok(LaneBootstrapResult {
@@ -2977,6 +3569,10 @@ fn write_local_docker_task_payload(
         serde_json::to_vec_pretty(&HostedDockerTaskPayload {
             task_id: request.task_id.clone(),
             prompt: request.prompt.clone(),
+            repository: request.repository.clone(),
+            repo_url: request.repo_url.clone(),
+            base_ref: request.base_ref.clone(),
+            branch: request.branch.clone(),
             model: request.model.clone(),
             provider: request.provider.clone(),
             permission_mode: request.permission_mode.clone(),
@@ -3030,6 +3626,13 @@ fn create_task_internal(state: &ServerState, request: CreateTaskRequest) -> Resu
         published_remote: None,
         pr_number: None,
         pr_url: None,
+        pr_state: None,
+        pr_merged: None,
+        pr_closed_at: None,
+        pr_merged_at: None,
+        github_review_state: None,
+        github_feedback_required: None,
+        github_feedback_reason: None,
         pr_api_url: None,
         pr_head_ref: None,
         pr_base_ref: None,
@@ -4159,6 +4762,16 @@ mod tests {
         .unwrap();
         assert_eq!(task_payload.task_id, task_id);
         assert_eq!(task_payload.prompt, "Prepare checkout before running");
+        assert_eq!(
+            task_payload.repository.as_deref(),
+            Some("acme/local-docker")
+        );
+        assert_eq!(
+            task_payload.repo_url.as_deref(),
+            Some(source_repo.to_str().unwrap())
+        );
+        assert_eq!(task_payload.base_ref.as_deref(), Some("main"));
+        assert_eq!(task_payload.branch.as_deref(), Some("orbit/task-123"));
         assert_eq!(task_payload.allowed_tools, Vec::<String>::new());
 
         let complete_response = router
@@ -6382,6 +6995,557 @@ mod tests {
                 .and_then(|payload| payload.get("type"))
                 .and_then(|value| value.as_str()),
             Some("reaction_added")
+        );
+    }
+
+    #[tokio::test]
+    async fn github_webhook_route_correlates_pull_request_event_to_hosted_task() {
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Track GitHub PR updates",
+                            "repository": "acme/payments",
+                            "repo_url": "https://github.com/acme/payments.git",
+                            "source": "slack",
+                            "channel_id": "C123",
+                            "thread_ts": "171234.55"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let github_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "published_branch": "orbit/fix-flake",
+                            "pr_number": 42,
+                            "pr_url": "https://github.com/acme/payments/pull/42"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(github_response.status(), StatusCode::OK);
+
+        let webhook_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "pull_request")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "action": "synchronize",
+                            "repository": {
+                                "full_name": "acme/payments"
+                            },
+                            "pull_request": {
+                                "number": 42,
+                                "state": "open",
+                                "html_url": "https://github.com/acme/payments/pull/42",
+                                "head": {
+                                    "ref": "orbit/fix-flake",
+                                    "sha": "abc123def456"
+                                },
+                                "base": {
+                                    "ref": "main"
+                                }
+                            },
+                            "sender": {
+                                "login": "octocat"
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+        let connector_event = state
+            .replay_events()
+            .into_iter()
+            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
+            .last()
+            .expect("github webhook event should be emitted");
+        assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
+        assert_eq!(connector_event.repo_id.as_deref(), Some("acme/payments"));
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("connector"))
+                .and_then(|value| value.as_str()),
+            Some("github")
+        );
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("type"))
+                .and_then(|value| value.as_str()),
+            Some("pull_request.synchronize")
+        );
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("task_status"))
+                .and_then(|value| value.as_str()),
+            Some("running")
+        );
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("channel_id"))
+                .and_then(|value| value.as_str()),
+            Some("C123")
+        );
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("data"))
+                .and_then(|value| value.get("pr_number"))
+                .and_then(Value::as_u64),
+            Some(42)
+        );
+        let context = state
+            .context_for(&task_id)
+            .expect("context should be recorded");
+        assert_eq!(context.pr_state.as_deref(), Some("open"));
+        assert_eq!(
+            context.published_commit_sha.as_deref(),
+            Some("abc123def456")
+        );
+        assert_eq!(context.pr_head_ref.as_deref(), Some("orbit/fix-flake"));
+        assert_eq!(context.pr_base_ref.as_deref(), Some("main"));
+    }
+
+    #[tokio::test]
+    async fn github_webhook_route_persists_closed_merge_state_for_hosted_task() {
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Track merged PR state",
+                            "repository": "acme/payments",
+                            "repo_url": "https://github.com/acme/payments.git"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let github_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "published_branch": "orbit/fix-flake",
+                            "pr_number": 42,
+                            "pr_url": "https://github.com/acme/payments/pull/42"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(github_response.status(), StatusCode::OK);
+
+        let webhook_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "pull_request")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "action": "closed",
+                            "repository": {
+                                "full_name": "acme/payments"
+                            },
+                            "pull_request": {
+                                "number": 42,
+                                "state": "closed",
+                                "merged": true,
+                                "merged_at": "2026-04-09T12:00:00Z",
+                                "closed_at": "2026-04-09T12:00:00Z",
+                                "html_url": "https://github.com/acme/payments/pull/42"
+                            },
+                            "sender": {
+                                "login": "octocat"
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+        let context = state
+            .context_for(&task_id)
+            .expect("context should be recorded");
+        assert_eq!(context.pr_state.as_deref(), Some("closed"));
+        assert_eq!(context.pr_merged, Some(true));
+        assert_eq!(
+            context.pr_merged_at.as_deref(),
+            Some("2026-04-09T12:00:00Z")
+        );
+        assert_eq!(
+            context.pr_closed_at.as_deref(),
+            Some("2026-04-09T12:00:00Z")
+        );
+
+        let connector_event = state
+            .replay_events()
+            .into_iter()
+            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
+            .last()
+            .expect("github webhook event should be emitted");
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("pr_merged"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn github_review_webhook_requests_followup_for_hosted_task() {
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Handle GitHub review feedback",
+                            "repository": "acme/payments",
+                            "repo_url": "https://github.com/acme/payments.git"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let github_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "published_branch": "orbit/fix-flake",
+                            "pr_number": 42,
+                            "pr_url": "https://github.com/acme/payments/pull/42"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(github_response.status(), StatusCode::OK);
+
+        let webhook_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "pull_request_review")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "action": "submitted",
+                            "repository": {
+                                "full_name": "acme/payments"
+                            },
+                            "pull_request": {
+                                "number": 42,
+                                "html_url": "https://github.com/acme/payments/pull/42"
+                            },
+                            "review": {
+                                "state": "changes_requested",
+                                "body": "Please add more tests"
+                            },
+                            "sender": {
+                                "login": "reviewer"
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+        let context = state
+            .context_for(&task_id)
+            .expect("context should be recorded");
+        assert_eq!(
+            context.github_review_state.as_deref(),
+            Some("changes_requested")
+        );
+        assert_eq!(context.github_feedback_required, Some(true));
+        assert_eq!(
+            context.github_feedback_reason.as_deref(),
+            Some("GitHub review requested changes.")
+        );
+
+        let approval_event = state
+            .replay_events()
+            .into_iter()
+            .filter(|event| event.event == HostedEventName::ApprovalRequested)
+            .last()
+            .expect("github review should emit approval requested");
+        assert_eq!(
+            approval_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("approval_kind"))
+                .and_then(Value::as_str),
+            Some("github_review_followup")
+        );
+    }
+
+    #[tokio::test]
+    async fn github_review_approval_webhook_clears_followup_for_hosted_task() {
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Clear GitHub follow-up",
+                            "repository": "acme/payments",
+                            "repo_url": "https://github.com/acme/payments.git"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created_body = to_bytes(create_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        state.record_context(
+            &task_id,
+            HostedTaskContext {
+                repository: Some("acme/payments".to_string()),
+                repo_url: Some("https://github.com/acme/payments.git".to_string()),
+                pr_number: Some(42),
+                github_feedback_required: Some(true),
+                github_feedback_reason: Some("GitHub review requested changes.".to_string()),
+                ..state.context_for(&task_id).unwrap_or_default()
+            },
+        );
+
+        let webhook_response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "pull_request_review")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "action": "submitted",
+                            "repository": {
+                                "full_name": "acme/payments"
+                            },
+                            "pull_request": {
+                                "number": 42,
+                                "html_url": "https://github.com/acme/payments/pull/42"
+                            },
+                            "review": {
+                                "state": "approved",
+                                "body": "Looks good"
+                            },
+                            "sender": {
+                                "login": "reviewer"
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+        let context = state
+            .context_for(&task_id)
+            .expect("context should be recorded");
+        assert_eq!(context.github_review_state.as_deref(), Some("approved"));
+        assert_eq!(context.github_feedback_required, Some(false));
+        assert_eq!(context.github_feedback_reason, None);
+
+        let resolved_event = state
+            .replay_events()
+            .into_iter()
+            .filter(|event| event.event == HostedEventName::ApprovalResolved)
+            .last()
+            .expect("github review approval should emit approval resolved");
+        assert_eq!(
+            resolved_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("approval_kind"))
+                .and_then(Value::as_str),
+            Some("github_review_followup")
+        );
+        assert_eq!(
+            resolved_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("action"))
+                .and_then(Value::as_str),
+            Some("cleared")
+        );
+    }
+
+    #[tokio::test]
+    async fn github_webhook_route_emits_unmatched_event_without_task_binding() {
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/github")
+                    .header("content-type", "application/json")
+                    .header("x-github-event", "issue_comment")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "action": "created",
+                            "repository": {
+                                "full_name": "acme/unmatched"
+                            },
+                            "issue": {
+                                "number": 7
+                            },
+                            "comment": {
+                                "body": "Looks good to me"
+                            },
+                            "sender": {
+                                "login": "reviewer"
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let connector_event = state
+            .replay_events()
+            .into_iter()
+            .find(|event| event.event == HostedEventName::ConnectorEventReceived)
+            .expect("unmatched github webhook event should still be emitted");
+        assert_eq!(connector_event.task_id, None);
+        assert_eq!(connector_event.repo_id, None);
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("type"))
+                .and_then(|value| value.as_str()),
+            Some("issue_comment.created")
+        );
+        assert_eq!(
+            connector_event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("data"))
+                .and_then(|value| value.get("comment_body"))
+                .and_then(Value::as_str),
+            Some("Looks good to me")
         );
     }
 

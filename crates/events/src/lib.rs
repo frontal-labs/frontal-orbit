@@ -171,6 +171,22 @@ pub struct HostedTaskEventSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_closed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_review_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_feedback_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_feedback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,

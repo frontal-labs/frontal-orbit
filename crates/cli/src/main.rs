@@ -41,7 +41,8 @@ use orbit_commands::{
 use orbit_compat_harness::{extract_manifest, UpstreamPaths};
 use orbit_events::{EventEnvelope, HostedEventName, HostedEventStatus, HostedEventTopic};
 use orbit_github::{
-    parse_github_repo_url, GitHubClient, GitHubClientConfig, GitHubPullRequestDraft,
+    parse_github_repo_url, GitHubCheckRunDraft, GitHubCheckRunOutput, GitHubClient,
+    GitHubClientConfig, GitHubIssueCommentDraft, GitHubPullRequestDraft, GitHubRepoRef,
 };
 use orbit_integrations::ide::{
     collect_status as collect_ide_status, install_extension as install_ide_extension,
@@ -419,6 +420,7 @@ enum HostedCommand {
         action: HostedApprovalAction,
         resolved_by: Option<String>,
         reason: Option<String>,
+        approval_kind: String,
     },
 }
 
@@ -430,6 +432,7 @@ struct HostedTaskListQuery {
     channel_id: Option<String>,
     thread_ts: Option<String>,
     limit: Option<usize>,
+    needs_followup: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -445,6 +448,7 @@ struct HostedEventWatchQuery {
 enum HostedApprovalAction {
     Retry,
     Cancel,
+    Ack,
 }
 
 impl HostedApprovalAction {
@@ -452,6 +456,7 @@ impl HostedApprovalAction {
         match self {
             Self::Retry => "retry",
             Self::Cancel => "cancel",
+            Self::Ack => "ack",
         }
     }
 
@@ -459,8 +464,9 @@ impl HostedApprovalAction {
         match value {
             "retry" => Ok(Self::Retry),
             "cancel" => Ok(Self::Cancel),
+            "ack" => Ok(Self::Ack),
             other => Err(format!(
-                "unsupported hosted approval action: {other} (expected retry or cancel)"
+                "unsupported hosted approval action: {other} (expected retry, cancel, or ack)"
             )),
         }
     }
@@ -537,6 +543,12 @@ struct HostedTaskSnapshot {
     worker_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_review_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_feedback_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_feedback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     orphan_policy: Option<HostedAppliedOrphanPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1039,6 +1051,10 @@ fn parse_hosted_tasks_cli_action(
                 query.thread_ts = Some(value.clone());
                 index += 2;
             }
+            "--needs-followup" => {
+                query.needs_followup = Some(true);
+                index += 1;
+            }
             "--limit" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err("hosted tasks list requires a value after --limit".to_string());
@@ -1217,11 +1233,12 @@ fn parse_hosted_task_cli_action(
                 return Err("hosted task approval requires a task id".to_string());
             };
             let Some(action) = args.get(2) else {
-                return Err("hosted task approval requires an action: retry or cancel".to_string());
+                return Err("hosted task approval requires an action: retry, cancel, or ack".to_string());
             };
             let action = HostedApprovalAction::parse(action)?;
             let mut resolved_by = None;
             let mut reason = None;
+            let mut approval_kind = "orphaned_hosted_agent".to_string();
             let mut index = 3;
             while index < args.len() {
                 match args[index].as_str() {
@@ -1244,12 +1261,35 @@ fn parse_hosted_task_cli_action(
                         reason = Some(value.clone());
                         index += 2;
                     }
+                    "--kind" => {
+                        let Some(value) = args.get(index + 1) else {
+                            return Err(
+                                "hosted task approval requires a value after --kind".to_string()
+                            );
+                        };
+                        approval_kind = value.clone();
+                        index += 2;
+                    }
                     other => {
                         return Err(format!(
-                            "unsupported hosted task approval argument: {other}. Use --resolved-by or --reason."
+                            "unsupported hosted task approval argument: {other}. Use --resolved-by, --reason, or --kind."
                         ));
                     }
                 }
+            }
+
+            if approval_kind == "orphaned_hosted_agent" {
+                if !matches!(action, HostedApprovalAction::Retry | HostedApprovalAction::Cancel) {
+                    return Err("orphaned_hosted_agent approval supports actions: retry or cancel".to_string());
+                }
+            } else if approval_kind == "github_review_followup" {
+                if !matches!(action, HostedApprovalAction::Ack | HostedApprovalAction::Retry) {
+                    return Err("github_review_followup approval supports actions: ack or retry".to_string());
+                }
+            } else {
+                return Err(format!(
+                    "unsupported hosted approval kind: {approval_kind} (expected orphaned_hosted_agent or github_review_followup)"
+                ));
             }
 
             Ok(CliAction::Hosted {
@@ -1258,6 +1298,7 @@ fn parse_hosted_task_cli_action(
                     action,
                     resolved_by,
                     reason,
+                    approval_kind,
                 },
                 output_format,
             })
@@ -2802,6 +2843,7 @@ fn run_hosted_command(
             action,
             resolved_by,
             reason,
+            approval_kind,
         } => {
             let response = resolve_hosted_task_approval(
                 &client,
@@ -2810,6 +2852,7 @@ fn run_hosted_command(
                 action,
                 resolved_by,
                 reason,
+                approval_kind,
             )?;
             match output_format {
                 CliOutputFormat::Text => println!(
@@ -2884,6 +2927,11 @@ fn list_hosted_tasks(
         if let Some(thread_ts) = &query.thread_ts {
             query_pairs.append_pair("thread_ts", thread_ts);
         }
+        if let Some(needs_followup) = query.needs_followup {
+            if needs_followup {
+                query_pairs.append_pair("needs_followup", "true");
+            }
+        }
         if let Some(limit) = query.limit {
             query_pairs.append_pair("limit", &limit.to_string());
         }
@@ -2911,6 +2959,18 @@ fn get_hosted_task_runtime(
 ) -> Result<HostedTaskRuntimeResponse, Box<dyn std::error::Error>> {
     let response = client
         .get(format!("{server_url}/v1/tasks/{task_id}/runtime"))
+        .send()?
+        .error_for_status()?;
+    Ok(response.json()?)
+}
+
+fn get_hosted_task_github(
+    client: &HttpClient,
+    server_url: &str,
+    task_id: &str,
+) -> Result<HostedTaskGithubResponse, Box<dyn std::error::Error>> {
+    let response = client
+        .get(format!("{server_url}/v1/tasks/{task_id}/github"))
         .send()?
         .error_for_status()?;
     Ok(response.json()?)
@@ -2947,11 +3007,12 @@ fn resolve_hosted_task_approval(
     action: HostedApprovalAction,
     resolved_by: Option<String>,
     reason: Option<String>,
+    approval_kind: String,
 ) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
     let response = client
         .post(format!("{server_url}/v1/tasks/{task_id}/approval"))
         .json(&json!({
-            "approval_kind": "orphaned_hosted_agent",
+            "approval_kind": approval_kind,
             "action": action.as_str(),
             "resolved_by": resolved_by,
             "reason": reason,
@@ -3171,6 +3232,97 @@ fn augment_hosted_result_with_publication(
     Some(value.trim_end().to_string())
 }
 
+fn summarize_hosted_result(value: Option<&str>, fallback: &str) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(240).collect::<String>())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn report_hosted_task_to_github(
+    task_id: &str,
+    server_url: &str,
+    github: &HostedTaskGithubResponse,
+    result: Option<&str>,
+    error: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (Some(owner), Some(repo), Some(token)) = (
+        github.owner.as_deref(),
+        github.repo.as_deref(),
+        env::var("GITHUB_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+    ) else {
+        return Ok(());
+    };
+
+    let repo_ref = GitHubRepoRef {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    };
+    let client = GitHubClient::new(GitHubClientConfig {
+        api_base: hosted_github_api_base(),
+        token,
+    });
+    let details_url = format!("{server_url}/v1/tasks/{task_id}");
+
+    if let Some(head_sha) = github.published_commit_sha.as_deref() {
+        let success = error.is_none();
+        let summary = if success {
+            summarize_hosted_result(result, "Hosted task completed successfully.")
+        } else {
+            summarize_hosted_result(error, "Hosted task failed.")
+        };
+        let text = result
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or(error.map(str::trim).filter(|value| !value.is_empty()))
+            .map(str::to_string);
+        let _ = client.create_check_run(
+            &repo_ref,
+            &GitHubCheckRunDraft {
+                name: "orbit/hosted-task".to_string(),
+                head_sha: head_sha.to_string(),
+                status: "completed".to_string(),
+                conclusion: Some(if success {
+                    "success".to_string()
+                } else {
+                    "failure".to_string()
+                }),
+                details_url: Some(details_url.clone()),
+                output: Some(GitHubCheckRunOutput {
+                    title: if success {
+                        format!("Orbit task {task_id} completed")
+                    } else {
+                        format!("Orbit task {task_id} failed")
+                    },
+                    summary,
+                    text,
+                }),
+            },
+        );
+    }
+
+    if let Some(pr_number) = github.pr_number {
+        let body = if let Some(error) = error.filter(|value| !value.trim().is_empty()) {
+            format!(
+                "Orbit hosted task `{task_id}` failed.\n\nTask: {details_url}\n\nError:\n{error}\n"
+            )
+        } else {
+            format!(
+                "Orbit hosted task `{task_id}` completed.\n\nTask: {details_url}\n\nSummary:\n{}\n",
+                summarize_hosted_result(result, "Hosted task completed successfully.")
+            )
+        };
+        let _ =
+            client.create_issue_comment(&repo_ref, pr_number, &GitHubIssueCommentDraft { body });
+    }
+
+    Ok(())
+}
+
 fn run_hosted_task_worker(
     client: &HttpClient,
     server_url: &str,
@@ -3178,6 +3330,7 @@ fn run_hosted_task_worker(
     output_format: CliOutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let payload = load_hosted_task_worker_payload(task_id)?;
+    let mut github = get_hosted_task_github(client, server_url, task_id).unwrap_or_default();
     let model = payload
         .model
         .clone()
@@ -3208,10 +3361,12 @@ fn run_hosted_task_worker(
                 .get("message")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            if let Some(github) = publish_hosted_repo_changes(Path::new("."), &payload)? {
-                let github = update_hosted_task_github(client, server_url, task_id, &github)?;
+            if let Some(github_update) = publish_hosted_repo_changes(Path::new("."), &payload)? {
+                github = update_hosted_task_github(client, server_url, task_id, &github_update)?;
                 result = augment_hosted_result_with_publication(result, &github);
             }
+            let _ =
+                report_hosted_task_to_github(task_id, server_url, &github, result.as_deref(), None);
             let response = complete_hosted_task(
                 client,
                 server_url,
@@ -3232,6 +3387,13 @@ fn run_hosted_task_worker(
         }
         Err(error) => {
             let error_message = error.to_string();
+            let _ = report_hosted_task_to_github(
+                task_id,
+                server_url,
+                &github,
+                None,
+                Some(&error_message),
+            );
             let _ = complete_hosted_task(
                 client,
                 server_url,
@@ -3358,6 +3520,13 @@ async fn watch_hosted_tasks(
         println!("{}", report_row("Stream", &ws_url));
         println!("{}", report_row("Filters", format_hosted_task_query(query)));
         println!("{}", report_row("Tracked", tracked_tasks.len()));
+        let pending_followups = tracked_tasks
+            .values()
+            .filter(|task| task.github_feedback_required.unwrap_or(false))
+            .count();
+        if pending_followups > 0 {
+            println!("{}", report_row("Follow-up pending", pending_followups));
+        }
         println!(
             "{}",
             report_row(
@@ -3657,6 +3826,17 @@ fn hosted_task_snapshot_from_event(event: &EventEnvelope) -> Option<HostedTaskSn
             .and_then(|payload| payload.get("plan_kind"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        github_review_state: payload
+            .and_then(|payload| payload.get("github_review_state"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        github_feedback_required: payload
+            .and_then(|payload| payload.get("github_feedback_required"))
+            .and_then(Value::as_bool),
+        github_feedback_reason: payload
+            .and_then(|payload| payload.get("github_feedback_reason"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         orphan_policy: None,
         error: payload
             .and_then(|payload| payload.get("error"))
@@ -3716,6 +3896,9 @@ fn render_hosted_task_watch_line(item: &HostedTaskWatchItem) -> String {
     }
     if let Some(plan_kind) = &task.plan_kind {
         parts.push(format!("plan={plan_kind}"));
+    }
+    if task.github_feedback_required.unwrap_or(false) {
+        parts.push("followup=github".to_string());
     }
     if let Some(error) = &task.error {
         parts.push(format!("error={}", truncate_single_line(error, 80)));
@@ -3778,6 +3961,15 @@ fn render_hosted_task_report(title: &str, server_url: &str, task: &HostedTaskSna
     if let Some(worker_status) = &task.worker_status {
         lines.push(report_row("Worker status", worker_status));
     }
+    if task.github_feedback_required.unwrap_or(false) {
+        let detail = task
+            .github_feedback_reason
+            .as_deref()
+            .unwrap_or("GitHub follow-up required");
+        lines.push(report_row("Follow-up", detail));
+    } else if let Some(state) = &task.github_review_state {
+        lines.push(report_row("Review state", state));
+    }
     if let Some(orphan_policy) = &task.orphan_policy {
         lines.push(report_row(
             "Orphan policy",
@@ -3806,6 +3998,14 @@ fn render_hosted_task_list_report(
         report_row("Filters", format_hosted_task_query(query)),
     ];
 
+    let needs_followup = tasks
+        .iter()
+        .filter(|task| task.github_feedback_required.unwrap_or(false))
+        .count();
+    if needs_followup > 0 {
+        lines.push(report_row("Follow-up pending", needs_followup));
+    }
+
     if tasks.is_empty() {
         lines.push("  No tasks matched the current filter.".to_string());
         return lines.join("\n");
@@ -3830,6 +4030,9 @@ fn render_hosted_task_list_report(
         }
         if let Some(plan_kind) = &task.plan_kind {
             summary.push(format!("plan={plan_kind}"));
+        }
+        if task.github_feedback_required.unwrap_or(false) {
+            summary.push("followup=github".to_string());
         }
         summary.join(" ")
     }));
@@ -10231,7 +10434,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  orbit hosted tasks list [--status STATUS[,STATUS...]] [--source SOURCE] [--repository REPO] [--channel-id ID] [--thread-ts TS] [--limit N]"
+        "  orbit hosted tasks list [--status STATUS[,STATUS...]] [--source SOURCE] [--repository REPO] [--channel-id ID] [--thread-ts TS] [--needs-followup] [--limit N]"
     )?;
     writeln!(out, "      List hosted tasks with server-side filtering")?;
     writeln!(
@@ -10261,11 +10464,11 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  orbit hosted task approval TASK_ID [retry|cancel] [--resolved-by NAME] [--reason TEXT]"
+        "  orbit hosted task approval TASK_ID [retry|cancel|ack] [--kind orphaned_hosted_agent|github_review_followup] [--resolved-by NAME] [--reason TEXT]"
     )?;
     writeln!(
         out,
-        "      Resolve an orphaned hosted-agent approval through the control plane"
+        "      Resolve a hosted task approval (orphaned agent or GitHub follow-up) through the control plane"
     )?;
     writeln!(out, "  orbit dump-manifests")?;
     writeln!(out, "  orbit bootstrap-plan")?;
@@ -10399,8 +10602,9 @@ fn print_help(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state, config_json_value,
-        create_managed_session_handle, describe_tool_progress, filter_tool_specs,
+        augment_hosted_result_with_publication, build_runtime_plugin_state_with_loader,
+        build_runtime_with_plugin_state, config_json_value, create_managed_session_handle,
+        default_hosted_pr_draft, describe_tool_progress, filter_tool_specs,
         format_bughunter_report, format_commit_preflight_report, format_commit_skipped_report,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
         format_issue_report, format_model_report, format_model_switch_report,
@@ -10411,17 +10615,19 @@ mod tests {
         hosted_task_snapshot_from_event, load_hosted_task_worker_payload,
         normalize_permission_mode, parse_args, parse_git_status_branch,
         parse_git_status_metadata_for, parse_git_workspace_summary, permission_policy,
-        print_help_to, push_output_block, render_config_report, render_diff_report,
-        render_diff_report_for, render_memory_report, render_repl_help, render_resume_usage,
-        render_telemetry_report, report_row, resolve_model_alias, resolve_session_reference,
-        resolve_telemetry_config, response_to_events, resume_supported_slash_commands,
-        run_resume_command, slash_command_completion_candidates_with_sessions, status_context,
+        print_help_to, publish_hosted_repo_changes, push_output_block, render_config_report,
+        render_diff_report, render_diff_report_for, render_memory_report, render_repl_help,
+        render_resume_usage, render_telemetry_report, report_row, resolve_model_alias,
+        resolve_session_reference, resolve_telemetry_config, response_to_events,
+        resume_supported_slash_commands, run_resume_command,
+        slash_command_completion_candidates_with_sessions, status_context,
         telemetry_status_json_value, update_project_telemetry_settings, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, EventEnvelope,
         GitWorkspaceSummary, HostedApprovalAction, HostedCommand, HostedEventName,
-        HostedEventStatus, HostedEventTopic, HostedEventWatchQuery, HostedTaskListQuery,
-        HostedTaskWorkerPayload, InternalPromptProgressEvent, InternalPromptProgressState, LiveCli,
-        LocalHelpTopic, SlashCommand, StatusUsage, DEFAULT_MODEL, ORBIT_TELEMETRY_PATH,
+        HostedEventStatus, HostedEventTopic, HostedEventWatchQuery, HostedTaskGithubResponse,
+        HostedTaskListQuery, HostedTaskWorkerPayload, InternalPromptProgressEvent,
+        InternalPromptProgressState, LiveCli, LocalHelpTopic, SlashCommand, StatusUsage,
+        DEFAULT_MODEL, ORBIT_TELEMETRY_PATH,
     };
     use orbit_api::{ApiError, MessageResponse, OutputContentBlock, Usage};
     use orbit_events::EventIdentifiers;
@@ -11159,6 +11365,7 @@ mod tests {
                         channel_id: Some("C123".to_string()),
                         thread_ts: Some("171234.56".to_string()),
                         limit: Some(10),
+                        needs_followup: None,
                     },
                 },
                 output_format: CliOutputFormat::Text,
@@ -11196,7 +11403,64 @@ mod tests {
                         channel_id: Some("C123".to_string()),
                         thread_ts: Some("171234.56".to_string()),
                         limit: Some(20),
+                        needs_followup: None,
                     },
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_hosted_approval_orphan_default_kind() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "approval".to_string(),
+                "task_123".to_string(),
+                "retry".to_string(),
+                "--resolved-by".to_string(),
+                "operator".to_string(),
+                "--reason".to_string(),
+                "retry lane".to_string(),
+            ])
+            .expect("hosted approval should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskApproval {
+                    task_id: "task_123".to_string(),
+                    action: HostedApprovalAction::Retry,
+                    resolved_by: Some("operator".to_string()),
+                    reason: Some("retry lane".to_string()),
+                    approval_kind: "orphaned_hosted_agent".to_string(),
+                },
+                output_format: CliOutputFormat::Text,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_hosted_approval_github_followup_ack() {
+        assert_eq!(
+            parse_args(&[
+                "hosted".to_string(),
+                "task".to_string(),
+                "approval".to_string(),
+                "task_123".to_string(),
+                "ack".to_string(),
+                "--kind".to_string(),
+                "github_review_followup".to_string(),
+                "--resolved-by".to_string(),
+                "reviewer".to_string(),
+            ])
+            .expect("hosted approval github followup should parse"),
+            CliAction::Hosted {
+                command: HostedCommand::TaskApproval {
+                    task_id: "task_123".to_string(),
+                    action: HostedApprovalAction::Ack,
+                    resolved_by: Some("reviewer".to_string()),
+                    reason: None,
+                    approval_kind: "github_review_followup".to_string(),
                 },
                 output_format: CliOutputFormat::Text,
             }
@@ -11350,6 +11614,7 @@ mod tests {
                     action: HostedApprovalAction::Retry,
                     resolved_by: Some("operator".to_string()),
                     reason: Some("manual-recovery".to_string()),
+                    approval_kind: "orphaned_hosted_agent".to_string(),
                 },
                 output_format: CliOutputFormat::Text,
             }
@@ -11386,6 +11651,10 @@ mod tests {
             serde_json::to_vec(&HostedTaskWorkerPayload {
                 task_id: "task_123".to_string(),
                 prompt: "Investigate failure".to_string(),
+                repository: Some("acme/payments".to_string()),
+                repo_url: Some("https://github.com/acme/payments.git".to_string()),
+                base_ref: Some("main".to_string()),
+                branch: Some("orbit/fix-flake".to_string()),
                 model: Some("gpt-5.4".to_string()),
                 provider: Some("openai".to_string()),
                 permission_mode: Some("workspace-write".to_string()),
@@ -11400,6 +11669,13 @@ mod tests {
             load_hosted_task_worker_payload("task_123").expect("payload should load successfully");
         assert_eq!(payload.task_id, "task_123");
         assert_eq!(payload.prompt, "Investigate failure");
+        assert_eq!(payload.repository.as_deref(), Some("acme/payments"));
+        assert_eq!(
+            payload.repo_url.as_deref(),
+            Some("https://github.com/acme/payments.git")
+        );
+        assert_eq!(payload.base_ref.as_deref(), Some("main"));
+        assert_eq!(payload.branch.as_deref(), Some("orbit/fix-flake"));
         assert_eq!(payload.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(payload.provider.as_deref(), Some("openai"));
         assert_eq!(payload.permission_mode.as_deref(), Some("workspace-write"));
@@ -11407,6 +11683,143 @@ mod tests {
 
         std::env::remove_var("ORBIT_HOSTED_TASK_FILE");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn default_hosted_pr_draft_uses_repo_and_prompt_context() {
+        let payload = HostedTaskWorkerPayload {
+            task_id: "task_123".to_string(),
+            prompt: "Fix the flaky release workflow by pinning the Docker image".to_string(),
+            repository: Some("acme/payments".to_string()),
+            repo_url: Some("https://github.com/acme/payments.git".to_string()),
+            base_ref: Some("main".to_string()),
+            branch: Some("orbit/fix-release".to_string()),
+            model: None,
+            provider: None,
+            permission_mode: None,
+            allowed_tools: Vec::new(),
+        };
+
+        let draft = default_hosted_pr_draft(&payload, "orbit/fix-release", "abc123def456")
+            .expect("github payload should produce a PR draft");
+
+        assert_eq!(
+            draft.title,
+            "Fix the flaky release workflow by pinning the Docker image"
+        );
+        assert_eq!(draft.head, "orbit/fix-release");
+        assert_eq!(draft.base, "main");
+        assert!(draft.draft);
+        assert!(draft.body.contains("task_123"));
+        assert!(draft.body.contains("acme/payments"));
+        assert!(draft.body.contains("abc123def456"));
+    }
+
+    #[test]
+    fn publish_hosted_repo_changes_commits_and_pushes_branch() {
+        let _guard = env_lock();
+        let previous_token = std::env::var_os("GITHUB_TOKEN");
+        let previous_api_base = std::env::var_os("ORBIT_GITHUB_API_BASE");
+        std::env::remove_var("GITHUB_TOKEN");
+        std::env::remove_var("ORBIT_GITHUB_API_BASE");
+
+        let remote = temp_dir();
+        let repo = temp_dir();
+        fs::create_dir_all(&remote).expect("remote dir should exist");
+        fs::create_dir_all(&repo).expect("repo dir should exist");
+
+        git(
+            &["init", "--bare", remote.to_str().unwrap()],
+            Path::new("."),
+        );
+        git(&["init", "-b", "main"], &repo);
+        git(&["config", "user.name", "Orbit Test"], &repo);
+        git(&["config", "user.email", "orbit@test.dev"], &repo);
+        fs::write(repo.join("README.md"), "hello\n").expect("seed file");
+        git(&["add", "README.md"], &repo);
+        git(&["commit", "-m", "initial"], &repo);
+        git(
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            &repo,
+        );
+        git(&["push", "-u", "origin", "main"], &repo);
+        git(&["checkout", "-b", "orbit/task-publish"], &repo);
+        fs::write(repo.join("README.md"), "hello\nworld\n").expect("updated file");
+
+        let payload = HostedTaskWorkerPayload {
+            task_id: "task_123".to_string(),
+            prompt: "Update the README for the hosted task".to_string(),
+            repository: Some("acme/payments".to_string()),
+            repo_url: Some(remote.display().to_string()),
+            base_ref: Some("main".to_string()),
+            branch: Some("orbit/task-publish".to_string()),
+            model: None,
+            provider: None,
+            permission_mode: None,
+            allowed_tools: Vec::new(),
+        };
+
+        let publication = with_current_dir(&repo, || {
+            publish_hosted_repo_changes(Path::new("."), &payload)
+                .expect("publish helper should succeed")
+                .expect("dirty repo should produce publication metadata")
+        });
+
+        assert_eq!(publication.published_remote.as_deref(), Some("origin"));
+        assert_eq!(
+            publication.published_branch.as_deref(),
+            Some("orbit/task-publish")
+        );
+        assert!(publication
+            .published_commit_sha
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(publication.pr_url, None);
+
+        let branch_ref = Command::new("git")
+            .args([
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "show-ref",
+                "--verify",
+                "refs/heads/orbit/task-publish",
+            ])
+            .output()
+            .expect("show-ref should run");
+        assert!(
+            branch_ref.status.success(),
+            "expected pushed branch to exist in remote"
+        );
+
+        match previous_token {
+            Some(value) => std::env::set_var("GITHUB_TOKEN", value),
+            None => std::env::remove_var("GITHUB_TOKEN"),
+        }
+        match previous_api_base {
+            Some(value) => std::env::set_var("ORBIT_GITHUB_API_BASE", value),
+            None => std::env::remove_var("ORBIT_GITHUB_API_BASE"),
+        }
+        let _ = fs::remove_dir_all(remote);
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn augment_hosted_result_with_publication_appends_branch_and_pr() {
+        let result = augment_hosted_result_with_publication(
+            Some("Applied the requested fix.".to_string()),
+            &HostedTaskGithubResponse {
+                published_branch: Some("orbit/fix-flake".to_string()),
+                published_commit_sha: Some("abc123def456".to_string()),
+                pr_url: Some("https://github.com/acme/payments/pull/42".to_string()),
+                ..HostedTaskGithubResponse::default()
+            },
+        )
+        .expect("publication details should keep a result string");
+
+        assert!(result.contains("Applied the requested fix."));
+        assert!(result.contains("Branch: orbit/fix-flake"));
+        assert!(result.contains("Commit: abc123def456"));
+        assert!(result.contains("PR: https://github.com/acme/payments/pull/42"));
     }
 
     #[test]

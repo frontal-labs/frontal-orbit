@@ -601,6 +601,34 @@ describe('SlackInterface formatting helpers', () => {
     expect(message.blocks?.[0]?.text?.text).toContain('Worker: ready_for_prompt (worker-123)');
   });
 
+  it('formats github follow-up resolution separately from orphan approvals', () => {
+    const slack = createSlackInterface();
+
+    const message = slack.formatApprovalResolvedEvent(
+      {
+        taskId: 'task-123',
+        channelId: 'C123',
+      },
+      'Task task-123',
+      {
+        event_id: 'evt-github-followup-resolved',
+        topic: 'approval',
+        event: 'approval.resolved',
+        status: 'completed',
+        emittedAt: '2026-04-09T10:10:05Z',
+        task_id: 'task-123',
+        payload: {
+          approval_kind: 'github_review_followup',
+          action: 'cleared',
+        },
+      },
+      {}
+    );
+
+    expect(message.text).toBe('GitHub follow-up cleared for task task-123.');
+    expect(message.blocks?.[0]?.text?.text).toContain('Action: `cleared`');
+  });
+
   it('builds approval processing blocks for orphan approvals', () => {
     const slack = createSlackInterface();
 
@@ -726,6 +754,46 @@ describe('SlackInterface formatting helpers', () => {
     });
   });
 
+  it('formats github review follow-up requests with follow-up buttons', () => {
+    const slack = createSlackInterface();
+    const task: OrbitTrackedTask = {
+      taskId: 'task-123',
+      channelId: 'C123',
+      threadTs: '1710000000.100',
+      userId: 'U123',
+    };
+
+    const message = slack.formatApprovalRequestedEvent(
+      {
+        event_id: 'evt-github-followup-requested',
+        topic: 'approval',
+        event: 'approval.requested',
+        status: 'waiting',
+        emittedAt: '2026-04-09T10:00:01Z',
+        task_id: 'task-123',
+        payload: {
+          approval_kind: 'github_review_followup',
+          reason: 'GitHub review requested changes.',
+          repository: 'orbit/slack',
+        },
+      },
+      task
+    );
+
+    expect(message.text).toBe(
+      'Task task-123 (orbit/slack) needs follow-up: GitHub review requested changes.'
+    );
+    const actions = message.blocks?.find((block) => block.type === 'actions');
+    expect(actions?.elements?.map((element) => element.action_id)).toEqual([
+      'github_review_followup.ack',
+      'github_review_followup.retry',
+    ]);
+    expect(actions?.elements?.map((element) => element.value)).toEqual([
+      'task-123',
+      'task-123',
+    ]);
+  });
+
   it('formats blocked lane events with orphan policy detail in the message text', () => {
     const slack = createSlackInterface();
     const task: OrbitTrackedTask = {
@@ -831,7 +899,7 @@ describe('SlackInterface formatting helpers', () => {
     });
   });
 
-  it('returns null for task.created and connector.event.received notifications', () => {
+  it('returns null for task.created and non-github connector notifications', () => {
     const slack = createSlackInterface();
     const task: OrbitTrackedTask = {
       taskId: 'task-123',
@@ -863,10 +931,126 @@ describe('SlackInterface formatting helpers', () => {
           status: 'running',
           emittedAt: '2026-04-09T10:00:10Z',
           task_id: 'task-123',
+          payload: {
+            connector: 'slack',
+            type: 'reaction_added',
+          },
         },
         task
       )
     ).toBeNull();
+  });
+
+  it('formats task-bound github connector events for PR updates, merges, reviews, and comments', () => {
+    const slack = createSlackInterface();
+    const task: OrbitTrackedTask = {
+      taskId: 'task-123',
+      channelId: 'C123',
+      threadTs: '1710000000.100',
+      userId: 'U123',
+    };
+
+    const prUpdate = slack.formatOrbitEvent(
+      {
+        event_id: 'evt-133',
+        topic: 'connector',
+        event: 'connector.event.received',
+        status: 'completed',
+        emittedAt: '2026-04-09T10:00:10Z',
+        task_id: 'task-123',
+        payload: {
+          connector: 'github',
+          type: 'pull_request.synchronize',
+          data: {
+            pr_number: 42,
+            sender_login: 'octocat',
+            html_url: 'https://github.com/acme/payments/pull/42',
+          },
+        },
+      },
+      task
+    );
+
+    expect(prUpdate).toEqual({
+      text: 'Task task-123 received a GitHub PR update (#42) from octocat. https://github.com/acme/payments/pull/42',
+    });
+
+    const merged = slack.formatOrbitEvent(
+      {
+        event_id: 'evt-133a',
+        topic: 'connector',
+        event: 'connector.event.received',
+        status: 'completed',
+        emittedAt: '2026-04-09T10:00:10Z',
+        task_id: 'task-123',
+        payload: {
+          connector: 'github',
+          type: 'pull_request.closed',
+          data: {
+            pr_number: 42,
+            sender_login: 'octocat',
+            pr_merged: true,
+            html_url: 'https://github.com/acme/payments/pull/42',
+          },
+        },
+      },
+      task
+    );
+
+    expect(merged).toEqual({
+      text: 'Task task-123 linked GitHub PR #42 was merged by octocat. https://github.com/acme/payments/pull/42',
+    });
+
+    const review = slack.formatOrbitEvent(
+      {
+        event_id: 'evt-133b',
+        topic: 'connector',
+        event: 'connector.event.received',
+        status: 'completed',
+        emittedAt: '2026-04-09T10:00:10Z',
+        task_id: 'task-123',
+        payload: {
+          connector: 'github',
+          type: 'pull_request_review.submitted',
+          data: {
+            pr_number: 42,
+            sender_login: 'reviewer',
+            review_state: 'APPROVED',
+            review_body: 'Ship it',
+          },
+        },
+      },
+      task
+    );
+
+    expect(review).toEqual({
+      text: 'Task task-123 received a GitHub review on PR #42 from reviewer (approved): Ship it',
+    });
+
+    const comment = slack.formatOrbitEvent(
+      {
+        event_id: 'evt-134',
+        topic: 'connector',
+        event: 'connector.event.received',
+        status: 'completed',
+        emittedAt: '2026-04-09T10:00:11Z',
+        task_id: 'task-123',
+        payload: {
+          connector: 'github',
+          type: 'issue_comment.created',
+          data: {
+            pr_number: 42,
+            sender_login: 'reviewer',
+            comment_body: 'Looks good to me',
+          },
+        },
+      },
+      task
+    );
+
+    expect(comment).toEqual({
+      text: 'Task task-123 received a GitHub comment on PR #42 from reviewer: Looks good to me',
+    });
   });
 
   it('falls back to a generic update message for unrecognized event types', () => {

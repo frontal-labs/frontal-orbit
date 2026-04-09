@@ -842,6 +842,40 @@ describe('SlackInterface behavior', () => {
     expect(postMessage).not.toHaveBeenCalled();
   });
 
+  it('posts correlated github connector events into the tracked task thread', async () => {
+    const { slack, postMessage } = createTestSlackInterface();
+    const trackedTask = createTrackedTask();
+    postMessage.mockResolvedValue({ ts: '1710000000.450' });
+
+    await slack.handleOrbitTaskEvent(
+      createEvent({
+        topic: 'connector',
+        event: 'connector.event.received',
+        status: 'completed',
+        payload: {
+          connector: 'github',
+          type: 'pull_request.synchronize',
+          data: {
+            pr_number: 42,
+            sender_login: 'octocat',
+            html_url: 'https://github.com/acme/payments/pull/42',
+          },
+          channel_id: 'C123',
+          thread_ts: '1710000000.100',
+          repository: 'orbit/slack',
+        },
+      }),
+      trackedTask
+    );
+
+    expect(postMessage).toHaveBeenCalledWith({
+      channel: 'C123',
+      text: 'Task task-123 (orbit/slack) received a GitHub PR update (#42) from octocat. https://github.com/acme/payments/pull/42',
+      blocks: undefined,
+      thread_ts: '1710000000.100',
+    });
+  });
+
   it('does not clean up tracked task state when updating a resolved approval message fails', async () => {
     const { slack, updateMessage, untrackTask } = createTestSlackInterface();
     const trackedTask = createTrackedTask();

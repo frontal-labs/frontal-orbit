@@ -250,6 +250,10 @@ export class SlackInterface {
       await this.handleOrphanApprovalAction(action, body);
       return;
     }
+    if (this.isGithubFollowupApprovalAction(action)) {
+      await this.handleGithubFollowupApprovalAction(action, body);
+      return;
+    }
 
     const response = await this.orbitApi.sendConnectorInteraction("slack", {
       action: action.action_id,
@@ -270,6 +274,14 @@ export class SlackInterface {
       Boolean(action.value) &&
       (action.action_id === "orphaned_hosted_agent.retry" ||
         action.action_id === "orphaned_hosted_agent.cancel")
+    );
+  }
+
+  private isGithubFollowupApprovalAction(action: SlackAction): boolean {
+    return (
+      Boolean(action.value) &&
+      (action.action_id === "github_review_followup.ack" ||
+        action.action_id === "github_review_followup.retry")
     );
   }
 
@@ -350,6 +362,68 @@ export class SlackInterface {
         this.buildApprovalErrorBlocks(taskId, error as Error)
       );
       throw error;
+    }
+  }
+
+  private async handleGithubFollowupApprovalAction(
+    action: SlackAction,
+    body: SlackBody
+  ): Promise<void> {
+    const taskId = action.value;
+    if (!taskId) {
+      return;
+    }
+    const actionName: OrbitApprovalAction = action.action_id.endsWith(".retry")
+      ? "retry"
+      : "ack";
+    const approvalTs =
+      this.approvalMessageTsByTask.get(taskId) || body.message.ts;
+
+    if (this.approvalResolved.has(taskId)) {
+      await this.updateApprovalMessage(
+        body.channel.id,
+        approvalTs,
+        `Follow-up for task ${taskId} was already resolved.`,
+        this.buildApprovalResolvedBlocks(taskId, "already_resolved")
+      );
+      return;
+    }
+
+    if (this.approvalInFlight.has(taskId)) {
+      await this.updateApprovalMessage(
+        body.channel.id,
+        approvalTs,
+        `Follow-up for task ${taskId} is already being processed.`,
+        this.buildApprovalProcessingBlocks(taskId, actionName)
+      );
+      return;
+    }
+
+    this.approvalInFlight.add(taskId);
+    try {
+      const result = await this.orbitApi.resolveTaskApproval({
+        taskId,
+        approvalKind: "github_review_followup",
+        action: actionName,
+        resolvedBy: body.user.name || body.user.id,
+      });
+      this.approvalResolved.add(taskId);
+      this.approvalInFlight.delete(taskId);
+      await this.updateApprovalMessage(
+        body.channel.id,
+        approvalTs,
+        `Follow-up resolved for task ${taskId}.`,
+        this.buildApprovalResolvedBlocks(taskId, actionName)
+      );
+      this.trackTask(result);
+    } catch (error) {
+      this.approvalInFlight.delete(taskId);
+      await this.updateApprovalMessage(
+        body.channel.id,
+        approvalTs,
+        `Follow-up for task ${taskId} failed: ${(error as Error).message}`,
+        this.buildApprovalErrorBlocks(taskId, error as Error)
+      );
     }
   }
 
@@ -541,9 +615,56 @@ export class SlackInterface {
       case "memory.captured":
         return { text: `Memory captured for ${taskLabel.toLowerCase()}.` };
       case "connector.event.received":
-        return null;
+        return this.formatConnectorEvent(taskLabel, event);
       default:
         return { text: `${taskLabel} updated: ${event.event}` };
+    }
+  }
+
+  private formatConnectorEvent(
+    taskLabel: string,
+    event: OrbitEventEnvelope
+  ): SlackMessagePayload | null {
+    const payload = event.payload;
+    if (!payload || payload.connector !== "github") {
+      return null;
+    }
+
+    const connectorType = payload.type;
+    const data = this.readConnectorEventData(payload.data);
+    const actor = this.readConnectorString(data, "user_id", "sender_login");
+    const prNumber =
+      this.readConnectorNumber(data, "pr_number") ??
+      this.readConnectorNumber(data, "number");
+    const htmlUrl = this.readConnectorString(data, "html_url");
+    const commentBody = this.readConnectorString(data, "comment_body");
+    const reviewBody = this.readConnectorString(data, "review_body");
+    const reviewState = this.readConnectorString(data, "review_state");
+    const prMerged = data?.pr_merged === true;
+
+    switch (connectorType) {
+      case "pull_request.synchronize":
+        return {
+          text: `${taskLabel} received a GitHub PR update${prNumber ? ` (#${prNumber})` : ""}${actor ? ` from ${actor}` : ""}.${htmlUrl ? ` ${htmlUrl}` : ""}`,
+        };
+      case "pull_request.closed":
+        return {
+          text: `${taskLabel} linked GitHub PR${prNumber ? ` #${prNumber}` : ""} was ${prMerged ? "merged" : "closed"}${actor ? ` by ${actor}` : ""}.${htmlUrl ? ` ${htmlUrl}` : ""}`,
+        };
+      case "pull_request.reopened":
+        return {
+          text: `${taskLabel} linked GitHub PR${prNumber ? ` #${prNumber}` : ""} was reopened${actor ? ` by ${actor}` : ""}.${htmlUrl ? ` ${htmlUrl}` : ""}`,
+        };
+      case "pull_request_review.submitted":
+        return {
+          text: `${taskLabel} received a GitHub review${prNumber ? ` on PR #${prNumber}` : ""}${actor ? ` from ${actor}` : ""}${reviewState ? ` (${reviewState.toLowerCase()})` : ""}: ${reviewBody || "new review feedback"}`,
+        };
+      case "issue_comment.created":
+        return {
+          text: `${taskLabel} received a GitHub comment${prNumber ? ` on PR #${prNumber}` : ""}${actor ? ` from ${actor}` : ""}: ${commentBody || "new review feedback"}`,
+        };
+      default:
+        return null;
     }
   }
 
@@ -621,6 +742,12 @@ export class SlackInterface {
     const action = event.payload?.action || "updated";
     const workerStatus = summary.worker_status || event.payload?.worker_status;
     const workerId = summary.worker_id || event.payload?.worker_id;
+    if (event.payload?.approval_kind === "github_review_followup") {
+      return {
+        text: `GitHub follow-up cleared for ${taskLabel.toLowerCase()}.`,
+        blocks: this.buildApprovalResolvedBlocks(task.taskId, action),
+      };
+    }
     return {
       text: `Approval resolved for ${taskLabel.toLowerCase()}: ${action}.`,
       blocks: this.buildApprovalResolvedBlocks(
@@ -687,6 +814,47 @@ export class SlackInterface {
       };
     }
 
+    if (approvalKind === "github_review_followup") {
+      return {
+        text: `${taskLabel} needs follow-up: ${reason}`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*${taskLabel} needs follow-up*\n${reason}`,
+            },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "Mark done",
+                  emoji: true,
+                },
+                style: "primary",
+                action_id: "github_review_followup.ack",
+                value: task.taskId,
+              },
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "Retry lane",
+                  emoji: true,
+                },
+                action_id: "github_review_followup.retry",
+                value: task.taskId,
+              },
+            ],
+          },
+        ],
+      };
+    }
+
     return {
       text: `${taskLabel} is waiting for approval.`,
     };
@@ -726,6 +894,40 @@ export class SlackInterface {
       result: payload.result,
       error: payload.error,
     };
+  }
+
+  private readConnectorEventData(
+    data: OrbitEventPayload["data"]
+  ): Record<string, unknown> | undefined {
+    return data && typeof data === "object" && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : undefined;
+  }
+
+  private readConnectorString(
+    data: Record<string, unknown> | undefined,
+    ...keys: string[]
+  ): string | undefined {
+    for (const key of keys) {
+      const value = data?.[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  private readConnectorNumber(
+    data: Record<string, unknown> | undefined,
+    ...keys: string[]
+  ): number | undefined {
+    for (const key of keys) {
+      const value = data?.[key];
+      if (typeof value === "number") {
+        return value;
+      }
+    }
+    return undefined;
   }
 
   private hydrateTrackedTaskFromEvent(
