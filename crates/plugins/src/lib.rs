@@ -1525,7 +1525,7 @@ pub fn builtin_plugins() -> Vec<PluginDefinition> {
             id: plugin_id("example-builtin", BUILTIN_MARKETPLACE),
             name: "example-builtin".to_string(),
             version: "0.1.0".to_string(),
-            description: "Example built-in plugin scaffold for the Rust plugin system".to_string(),
+            description: "Example built-in plugin for the Rust plugin system".to_string(),
             kind: PluginKind::Builtin,
             source: BUILTIN_MARKETPLACE.to_string(),
             default_enabled: false,

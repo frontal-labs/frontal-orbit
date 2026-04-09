@@ -1,5 +1,5 @@
 //! # Orbit Core
-//! 
+//!
 //! This crate provides core capabilities for the Orbit system.
 
 #[cfg(test)]

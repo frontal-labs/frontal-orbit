@@ -1,11 +1,7 @@
 # Orbit Core
 
-Core capabilities for the Orbit ecosystem.
+Shared core capabilities for Orbit components.
 
-## Status
+## Current Status
 
-This crate is currently a stub and contains minimal functionality. It is intended for future development of core features.
-
-## Usage
-
-This crate is not yet functional for production use.
+This crate is included in workspace build/test gates and provides a minimal baseline surface with room for additional shared primitives.

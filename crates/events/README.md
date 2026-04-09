@@ -1,11 +1,7 @@
 # Orbit Events
 
-Event handling capabilities for the Orbit ecosystem.
+Event-related types and behavior for Orbit components.
 
-## Status
+## Current Status
 
-This crate is currently a stub and contains minimal functionality. It is intended for future development of event handling features.
-
-## Usage
-
-This crate is not yet functional for production use.
+This crate is included in workspace build/test gates and currently exposes a minimal baseline surface for event evolution.

@@ -10,6 +10,11 @@ orbit-api = { path = "../api" }
 orbit-commands = { path = "../commands" }
 orbit-plugins = { path = "../plugins" }
 orbit-runtime = { path = "../runtime" }
+orbit-memory = { path = "../memory" }
+orbit-training = { path = "../training" }
+orbit-telemetry = { path = "../telemetry" }
+orbit-integrations = { path = "../integrations" }
+orbit-webhooks = { path = "../webhooks" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true

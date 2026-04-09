@@ -1,11 +1,14 @@
 # Orbit Agents
 
-A placeholder crate for agent-related functionality in the Orbit ecosystem.
+Agent-related models and interfaces for the Orbit workspace.
 
-## Status
+## Current Status
 
-This crate is currently a stub and contains minimal functionality. It is intended for future development of agent-related features.
+This crate is part of the active workspace and compiles/tests successfully.
 
-## Usage
+It now re-exports the workspace observability surface for agent runtimes,
+including:
 
-This crate is not yet functional for production use.
+- `orbit-observability` run/span APIs for AI agent instrumentation
+- Sentry-style error reporting configuration and capture primitives
+- adapters for forwarding agent observations into `orbit-telemetry`

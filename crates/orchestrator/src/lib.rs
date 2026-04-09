@@ -1,13 +1,9 @@
-//! # Orbit Brain - Orchestrator
-//! 
-//! This crate provides orchestration capabilities for the Orbit system.
+//! # Orbit Orchestrator
+//! Provides routing, execution plan creation, and lane assignment for hosted work items.
 
+mod plan;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
+pub use plan::{
+    plan_work_item, ExecutionPlan, LaneAssignment, LaneRole, WorkItem, WorkItemContext,
+    WorkItemPriority, WorkItemSource,
+};

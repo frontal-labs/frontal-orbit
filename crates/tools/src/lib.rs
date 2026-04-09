@@ -1,6 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use orbit_api::{
@@ -8,13 +11,14 @@ use orbit_api::{
     MessageRequest, MessageResponse, OutputContentBlock, ProviderClient,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
+use orbit_memory::{
+    KgEntity, KgRelation, MemoryBackendConfig, MemoryScope, MemorySearchRequest, MemoryService,
+};
 use orbit_plugins::PluginTool;
-use reqwest::blocking::Client;
 use orbit_runtime::{
     check_freshness, dedupe_superseded_commit_events, edit_file, execute_bash, glob_search,
     grep_search, load_system_prompt,
     lsp_client::LspRegistry,
-    mcp_tool_bridge::McpToolRegistry,
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
     read_file,
     summary_compression::compress_summary_text,
@@ -23,24 +27,26 @@ use orbit_runtime::{
     worker_boot::{WorkerReadySnapshot, WorkerRegistry},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
     BranchFreshness, ContentBlock, ConversationMessage, ConversationRuntime, GrepSearchInput,
-    LaneCommitProvenance, LaneEvent, LaneEventBlocker, LaneEventName, LaneEventStatus,
-    LaneFailureClass, McpDegradedReport, MessageRole, PermissionMode, PermissionPolicy,
-    PromptCacheEvent, RuntimeError, Session, TaskPacket, ToolError, ToolExecutor,
+    HookAbortSignal, LaneCommitProvenance, LaneEvent, LaneEventBlocker, LaneEventName,
+    LaneEventStatus, LaneFailureClass, McpDegradedReport, MessageRole, PermissionMode,
+    PermissionPolicy, PromptCacheEvent, RuntimeError, Session, TaskPacket, ToolError, ToolExecutor,
 };
+use orbit_telemetry::{AnalyticsEvent, JsonlTelemetrySink, SessionTracer, TelemetrySink};
+use orbit_training::{
+    InMemoryStyleProfileStore, StyleDatasetBuilder, StyleProfile, StyleProfileStore, StyleScope,
+    StyleTrainingService,
+};
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+
+const ORBIT_TOOL_TELEMETRY_PATH: &str = "ORBIT_TOOL_TELEMETRY_PATH";
 
 /// Global task registry shared across tool invocations within a session.
 fn global_lsp_registry() -> &'static LspRegistry {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<LspRegistry> = OnceLock::new();
     REGISTRY.get_or_init(LspRegistry::new)
-}
-
-fn global_mcp_registry() -> &'static McpToolRegistry {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<McpToolRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(McpToolRegistry::new)
 }
 
 fn global_team_registry() -> &'static TeamRegistry {
@@ -65,6 +71,190 @@ fn global_worker_registry() -> &'static WorkerRegistry {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<WorkerRegistry> = OnceLock::new();
     REGISTRY.get_or_init(WorkerRegistry::new)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ToolExecutionScope {
+    pub session_id: String,
+    pub repo_id: Option<String>,
+    pub branch_id: Option<String>,
+}
+
+impl ToolExecutionScope {
+    #[must_use]
+    pub fn for_session(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            repo_id: None,
+            branch_id: None,
+        }
+    }
+
+    #[must_use]
+    fn memory_scope(&self) -> MemoryScope {
+        let mut scope = MemoryScope::new(self.session_id.clone());
+        if let Some(repo_id) = &self.repo_id {
+            scope = scope.with_repo_id(repo_id.clone());
+        }
+        if let Some(branch_id) = &self.branch_id {
+            scope = scope.with_branch_id(branch_id.clone());
+        }
+        scope
+    }
+
+    #[must_use]
+    fn style_scope(&self) -> StyleScope {
+        StyleScope::new(
+            self.session_id.clone(),
+            self.repo_id.clone(),
+            self.branch_id.clone(),
+        )
+    }
+}
+
+impl Default for ToolExecutionScope {
+    fn default() -> Self {
+        Self::for_session("default-tool-session")
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SharedStyleProfileStore {
+    inner: Arc<InMemoryStyleProfileStore>,
+}
+
+impl Default for SharedStyleProfileStore {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(InMemoryStyleProfileStore::new()),
+        }
+    }
+}
+
+impl StyleProfileStore for SharedStyleProfileStore {
+    fn load_profile(
+        &self,
+        scope: &StyleScope,
+    ) -> Result<Option<StyleProfile>, orbit_training::StyleStoreError> {
+        self.inner.load_profile(scope)
+    }
+
+    fn save_profile(
+        &self,
+        scope: &StyleScope,
+        profile: &StyleProfile,
+    ) -> Result<(), orbit_training::StyleStoreError> {
+        self.inner.save_profile(scope, profile)
+    }
+
+    fn save_samples(
+        &self,
+        scope: &StyleScope,
+        samples: &[orbit_training::StyleSample],
+    ) -> Result<(), orbit_training::StyleStoreError> {
+        self.inner.save_samples(scope, samples)
+    }
+}
+
+#[derive(Clone)]
+struct ToolServices {
+    memory: MemoryService,
+    style_training: StyleTrainingService<SharedStyleProfileStore>,
+    telemetry: ToolTelemetry,
+}
+
+impl ToolServices {
+    #[must_use]
+    fn new() -> Self {
+        Self {
+            memory: MemoryService::from_backend_config(MemoryBackendConfig::from_env()),
+            style_training: StyleTrainingService::new(SharedStyleProfileStore::default()),
+            telemetry: ToolTelemetry::from_env(),
+        }
+    }
+}
+
+impl Default for ToolServices {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for ToolServices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ToolServices")
+    }
+}
+
+#[derive(Clone, Default)]
+struct ToolTelemetry {
+    tracer: Option<SessionTracer>,
+    sink: Option<Arc<dyn TelemetrySink>>,
+    tracers: Arc<Mutex<BTreeMap<String, SessionTracer>>>,
+}
+
+impl ToolTelemetry {
+    #[must_use]
+    fn from_env() -> Self {
+        env::var(ORBIT_TOOL_TELEMETRY_PATH)
+            .ok()
+            .map(|path| path.trim().to_string())
+            .filter(|path| !path.is_empty())
+            .and_then(|path| JsonlTelemetrySink::new(path).ok())
+            .map(|sink| Self::with_sink(Arc::new(sink)))
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    fn with_sink(sink: Arc<dyn TelemetrySink>) -> Self {
+        Self {
+            tracer: None,
+            sink: Some(sink),
+            tracers: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    #[must_use]
+    fn with_session_tracer(tracer: SessionTracer) -> Self {
+        Self {
+            tracer: Some(tracer),
+            sink: None,
+            tracers: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    fn record_analytics(
+        &self,
+        scope: &ToolExecutionScope,
+        namespace: impl Into<String>,
+        action: impl Into<String>,
+        properties: Map<String, Value>,
+    ) {
+        if let Some(tracer) = &self.tracer {
+            if tracer.session_id() == scope.session_id {
+                let mut event = AnalyticsEvent::new(namespace, action);
+                event.properties = properties;
+                tracer.record_analytics(event);
+                return;
+            }
+        }
+        let Some(sink) = &self.sink else {
+            return;
+        };
+        let mut tracers = self
+            .tracers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tracer = tracers
+            .entry(scope.session_id.clone())
+            .or_insert_with(|| SessionTracer::new(scope.session_id.clone(), sink.clone()))
+            .clone();
+        drop(tracers);
+
+        let mut event = AnalyticsEvent::new(namespace, action);
+        event.properties = properties;
+        tracer.record_analytics(event);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +299,7 @@ pub struct GlobalToolRegistry {
     plugin_tools: Vec<PluginTool>,
     runtime_tools: Vec<RuntimeToolDefinition>,
     enforcer: Option<PermissionEnforcer>,
+    services: ToolServices,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,6 +317,7 @@ impl GlobalToolRegistry {
             plugin_tools: Vec::new(),
             runtime_tools: Vec::new(),
             enforcer: None,
+            services: ToolServices::new(),
         }
     }
 
@@ -152,6 +344,7 @@ impl GlobalToolRegistry {
             plugin_tools,
             runtime_tools: Vec::new(),
             enforcer: None,
+            services: ToolServices::new(),
         })
     }
 
@@ -185,6 +378,12 @@ impl GlobalToolRegistry {
     #[must_use]
     pub fn with_enforcer(mut self, enforcer: PermissionEnforcer) -> Self {
         self.set_enforcer(enforcer);
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_tracer(mut self, session_tracer: SessionTracer) -> Self {
+        self.services.telemetry = ToolTelemetry::with_session_tracer(session_tracer);
         self
     }
 
@@ -336,8 +535,23 @@ impl GlobalToolRegistry {
     }
 
     pub fn execute(&self, name: &str, input: &Value) -> Result<String, String> {
+        self.execute_scoped(name, input, &ToolExecutionScope::default())
+    }
+
+    pub fn execute_scoped(
+        &self,
+        name: &str,
+        input: &Value,
+        scope: &ToolExecutionScope,
+    ) -> Result<String, String> {
         if mvp_tool_specs().iter().any(|spec| spec.name == name) {
-            return execute_tool_with_enforcer(self.enforcer.as_ref(), name, input);
+            return execute_tool_with_enforcer_and_scope(
+                self.enforcer.as_ref(),
+                &self.services,
+                name,
+                input,
+                scope,
+            );
         }
         self.plugin_tools
             .iter()
@@ -577,7 +791,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "hosted_task_id": { "type": "string" }
                 },
                 "required": ["description", "prompt"],
                 "additionalProperties": false
@@ -1055,74 +1270,114 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
-            name: "ListMcpResources",
-            description: "List available resources from connected MCP servers.",
+            name: "MemoryUpsert",
+            description: "Store or delete a semantic memory entry for retrieval and coding-style adaptation.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "server": { "type": "string" }
+                    "action": { "type": "string", "enum": ["upsert", "delete"] },
+                    "id": { "type": "string" },
+                    "source": { "type": "string" },
+                    "text": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
                 },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "MemorySearch",
+            description: "Search semantic memory using configurable hybrid lexical, vector, source, and recency ranking.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "top_k": { "type": "integer", "minimum": 1 },
+                    "min_score": { "type": "number" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "source_filter": { "type": "string" },
+                    "preferred_source": { "type": "string" }
+                },
+                "required": ["query"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
-            name: "ReadMcpResource",
-            description: "Read a specific resource from an MCP server by URI.",
+            name: "MemoryInspect",
+            description: "Inspect scoped memory contents and the active memory backend configuration.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "server": { "type": "string" },
-                    "uri": { "type": "string" }
+                    "action": { "type": "string", "enum": ["list", "backend"] },
+                    "source_filter": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
                 },
-                "required": ["uri"],
+                "required": ["action"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
-            name: "McpAuth",
-            description: "Authenticate with an MCP server that requires OAuth or credentials.",
+            name: "KnowledgeGraph",
+            description: "Upsert, delete, and query KG entities and relations.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "server": { "type": "string" }
+                    "action": { "type": "string", "enum": ["upsert_entity", "add_relation", "neighbors", "delete_entity", "delete_relation"] },
+                    "entity_id": { "type": "string" },
+                    "label": { "type": "string" },
+                    "entity_type": { "type": "string" },
+                    "subject_id": { "type": "string" },
+                    "predicate": { "type": "string" },
+                    "object_id": { "type": "string" }
                 },
-                "required": ["server"],
+                "required": ["action"],
                 "additionalProperties": false
             }),
-            required_permission: PermissionMode::DangerFullAccess,
+            required_permission: PermissionMode::WorkspaceWrite,
         },
         ToolSpec {
-            name: "RemoteTrigger",
-            description: "Trigger a remote action or webhook endpoint.",
+            name: "KnowledgeGraphInspect",
+            description: "Inspect scoped KG entities and relations without mutating graph state.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "url": { "type": "string" },
-                    "method": { "type": "string", "enum": ["GET", "POST", "PUT", "DELETE"] },
-                    "headers": { "type": "object" },
-                    "body": { "type": "string" }
+                    "action": { "type": "string", "enum": ["list_entities", "list_relations"] },
+                    "entity_type": { "type": "string" },
+                    "predicate": { "type": "string" }
                 },
-                "required": ["url"],
+                "required": ["action"],
                 "additionalProperties": false
             }),
-            required_permission: PermissionMode::DangerFullAccess,
+            required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
-            name: "MCP",
-            description: "Execute a tool provided by a connected MCP server.",
+            name: "StyleTrain",
+            description: "Train a coding-style profile from examples and score candidate code.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "server": { "type": "string" },
-                    "tool": { "type": "string" },
-                    "arguments": { "type": "object" }
+                    "action": { "type": "string", "enum": ["train", "get_profile", "score"] },
+                    "samples": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source": { "type": "string" },
+                                "content": { "type": "string" }
+                            },
+                            "required": ["source", "content"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "candidate_code": { "type": "string" }
                 },
-                "required": ["server", "tool"],
+                "required": ["action"],
                 "additionalProperties": false
             }),
-            required_permission: PermissionMode::DangerFullAccess,
+            required_permission: PermissionMode::WorkspaceWrite,
         },
         ToolSpec {
             name: "TestingPermission",
@@ -1138,6 +1393,28 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::DangerFullAccess,
         },
     ]
+    .into_iter()
+    .chain(orbit_integrations::mcp_tool_specs().into_iter().map(|spec| ToolSpec {
+        name: Box::leak(spec.name.into_boxed_str()),
+        description: Box::leak(spec.description.into_boxed_str()),
+        input_schema: spec.input_schema,
+        required_permission: match spec.required_permission {
+            orbit_integrations::mcp::tools::PermissionMode::ReadOnly => orbit_runtime::PermissionMode::ReadOnly,
+            orbit_integrations::mcp::tools::PermissionMode::WorkspaceWrite => orbit_runtime::PermissionMode::WorkspaceWrite,
+            orbit_integrations::mcp::tools::PermissionMode::DangerFullAccess => orbit_runtime::PermissionMode::DangerFullAccess,
+        },
+    }))
+    .chain(orbit_webhooks::webhook_tool_specs().into_iter().map(|spec| ToolSpec {
+        name: Box::leak(spec.name.into_boxed_str()),
+        description: Box::leak(spec.description.into_boxed_str()),
+        input_schema: spec.input_schema,
+        required_permission: match spec.required_permission {
+            orbit_webhooks::tools::PermissionMode::ReadOnly => orbit_runtime::PermissionMode::ReadOnly,
+            orbit_webhooks::tools::PermissionMode::WorkspaceWrite => orbit_runtime::PermissionMode::WorkspaceWrite,
+            orbit_webhooks::tools::PermissionMode::DangerFullAccess => orbit_runtime::PermissionMode::DangerFullAccess,
+        },
+    }))
+    .collect()
 }
 
 /// Check permission before executing a tool. Returns Err with denial reason if blocked.
@@ -1156,39 +1433,40 @@ pub fn enforce_permission_check(
 }
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
-    execute_tool_with_enforcer(None, name, input)
+    execute_tool_with_enforcer_and_scope(
+        None,
+        legacy_tool_services(),
+        name,
+        input,
+        &ToolExecutionScope::default(),
+    )
 }
 
-fn execute_tool_with_enforcer(
+fn legacy_tool_services() -> &'static ToolServices {
+    use std::sync::OnceLock;
+
+    static SERVICES: OnceLock<ToolServices> = OnceLock::new();
+    SERVICES.get_or_init(ToolServices::new)
+}
+
+fn execute_tool_with_enforcer_and_scope(
     enforcer: Option<&PermissionEnforcer>,
+    services: &ToolServices,
     name: &str,
     input: &Value,
+    scope: &ToolExecutionScope,
 ) -> Result<String, String> {
+    if mvp_tool_specs().iter().any(|spec| spec.name == name) {
+        maybe_enforce_permission_check(enforcer, name, input)?;
+    }
+
     match name {
-        "bash" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<BashCommandInput>(input).and_then(run_bash)
-        }
-        "read_file" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<ReadFileInput>(input).and_then(run_read_file)
-        }
-        "write_file" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<WriteFileInput>(input).and_then(run_write_file)
-        }
-        "edit_file" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<EditFileInput>(input).and_then(run_edit_file)
-        }
-        "glob_search" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<GlobSearchInputValue>(input).and_then(run_glob_search)
-        }
-        "grep_search" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<GrepSearchInput>(input).and_then(run_grep_search)
-        }
+        "bash" => from_value::<BashCommandInput>(input).and_then(run_bash),
+        "read_file" => from_value::<ReadFileInput>(input).and_then(run_read_file),
+        "write_file" => from_value::<WriteFileInput>(input).and_then(run_write_file),
+        "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
+        "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
+        "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
@@ -1234,15 +1512,37 @@ fn execute_tool_with_enforcer(
         "CronDelete" => from_value::<CronDeleteInput>(input).and_then(run_cron_delete),
         "CronList" => run_cron_list(input.clone()),
         "LSP" => from_value::<LspInput>(input).and_then(run_lsp),
-        "ListMcpResources" => {
-            from_value::<McpResourceInput>(input).and_then(run_list_mcp_resources)
-        }
-        "ReadMcpResource" => from_value::<McpResourceInput>(input).and_then(run_read_mcp_resource),
-        "McpAuth" => from_value::<McpAuthInput>(input).and_then(run_mcp_auth),
-        "RemoteTrigger" => from_value::<RemoteTriggerInput>(input).and_then(run_remote_trigger),
-        "MCP" => from_value::<McpToolInput>(input).and_then(run_mcp_tool),
+        "MemoryUpsert" => from_value::<MemoryUpsertInput>(input)
+            .and_then(|parsed| run_memory_upsert(services, scope, parsed)),
+        "MemorySearch" => from_value::<MemorySearchInput>(input)
+            .and_then(|parsed| run_memory_search(services, scope, parsed)),
+        "MemoryInspect" => from_value::<MemoryInspectInput>(input)
+            .and_then(|parsed| run_memory_inspect(services, scope, parsed)),
+        "KnowledgeGraph" => from_value::<KnowledgeGraphInput>(input)
+            .and_then(|parsed| run_knowledge_graph(services, scope, parsed)),
+        "KnowledgeGraphInspect" => from_value::<KnowledgeGraphInspectInput>(input)
+            .and_then(|parsed| run_knowledge_graph_inspect(services, scope, parsed)),
+        "StyleTrain" => from_value::<StyleTrainInput>(input)
+            .and_then(|parsed| run_style_train(services, scope, parsed)),
         "TestingPermission" => {
             from_value::<TestingPermissionInput>(input).and_then(run_testing_permission)
+        }
+        // MCP tools from orbit-integrations
+        tool_name
+            if tool_name.starts_with("ListMcpResources")
+                || tool_name.starts_with("ReadMcpResource")
+                || tool_name.starts_with("McpAuth")
+                || tool_name.starts_with("MCP") =>
+        {
+            orbit_integrations::execute_mcp_tool(name, input)
+        }
+        // Webhook tools from orbit-webhooks
+        tool_name
+            if tool_name.starts_with("RemoteTrigger")
+                || tool_name.starts_with("ListWebhookEvents")
+                || tool_name.starts_with("TriggerWebhook") =>
+        {
+            orbit_webhooks::execute_webhook_tool(name, input)
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
@@ -1582,159 +1882,508 @@ fn run_lsp(input: LspInput) -> Result<String, String> {
     }
 }
 
+fn telemetry_scope_properties(scope: &ToolExecutionScope) -> Map<String, Value> {
+    let mut properties = Map::new();
+    if let Some(repo_id) = &scope.repo_id {
+        properties.insert("repo_id".to_string(), Value::String(repo_id.clone()));
+    }
+    if let Some(branch_id) = &scope.branch_id {
+        properties.insert("branch_id".to_string(), Value::String(branch_id.clone()));
+    }
+    properties
+}
+
 #[allow(clippy::needless_pass_by_value)]
-fn run_list_mcp_resources(input: McpResourceInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let server = input.server.as_deref().unwrap_or("default");
-    match registry.list_resources(server) {
-        Ok(resources) => {
-            let items: Vec<_> = resources
-                .iter()
-                .map(|r| {
-                    json!({
-                        "uri": r.uri,
-                        "name": r.name,
-                        "description": r.description,
-                        "mime_type": r.mime_type,
-                    })
+fn run_memory_upsert(
+    services: &ToolServices,
+    scope: &ToolExecutionScope,
+    input: MemoryUpsertInput,
+) -> Result<String, String> {
+    let memory_scope = scope.memory_scope();
+    match input.action.as_deref().unwrap_or("upsert") {
+        "upsert" => {
+            let source = required_string(input.source, "source")?;
+            let text = required_string(input.text, "text")?;
+            services
+                .memory
+                .upsert_memory(&memory_scope, input.id, source, text, input.tags);
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert(
+                "item_count".to_string(),
+                Value::from(services.memory.item_count(&memory_scope) as u64),
+            );
+            properties.insert("stored".to_string(), Value::Bool(true));
+            services
+                .telemetry
+                .record_analytics(scope, "memory", "upsert", properties);
+            to_pretty_json(json!({
+                "status": "ok",
+                "stored": true,
+                "deleted": false,
+                "items": services.memory.item_count(&memory_scope),
+            }))
+        }
+        "delete" => {
+            let deleted = services.memory.delete_memory(&memory_scope, &input.id);
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("deleted".to_string(), Value::Bool(deleted));
+            properties.insert(
+                "item_count".to_string(),
+                Value::from(services.memory.item_count(&memory_scope) as u64),
+            );
+            services
+                .telemetry
+                .record_analytics(scope, "memory", "delete", properties);
+            to_pretty_json(json!({
+                "status": "ok",
+                "stored": false,
+                "deleted": deleted,
+                "items": services.memory.item_count(&memory_scope),
+            }))
+        }
+        action => Err(format!("unsupported MemoryUpsert action: {action}")),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_memory_search(
+    services: &ToolServices,
+    scope: &ToolExecutionScope,
+    input: MemorySearchInput,
+) -> Result<String, String> {
+    let mut request = MemorySearchRequest::new(input.query.clone()).with_top_k(input.top_k);
+    if !input.tags.is_empty() {
+        request = request.with_tags(input.tags.clone());
+    }
+    if let Some(min_score) = input.min_score {
+        request = request.with_min_score(min_score);
+    }
+    if let Some(source_filter) = input.source_filter.as_deref() {
+        request = request.with_source_filter(source_filter);
+    }
+    if let Some(preferred_source) = input.preferred_source.as_deref() {
+        request = request.with_preferred_source(preferred_source);
+    }
+    let (results, diagnostics) = services
+        .memory
+        .search_with_request_and_diagnostics(&scope.memory_scope(), &request);
+    let mut properties = telemetry_scope_properties(scope);
+    properties.insert("top_k".to_string(), Value::from(input.top_k as u64));
+    properties.insert(
+        "result_count".to_string(),
+        Value::from(results.len() as u64),
+    );
+    properties.insert(
+        "candidate_count".to_string(),
+        Value::from(diagnostics.candidate_count as u64),
+    );
+    properties.insert(
+        "model_mismatch_drops".to_string(),
+        Value::from(diagnostics.model_mismatch_drops as u64),
+    );
+    properties.insert(
+        "source_filter_drops".to_string(),
+        Value::from(diagnostics.source_filter_drops as u64),
+    );
+    properties.insert(
+        "tag_filter_drops".to_string(),
+        Value::from(diagnostics.tag_filter_drops as u64),
+    );
+    properties.insert(
+        "min_score_drops".to_string(),
+        Value::from(diagnostics.min_score_drops as u64),
+    );
+    if let Some(min_score) = input.min_score {
+        properties.insert("min_score".to_string(), Value::from(min_score));
+    }
+    if let Some(source_filter) = input.source_filter.as_ref() {
+        properties.insert(
+            "source_filter".to_string(),
+            Value::String(source_filter.clone()),
+        );
+    }
+    if let Some(preferred_source) = input.preferred_source.as_ref() {
+        properties.insert(
+            "preferred_source".to_string(),
+            Value::String(preferred_source.clone()),
+        );
+    }
+    services
+        .telemetry
+        .record_analytics(scope, "memory", "search", properties);
+    to_pretty_json(json!({
+        "query": input.query,
+        "top_k": input.top_k,
+        "min_score": input.min_score,
+        "source_filter": input.source_filter,
+        "preferred_source": input.preferred_source,
+        "diagnostics": diagnostics,
+        "results": results
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_memory_inspect(
+    services: &ToolServices,
+    scope: &ToolExecutionScope,
+    input: MemoryInspectInput,
+) -> Result<String, String> {
+    let memory_scope = scope.memory_scope();
+    match input.action.as_str() {
+        "list" => {
+            let source_filter = input
+                .source_filter
+                .as_deref()
+                .map(|value| value.trim().to_ascii_lowercase());
+            let tags = input.tags.into_iter().collect::<BTreeSet<_>>();
+            let memories = services
+                .memory
+                .list_memories(&memory_scope)
+                .into_iter()
+                .filter(|item| {
+                    source_filter
+                        .as_ref()
+                        .is_none_or(|filter| item.source.trim().to_ascii_lowercase() == *filter)
                 })
-                .collect();
+                .filter(|item| tags.is_empty() || item.tags.iter().any(|tag| tags.contains(tag)))
+                .collect::<Vec<_>>();
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("count".to_string(), Value::from(memories.len() as u64));
+            services
+                .telemetry
+                .record_analytics(scope, "memory", "inspect_list", properties);
             to_pretty_json(json!({
-                "server": server,
-                "resources": items,
-                "count": items.len()
+                "action": "list",
+                "scope": memory_scope,
+                "count": memories.len(),
+                "items": memories
             }))
         }
-        Err(e) => to_pretty_json(json!({
-            "server": server,
-            "resources": [],
-            "error": e
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_read_mcp_resource(input: McpResourceInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let uri = input.uri.as_deref().unwrap_or("");
-    let server = input.server.as_deref().unwrap_or("default");
-    match registry.read_resource(server, uri) {
-        Ok(resource) => to_pretty_json(json!({
-            "server": server,
-            "uri": resource.uri,
-            "name": resource.name,
-            "description": resource.description,
-            "mime_type": resource.mime_type
-        })),
-        Err(e) => to_pretty_json(json!({
-            "server": server,
-            "uri": uri,
-            "error": e
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_mcp_auth(input: McpAuthInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    match registry.get_server(&input.server) {
-        Some(state) => to_pretty_json(json!({
-            "server": input.server,
-            "status": state.status,
-            "server_info": state.server_info,
-            "tool_count": state.tools.len(),
-            "resource_count": state.resources.len()
-        })),
-        None => to_pretty_json(json!({
-            "server": input.server,
-            "status": "disconnected",
-            "message": "Server not registered. Use MCP tool to connect first."
-        })),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
-    let method = input.method.unwrap_or_else(|| "GET".to_string());
-    let client = Client::new();
-
-    let mut request = match method.to_uppercase().as_str() {
-        "GET" => client.get(&input.url),
-        "POST" => client.post(&input.url),
-        "PUT" => client.put(&input.url),
-        "DELETE" => client.delete(&input.url),
-        "PATCH" => client.patch(&input.url),
-        "HEAD" => client.head(&input.url),
-        other => return Err(format!("unsupported HTTP method: {other}")),
-    };
-
-    // Apply custom headers
-    if let Some(ref headers) = input.headers {
-        if let Some(obj) = headers.as_object() {
-            for (key, value) in obj {
-                if let Some(val) = value.as_str() {
-                    request = request.header(key.as_str(), val);
+        "backend" => {
+            let config = services.memory.backend_config();
+            let pinecone_enabled = config.pinecone_url.is_some();
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert(
+                "metadata_enabled".to_string(),
+                Value::Bool(config.metadata_path.is_some()),
+            );
+            properties.insert(
+                "pinecone_enabled".to_string(),
+                Value::Bool(pinecone_enabled),
+            );
+            properties.insert(
+                "neo4j_enabled".to_string(),
+                Value::Bool(config.neo4j_url.is_some() && config.neo4j_database.is_some()),
+            );
+            services
+                .telemetry
+                .record_analytics(scope, "memory", "inspect_backend", properties);
+            to_pretty_json(json!({
+                "action": "backend",
+                "metadata_path": config.metadata_path.as_ref().map(|path| path.display().to_string()),
+                "pinecone": {
+                    "enabled": pinecone_enabled,
+                    "url": config.pinecone_url,
+                    "namespace": config.pinecone_namespace,
+                    "api_key_configured": config.pinecone_api_key.is_some()
+                },
+                "neo4j": {
+                    "enabled": config.neo4j_url.is_some() && config.neo4j_database.is_some(),
+                    "url": config.neo4j_url,
+                    "database": config.neo4j_database,
+                    "username": config.neo4j_username,
+                    "password_configured": config.neo4j_password.is_some()
                 }
-            }
-        }
-    }
-
-    // Apply body
-    if let Some(ref body) = input.body {
-        request = request.body(body.clone());
-    }
-
-    // Execute with a 30-second timeout
-    let request = request.timeout(Duration::from_secs(30));
-
-    match request.send() {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let body = response.text().unwrap_or_default();
-            let truncated_body = if body.len() > 8192 {
-                format!(
-                    "{}\n\n[response truncated — {} bytes total]",
-                    &body[..8192],
-                    body.len()
-                )
-            } else {
-                body
-            };
-            to_pretty_json(json!({
-                "url": input.url,
-                "method": method,
-                "status_code": status,
-                "body": truncated_body,
-                "success": (200..300).contains(&status)
             }))
         }
-        Err(e) => to_pretty_json(json!({
-            "url": input.url,
-            "method": method,
-            "error": e.to_string(),
-            "success": false
-        })),
+        action => Err(format!("unsupported MemoryInspect action: {action}")),
     }
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_mcp_tool(input: McpToolInput) -> Result<String, String> {
-    let registry = global_mcp_registry();
-    let args = input.arguments.unwrap_or(serde_json::json!({}));
-    match registry.call_tool(&input.server, &input.tool, &args) {
-        Ok(result) => to_pretty_json(json!({
-            "server": input.server,
-            "tool": input.tool,
-            "result": result,
-            "status": "success"
-        })),
-        Err(e) => to_pretty_json(json!({
-            "server": input.server,
-            "tool": input.tool,
-            "error": e,
-            "status": "error"
-        })),
+fn run_knowledge_graph(
+    services: &ToolServices,
+    scope: &ToolExecutionScope,
+    input: KnowledgeGraphInput,
+) -> Result<String, String> {
+    let memory_scope = scope.memory_scope();
+    match input.action.as_str() {
+        "upsert_entity" => {
+            let entity_id = required_string(input.entity_id, "entity_id")?;
+            let label = required_string(input.label, "label")?;
+            let entity_type = required_string(input.entity_type, "entity_type")?;
+            services.memory.upsert_entity(
+                &memory_scope,
+                KgEntity {
+                    id: entity_id.clone(),
+                    label,
+                    entity_type,
+                },
+            );
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("entity_id".to_string(), Value::String(entity_id.clone()));
+            services.telemetry.record_analytics(
+                scope,
+                "knowledge_graph",
+                "upsert_entity",
+                properties,
+            );
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "upsert_entity",
+                "entity_id": entity_id
+            }))
+        }
+        "add_relation" => {
+            let subject_id = required_string(input.subject_id, "subject_id")?;
+            let predicate = required_string(input.predicate, "predicate")?;
+            let object_id = required_string(input.object_id, "object_id")?;
+            services.memory.add_relation(
+                &memory_scope,
+                KgRelation {
+                    subject_id: subject_id.clone(),
+                    predicate: predicate.clone(),
+                    object_id: object_id.clone(),
+                },
+            );
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("subject_id".to_string(), Value::String(subject_id.clone()));
+            properties.insert("predicate".to_string(), Value::String(predicate.clone()));
+            properties.insert("object_id".to_string(), Value::String(object_id.clone()));
+            services.telemetry.record_analytics(
+                scope,
+                "knowledge_graph",
+                "add_relation",
+                properties,
+            );
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "add_relation",
+                "subject_id": subject_id,
+                "predicate": predicate,
+                "object_id": object_id
+            }))
+        }
+        "neighbors" => {
+            let entity_id = required_string(input.entity_id, "entity_id")?;
+            let neighbors = services.memory.neighbors(&memory_scope, &entity_id);
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("entity_id".to_string(), Value::String(entity_id.clone()));
+            properties.insert(
+                "neighbor_count".to_string(),
+                Value::from(neighbors.len() as u64),
+            );
+            services
+                .telemetry
+                .record_analytics(scope, "knowledge_graph", "neighbors", properties);
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "neighbors",
+                "entity_id": entity_id,
+                "neighbors": neighbors
+            }))
+        }
+        "delete_entity" => {
+            let entity_id = required_string(input.entity_id, "entity_id")?;
+            let deleted = services.memory.delete_entity(&memory_scope, &entity_id);
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("entity_id".to_string(), Value::String(entity_id.clone()));
+            properties.insert("deleted".to_string(), Value::Bool(deleted));
+            services.telemetry.record_analytics(
+                scope,
+                "knowledge_graph",
+                "delete_entity",
+                properties,
+            );
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "delete_entity",
+                "entity_id": entity_id,
+                "deleted": deleted
+            }))
+        }
+        "delete_relation" => {
+            let subject_id = required_string(input.subject_id, "subject_id")?;
+            let predicate = required_string(input.predicate, "predicate")?;
+            let object_id = required_string(input.object_id, "object_id")?;
+            let deleted = services.memory.delete_relation(
+                &memory_scope,
+                &KgRelation {
+                    subject_id: subject_id.clone(),
+                    predicate: predicate.clone(),
+                    object_id: object_id.clone(),
+                },
+            );
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("subject_id".to_string(), Value::String(subject_id.clone()));
+            properties.insert("predicate".to_string(), Value::String(predicate.clone()));
+            properties.insert("object_id".to_string(), Value::String(object_id.clone()));
+            properties.insert("deleted".to_string(), Value::Bool(deleted));
+            services.telemetry.record_analytics(
+                scope,
+                "knowledge_graph",
+                "delete_relation",
+                properties,
+            );
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "delete_relation",
+                "subject_id": subject_id,
+                "predicate": predicate,
+                "object_id": object_id,
+                "deleted": deleted
+            }))
+        }
+        action => Err(format!("unsupported KnowledgeGraph action: {action}")),
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_knowledge_graph_inspect(
+    services: &ToolServices,
+    scope: &ToolExecutionScope,
+    input: KnowledgeGraphInspectInput,
+) -> Result<String, String> {
+    let memory_scope = scope.memory_scope();
+    match input.action.as_str() {
+        "list_entities" => {
+            let entities = services
+                .memory
+                .list_entities(&memory_scope)
+                .into_iter()
+                .filter(|entity| {
+                    input
+                        .entity_type
+                        .as_ref()
+                        .is_none_or(|entity_type| entity.entity_type == *entity_type)
+                })
+                .collect::<Vec<_>>();
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("count".to_string(), Value::from(entities.len() as u64));
+            services.telemetry.record_analytics(
+                scope,
+                "knowledge_graph",
+                "inspect_entities",
+                properties,
+            );
+            to_pretty_json(json!({
+                "action": "list_entities",
+                "count": entities.len(),
+                "entities": entities
+            }))
+        }
+        "list_relations" => {
+            let relations = services
+                .memory
+                .list_relations(&memory_scope)
+                .into_iter()
+                .filter(|relation| {
+                    input
+                        .predicate
+                        .as_ref()
+                        .is_none_or(|predicate| relation.predicate == *predicate)
+                })
+                .collect::<Vec<_>>();
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("count".to_string(), Value::from(relations.len() as u64));
+            services.telemetry.record_analytics(
+                scope,
+                "knowledge_graph",
+                "inspect_relations",
+                properties,
+            );
+            to_pretty_json(json!({
+                "action": "list_relations",
+                "count": relations.len(),
+                "relations": relations
+            }))
+        }
+        action => Err(format!(
+            "unsupported KnowledgeGraphInspect action: {action}"
+        )),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_style_train(
+    services: &ToolServices,
+    scope: &ToolExecutionScope,
+    input: StyleTrainInput,
+) -> Result<String, String> {
+    let style_scope = scope.style_scope();
+    match input.action.as_str() {
+        "train" => {
+            if input.samples.is_empty() {
+                return Err("StyleTrain train requires at least one sample".to_string());
+            }
+            let mut builder = StyleDatasetBuilder::new();
+            for sample in input.samples {
+                builder.add_sample(sample.source, sample.content);
+            }
+            let samples = builder.build();
+            let profile = services
+                .style_training
+                .train(&style_scope, &samples)
+                .map_err(|error| error.to_string())?;
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert(
+                "sample_count".to_string(),
+                Value::from(samples.len() as u64),
+            );
+            services
+                .telemetry
+                .record_analytics(scope, "style", "train", properties);
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "train",
+                "profile": profile
+            }))
+        }
+        "get_profile" => {
+            let profile = services
+                .style_training
+                .get_profile(&style_scope)
+                .map_err(|error| error.to_string())?;
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert(
+                "has_profile".to_string(),
+                Value::Bool(profile.sample_count > 0),
+            );
+            services
+                .telemetry
+                .record_analytics(scope, "style", "get_profile", properties);
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "get_profile",
+                "profile": profile
+            }))
+        }
+        "score" => {
+            let candidate = required_string(input.candidate_code, "candidate_code")?;
+            let score = services
+                .style_training
+                .score(&style_scope, &candidate)
+                .map_err(|error| error.to_string())?;
+            let mut properties = telemetry_scope_properties(scope);
+            properties.insert("score".to_string(), Value::from(score));
+            services
+                .telemetry
+                .record_analytics(scope, "style", "score", properties);
+            to_pretty_json(json!({
+                "status": "ok",
+                "action": "score",
+                "score": score
+            }))
+        }
+        action => Err(format!("unsupported StyleTrain action: {action}")),
+    }
+}
+
+fn required_string(value: Option<String>, field: &str) -> Result<String, String> {
+    value
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| format!("missing required field: {field}"))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -2081,6 +2730,18 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    #[serde(default)]
+    hosted_task_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostedAgentLaunchRequest {
+    pub description: String,
+    pub prompt: String,
+    pub subagent_type: Option<String>,
+    pub name: Option<String>,
+    pub model: Option<String>,
+    pub hosted_task_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2267,35 +2928,85 @@ struct LspInput {
 }
 
 #[derive(Debug, Deserialize)]
-struct McpResourceInput {
+struct MemoryUpsertInput {
     #[serde(default)]
-    server: Option<String>,
+    action: Option<String>,
+    id: String,
     #[serde(default)]
-    uri: Option<String>,
+    source: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct McpAuthInput {
-    server: String,
+struct MemorySearchInput {
+    query: String,
+    #[serde(default = "default_memory_top_k")]
+    top_k: usize,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    min_score: Option<f32>,
+    #[serde(default)]
+    source_filter: Option<String>,
+    #[serde(default)]
+    preferred_source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct RemoteTriggerInput {
-    url: String,
+struct MemoryInspectInput {
+    action: String,
     #[serde(default)]
-    method: Option<String>,
+    source_filter: Option<String>,
     #[serde(default)]
-    headers: Option<Value>,
-    #[serde(default)]
-    body: Option<String>,
+    tags: Vec<String>,
+}
+
+const fn default_memory_top_k() -> usize {
+    5
 }
 
 #[derive(Debug, Deserialize)]
-struct McpToolInput {
-    server: String,
-    tool: String,
+struct KnowledgeGraphInput {
+    action: String,
     #[serde(default)]
-    arguments: Option<Value>,
+    entity_id: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    entity_type: Option<String>,
+    #[serde(default)]
+    subject_id: Option<String>,
+    #[serde(default)]
+    predicate: Option<String>,
+    #[serde(default)]
+    object_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KnowledgeGraphInspectInput {
+    action: String,
+    #[serde(default)]
+    entity_type: Option<String>,
+    #[serde(default)]
+    predicate: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct StyleSampleInput {
+    source: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StyleTrainInput {
+    action: String,
+    #[serde(default)]
+    samples: Vec<StyleSampleInput>,
+    #[serde(default)]
+    candidate_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2368,8 +3079,75 @@ struct AgentOutput {
     current_blocker: Option<LaneEventBlocker>,
     #[serde(rename = "derivedState")]
     derived_state: String,
+    #[serde(rename = "hostedTaskId", skip_serializing_if = "Option::is_none")]
+    hosted_task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostedAgentLaunchHandle {
+    pub agent_id: String,
+    pub name: String,
+    pub status: String,
+    pub output_file: String,
+    pub manifest_file: String,
+    pub hosted_task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostedAgentLocator {
+    pub agent_id: Option<String>,
+    pub manifest_file: Option<String>,
+    pub output_file: Option<String>,
+    pub hosted_task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostedAgentCancellationSource {
+    LiveControl,
+    ManifestFallback,
+    AlreadyTerminal,
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostedAgentCancellationResult {
+    pub found: bool,
+    pub source: HostedAgentCancellationSource,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostedAgentStatusSnapshot {
+    pub found: bool,
+    #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(rename = "liveControl")]
+    pub live_control: bool,
+    #[serde(default)]
+    pub orphaned: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(rename = "derivedState", skip_serializing_if = "Option::is_none")]
+    pub derived_state: Option<String>,
+    #[serde(rename = "manifestFile", skip_serializing_if = "Option::is_none")]
+    pub manifest_file: Option<String>,
+    #[serde(rename = "outputFile", skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
+    #[serde(rename = "hostedTaskId", skip_serializing_if = "Option::is_none")]
+    pub hosted_task_id: Option<String>,
+    #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct HostedAgentControl {
+    manifest: AgentOutput,
+    cancelled: Arc<AtomicBool>,
+    hook_abort_signal: HookAbortSignal,
 }
 
 #[derive(Debug, Clone)]
@@ -2378,6 +3156,19 @@ struct AgentJob {
     prompt: String,
     system_prompt: Vec<String>,
     allowed_tools: BTreeSet<String>,
+    cancelled: Arc<AtomicBool>,
+    hook_abort_signal: HookAbortSignal,
+}
+
+#[derive(Debug, Serialize)]
+struct HostedTaskCompletionRequest<'a> {
+    finish_reason: &'a str,
+    #[serde(default)]
+    tokens_output: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -3237,6 +4028,273 @@ const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
 
+fn hosted_agent_controls() -> &'static Mutex<HashMap<String, HostedAgentControl>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, HostedAgentControl>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_hosted_agent_control(
+    manifest: &AgentOutput,
+    cancelled: Arc<AtomicBool>,
+    hook_abort_signal: HookAbortSignal,
+) {
+    let mut controls = hosted_agent_controls()
+        .lock()
+        .expect("hosted agent control registry lock poisoned");
+    controls.insert(
+        manifest.agent_id.clone(),
+        HostedAgentControl {
+            manifest: manifest.clone(),
+            cancelled,
+            hook_abort_signal,
+        },
+    );
+}
+
+fn unregister_hosted_agent_control(agent_id: &str) {
+    let mut controls = hosted_agent_controls()
+        .lock()
+        .expect("hosted agent control registry lock poisoned");
+    controls.remove(agent_id);
+}
+
+fn hosted_agent_manifest_path(agent_id: &str) -> Result<PathBuf, String> {
+    Ok(agent_store_dir()?.join(format!("{agent_id}.json")))
+}
+
+fn read_agent_manifest_from_path(path: &Path) -> Option<AgentOutput> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<AgentOutput>(&contents).ok()
+}
+
+fn hosted_agent_is_orphaned(live_control: bool, status: Option<&str>) -> bool {
+    if live_control {
+        return false;
+    }
+    let Some(status) = status else {
+        return false;
+    };
+    !matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "completed" | "failed" | "cancelled"
+    )
+}
+
+fn manifest_from_locator(locator: &HostedAgentLocator) -> Result<Option<AgentOutput>, String> {
+    if let Some(manifest_file) = locator.manifest_file.as_deref() {
+        let path = PathBuf::from(manifest_file);
+        let Some(mut manifest) = read_agent_manifest_from_path(&path) else {
+            return Ok(None);
+        };
+        manifest.manifest_file = manifest_file.to_string();
+        if let Some(output_file) = locator.output_file.as_ref() {
+            manifest.output_file = output_file.clone();
+        }
+        if let Some(agent_id) = locator.agent_id.as_ref() {
+            manifest.agent_id = agent_id.clone();
+        }
+        if let Some(hosted_task_id) = locator.hosted_task_id.as_ref() {
+            manifest.hosted_task_id = Some(hosted_task_id.clone());
+        }
+        return Ok(Some(manifest));
+    }
+
+    let Some(agent_id) = locator.agent_id.as_deref() else {
+        return Ok(None);
+    };
+    let manifest_path = hosted_agent_manifest_path(agent_id)?;
+    Ok(read_agent_manifest_from_path(&manifest_path))
+}
+
+pub fn cancel_hosted_agent_with_locator(
+    locator: &HostedAgentLocator,
+) -> HostedAgentCancellationResult {
+    let controls = hosted_agent_controls()
+        .lock()
+        .expect("hosted agent control registry lock poisoned");
+    if let Some(control) = locator
+        .agent_id
+        .as_deref()
+        .and_then(|agent_id| controls.get(agent_id))
+    {
+        control.cancelled.store(true, Ordering::SeqCst);
+        control.hook_abort_signal.abort();
+        let _ = persist_agent_terminal_state(
+            &control.manifest,
+            "cancelled",
+            None,
+            Some(String::from("sub-agent cancelled by control plane")),
+        );
+        return HostedAgentCancellationResult {
+            found: true,
+            source: HostedAgentCancellationSource::LiveControl,
+            detail: "hosted agent cancellation requested".to_string(),
+        };
+    }
+    drop(controls);
+
+    let manifest = match manifest_from_locator(locator) {
+        Ok(Some(manifest)) => manifest,
+        Ok(None) => {
+            return HostedAgentCancellationResult {
+                found: false,
+                source: HostedAgentCancellationSource::NotFound,
+                detail: "no hosted agent control or manifest found for locator".to_string(),
+            };
+        }
+        Err(error) => {
+            return HostedAgentCancellationResult {
+                found: false,
+                source: HostedAgentCancellationSource::NotFound,
+                detail: format!("hosted agent locator unavailable: {error}"),
+            };
+        }
+    };
+
+    let normalized_status = manifest.status.trim().to_ascii_lowercase();
+    if matches!(
+        normalized_status.as_str(),
+        "completed" | "failed" | "cancelled"
+    ) {
+        return HostedAgentCancellationResult {
+            found: true,
+            source: HostedAgentCancellationSource::AlreadyTerminal,
+            detail: format!("hosted agent already terminal: {}", manifest.status),
+        };
+    }
+
+    let _ = persist_agent_terminal_state(
+        &manifest,
+        "cancelled",
+        None,
+        Some(String::from(
+            "sub-agent cancelled by control plane after restart",
+        )),
+    );
+    HostedAgentCancellationResult {
+        found: true,
+        source: HostedAgentCancellationSource::ManifestFallback,
+        detail: "hosted agent cancellation restored from manifest".to_string(),
+    }
+}
+
+pub fn cancel_hosted_agent(agent_id: &str) -> HostedAgentCancellationResult {
+    cancel_hosted_agent_with_locator(&HostedAgentLocator {
+        agent_id: Some(agent_id.to_string()),
+        ..HostedAgentLocator::default()
+    })
+}
+
+pub fn hosted_agent_status_with_locator(locator: &HostedAgentLocator) -> HostedAgentStatusSnapshot {
+    if let Some(snapshot) = locator.agent_id.as_deref().and_then(|agent_id| {
+        hosted_agent_controls()
+            .lock()
+            .expect("hosted agent control registry lock poisoned")
+            .get(agent_id)
+            .map(|control| HostedAgentStatusSnapshot {
+                found: true,
+                agent_id: Some(control.manifest.agent_id.clone()),
+                live_control: true,
+                orphaned: false,
+                status: Some(control.manifest.status.clone()),
+                derived_state: Some(control.manifest.derived_state.clone()),
+                manifest_file: Some(control.manifest.manifest_file.clone()),
+                output_file: Some(control.manifest.output_file.clone()),
+                hosted_task_id: control.manifest.hosted_task_id.clone(),
+                completed_at: control.manifest.completed_at.clone(),
+                detail: Some(if control.cancelled.load(Ordering::SeqCst) {
+                    "hosted agent cancellation requested".to_string()
+                } else {
+                    "live hosted agent control registered".to_string()
+                }),
+            })
+    }) {
+        return snapshot;
+    }
+
+    let manifest = match manifest_from_locator(locator) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            return HostedAgentStatusSnapshot {
+                found: false,
+                agent_id: locator.agent_id.clone(),
+                live_control: false,
+                orphaned: false,
+                status: None,
+                derived_state: None,
+                manifest_file: locator.manifest_file.clone(),
+                output_file: locator.output_file.clone(),
+                hosted_task_id: locator.hosted_task_id.clone(),
+                completed_at: None,
+                detail: Some(format!("hosted agent locator unavailable: {error}")),
+            }
+        }
+    };
+
+    if let Some(manifest) = manifest {
+        let restored_from_locator = locator.manifest_file.is_some();
+        return HostedAgentStatusSnapshot {
+            found: true,
+            agent_id: Some(manifest.agent_id),
+            live_control: false,
+            orphaned: hosted_agent_is_orphaned(false, Some(&manifest.status)),
+            status: Some(manifest.status),
+            derived_state: Some(manifest.derived_state),
+            manifest_file: Some(manifest.manifest_file),
+            output_file: Some(manifest.output_file),
+            hosted_task_id: manifest.hosted_task_id,
+            completed_at: manifest.completed_at,
+            detail: Some(if restored_from_locator {
+                "hosted agent manifest restored from locator path".to_string()
+            } else {
+                "hosted agent manifest restored from disk".to_string()
+            }),
+        };
+    }
+
+    HostedAgentStatusSnapshot {
+        found: false,
+        agent_id: locator.agent_id.clone(),
+        live_control: false,
+        orphaned: false,
+        status: None,
+        derived_state: None,
+        manifest_file: locator.manifest_file.clone(),
+        output_file: locator.output_file.clone(),
+        hosted_task_id: locator.hosted_task_id.clone(),
+        completed_at: None,
+        detail: Some("no hosted agent control or manifest found".to_string()),
+    }
+}
+
+pub fn hosted_agent_status(agent_id: &str) -> HostedAgentStatusSnapshot {
+    hosted_agent_status_with_locator(&HostedAgentLocator {
+        agent_id: Some(agent_id.to_string()),
+        ..HostedAgentLocator::default()
+    })
+}
+
+pub fn launch_hosted_agent(
+    request: HostedAgentLaunchRequest,
+) -> Result<HostedAgentLaunchHandle, String> {
+    let manifest = execute_agent(AgentInput {
+        description: request.description,
+        prompt: request.prompt,
+        subagent_type: request.subagent_type,
+        name: request.name,
+        model: request.model,
+        hosted_task_id: request.hosted_task_id,
+    })?;
+    Ok(HostedAgentLaunchHandle {
+        agent_id: manifest.agent_id,
+        name: manifest.name,
+        status: manifest.status,
+        output_file: manifest.output_file,
+        manifest_file: manifest.manifest_file,
+        hosted_task_id: manifest.hosted_task_id,
+    })
+}
+
 fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     execute_agent_with_spawn(input, spawn_agent_job)
 }
@@ -3301,9 +4359,14 @@ where
         lane_events: vec![LaneEvent::started(iso8601_now())],
         current_blocker: None,
         derived_state: String::from("working"),
+        hosted_task_id: input.hosted_task_id,
         error: None,
     };
     write_agent_manifest(&manifest)?;
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let hook_abort_signal = HookAbortSignal::new();
+    register_hosted_agent_control(&manifest, cancelled.clone(), hook_abort_signal.clone());
 
     let manifest_for_spawn = manifest.clone();
     let job = AgentJob {
@@ -3311,8 +4374,11 @@ where
         prompt: input.prompt,
         system_prompt,
         allowed_tools,
+        cancelled,
+        hook_abort_signal,
     };
     if let Err(error) = spawn_fn(job) {
+        unregister_hosted_agent_control(&manifest.agent_id);
         let error = format!("failed to spawn sub-agent: {error}");
         persist_agent_terminal_state(&manifest, "failed", None, Some(error.clone()))?;
         return Err(error);
@@ -3343,18 +4409,54 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
                     );
                 }
             }
+            unregister_hosted_agent_control(&job.manifest.agent_id);
         })
         .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
 fn run_agent_job(job: &AgentJob) -> Result<(), String> {
+    if job.cancelled.load(Ordering::SeqCst) {
+        return persist_agent_terminal_state(
+            &job.manifest,
+            "cancelled",
+            None,
+            Some(String::from("sub-agent cancelled by control plane")),
+        );
+    }
+
     let mut runtime = build_agent_runtime(job)?.with_max_iterations(DEFAULT_AGENT_MAX_ITERATIONS);
-    let summary = runtime
-        .run_turn(job.prompt.clone(), None)
-        .map_err(|error| error.to_string())?;
-    let final_text = final_assistant_text(&summary);
-    persist_agent_terminal_state(&job.manifest, "completed", Some(final_text.as_str()), None)
+    match runtime.run_turn(job.prompt.clone(), None) {
+        Ok(summary) => {
+            if job.cancelled.load(Ordering::SeqCst) {
+                return persist_agent_terminal_state(
+                    &job.manifest,
+                    "cancelled",
+                    None,
+                    Some(String::from("sub-agent cancelled by control plane")),
+                );
+            }
+            let final_text = final_assistant_text(&summary);
+            persist_agent_terminal_state(
+                &job.manifest,
+                "completed",
+                Some(final_text.as_str()),
+                None,
+            )
+        }
+        Err(error) => {
+            if job.cancelled.load(Ordering::SeqCst) || job.hook_abort_signal.is_aborted() {
+                persist_agent_terminal_state(
+                    &job.manifest,
+                    "cancelled",
+                    None,
+                    Some(String::from("sub-agent cancelled by control plane")),
+                )
+            } else {
+                Err(error.to_string())
+            }
+        }
+    }
 }
 
 fn build_agent_runtime(
@@ -3366,17 +4468,21 @@ fn build_agent_runtime(
         .clone()
         .unwrap_or_else(|| DEFAULT_AGENT_MODEL.to_string());
     let allowed_tools = job.allowed_tools.clone();
-    let api_client = ProviderRuntimeClient::new(model, allowed_tools.clone())?;
+    let api_client =
+        ProviderRuntimeClient::new(model, allowed_tools.clone(), job.cancelled.clone())?;
     let permission_policy = agent_permission_policy();
-    let tool_executor = SubagentToolExecutor::new(allowed_tools)
+    let session = Session::new();
+    let tool_executor = SubagentToolExecutor::new(allowed_tools, job.cancelled.clone())
+        .with_scope(ToolExecutionScope::for_session(session.session_id.clone()))
         .with_enforcer(PermissionEnforcer::new(permission_policy.clone()));
     Ok(ConversationRuntime::new(
-        Session::new(),
+        session,
         api_client,
         tool_executor,
         permission_policy,
         job.system_prompt.clone(),
-    ))
+    )
+    .with_hook_abort_signal(job.hook_abort_signal.clone()))
 }
 
 fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<String>, String> {
@@ -3506,7 +4612,12 @@ fn persist_agent_terminal_state(
     result: Option<&str>,
     error: Option<String>,
 ) -> Result<(), String> {
-    let blocker = error.as_deref().map(classify_lane_blocker);
+    let is_cancelled = status.trim().eq_ignore_ascii_case("cancelled");
+    let blocker = if is_cancelled {
+        None
+    } else {
+        error.as_deref().map(classify_lane_blocker)
+    };
     append_agent_output(
         &manifest.output_file,
         &format_agent_terminal_output(status, result, blocker.as_ref(), error.as_deref()),
@@ -3518,7 +4629,9 @@ fn persist_agent_terminal_state(
     next_manifest.derived_state =
         derive_agent_state(status, result, error.as_deref(), blocker.as_ref()).to_string();
     next_manifest.error = error;
-    if let Some(blocker) = blocker {
+    if is_cancelled {
+        next_manifest.current_blocker = None;
+    } else if let Some(blocker) = blocker {
         next_manifest
             .lane_events
             .push(LaneEvent::blocked(iso8601_now(), &blocker));
@@ -3541,7 +4654,61 @@ fn persist_agent_terminal_state(
             ));
         }
     }
-    write_agent_manifest(&next_manifest)
+    write_agent_manifest(&next_manifest)?;
+    maybe_report_hosted_task_completion(
+        &next_manifest,
+        status,
+        result,
+        next_manifest.error.as_deref(),
+    );
+    Ok(())
+}
+
+fn maybe_report_hosted_task_completion(
+    manifest: &AgentOutput,
+    status: &str,
+    result: Option<&str>,
+    error: Option<&str>,
+) {
+    let Some((url, request)) = hosted_task_completion_request(manifest, status, result, error)
+    else {
+        return;
+    };
+    let client = reqwest::blocking::Client::new();
+    let _ = client.post(url).json(&request).send();
+}
+
+fn read_hosted_server_url() -> Option<String> {
+    env::var("ORBIT_SERVER_URL")
+        .ok()
+        .or_else(|| env::var("ORBIT_SERVER_BASE_URL").ok())
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn hosted_task_completion_request<'a>(
+    manifest: &'a AgentOutput,
+    status: &'a str,
+    result: Option<&'a str>,
+    error: Option<&'a str>,
+) -> Option<(String, HostedTaskCompletionRequest<'a>)> {
+    if status.trim().eq_ignore_ascii_case("cancelled") {
+        return None;
+    }
+    let task_id = manifest.hosted_task_id.as_deref()?;
+    let base_url = read_hosted_server_url()?;
+    let finish_reason = if status.trim().eq_ignore_ascii_case("completed") {
+        "stop"
+    } else {
+        "error"
+    };
+    let request = HostedTaskCompletionRequest {
+        finish_reason,
+        tokens_output: 0,
+        result: result.filter(|value| !value.trim().is_empty()),
+        error: error.filter(|value| !value.trim().is_empty()),
+    };
+    Some((format!("{base_url}/v1/tasks/{task_id}/complete"), request))
 }
 
 fn derive_agent_state(
@@ -3555,6 +4722,9 @@ fn derive_agent_state(
 
     if normalized_status == "running" {
         return "working";
+    }
+    if normalized_status == "cancelled" {
+        return "cancelled";
     }
     if normalized_status == "completed" {
         return if result.is_some_and(|value| !value.trim().is_empty()) {
@@ -3704,11 +4874,16 @@ struct ProviderRuntimeClient {
     client: ProviderClient,
     model: String,
     allowed_tools: BTreeSet<String>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl ProviderRuntimeClient {
     #[allow(clippy::needless_pass_by_value)]
-    fn new(model: String, allowed_tools: BTreeSet<String>) -> Result<Self, String> {
+    fn new(
+        model: String,
+        allowed_tools: BTreeSet<String>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
         let model = resolve_model_alias(&model).clone();
         let client = ProviderClient::from_model(&model).map_err(|error| error.to_string())?;
         Ok(Self {
@@ -3716,6 +4891,7 @@ impl ProviderRuntimeClient {
             client,
             model,
             allowed_tools,
+            cancelled,
         })
     }
 }
@@ -3723,6 +4899,9 @@ impl ProviderRuntimeClient {
 impl ApiClient for ProviderRuntimeClient {
     #[allow(clippy::too_many_lines)]
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(RuntimeError::new("agent cancelled by control plane"));
+        }
         let tools = tool_specs_for_allowed_tools(Some(&self.allowed_tools))
             .into_iter()
             .map(|spec| ToolDefinition {
@@ -3742,6 +4921,9 @@ impl ApiClient for ProviderRuntimeClient {
         };
 
         self.runtime.block_on(async {
+            if self.cancelled.load(Ordering::SeqCst) {
+                return Err(RuntimeError::new("agent cancelled by control plane"));
+            }
             let mut stream = self
                 .client
                 .stream_message(&message_request)
@@ -3756,6 +4938,9 @@ impl ApiClient for ProviderRuntimeClient {
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?
             {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    return Err(RuntimeError::new("agent cancelled by control plane"));
+                }
                 match event {
                     ApiStreamEvent::MessageStart(start) => {
                         for block in start.message.content {
@@ -3818,6 +5003,9 @@ impl ApiClient for ProviderRuntimeClient {
                 return Ok(events);
             }
 
+            if self.cancelled.load(Ordering::SeqCst) {
+                return Err(RuntimeError::new("agent cancelled by control plane"));
+            }
             let response = self
                 .client
                 .send_message(&MessageRequest {
@@ -3836,13 +5024,19 @@ impl ApiClient for ProviderRuntimeClient {
 struct SubagentToolExecutor {
     allowed_tools: BTreeSet<String>,
     enforcer: Option<PermissionEnforcer>,
+    scope: ToolExecutionScope,
+    services: ToolServices,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl SubagentToolExecutor {
-    fn new(allowed_tools: BTreeSet<String>) -> Self {
+    fn new(allowed_tools: BTreeSet<String>, cancelled: Arc<AtomicBool>) -> Self {
         Self {
             allowed_tools,
             enforcer: None,
+            scope: ToolExecutionScope::default(),
+            services: ToolServices::new(),
+            cancelled,
         }
     }
 
@@ -3850,10 +5044,18 @@ impl SubagentToolExecutor {
         self.enforcer = Some(enforcer);
         self
     }
+
+    fn with_scope(mut self, scope: ToolExecutionScope) -> Self {
+        self.scope = scope;
+        self
+    }
 }
 
 impl ToolExecutor for SubagentToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(ToolError::new("agent cancelled by control plane"));
+        }
         if !self.allowed_tools.contains(tool_name) {
             return Err(ToolError::new(format!(
                 "tool `{tool_name}` is not enabled for this sub-agent"
@@ -3861,8 +5063,14 @@ impl ToolExecutor for SubagentToolExecutor {
         }
         let value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
-        execute_tool_with_enforcer(self.enforcer.as_ref(), tool_name, &value)
-            .map_err(ToolError::new)
+        execute_tool_with_enforcer_and_scope(
+            self.enforcer.as_ref(),
+            &self.services,
+            tool_name,
+            &value,
+            &self.scope,
+        )
+        .map_err(ToolError::new)
     }
 }
 
@@ -5245,25 +6453,32 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpListener};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::Duration;
 
     use super::{
-        agent_permission_policy, allowed_tools_for_subagent, classify_lane_failure,
-        derive_agent_state, execute_agent_with_spawn, execute_tool, final_assistant_text,
+        agent_permission_policy, allowed_tools_for_subagent, cancel_hosted_agent,
+        cancel_hosted_agent_with_locator, classify_lane_failure, derive_agent_state,
+        execute_agent_with_spawn, execute_tool, final_assistant_text, hosted_agent_status,
+        hosted_agent_status_with_locator, hosted_task_completion_request, iso8601_now,
         maybe_commit_provenance, mvp_tool_specs, permission_mode_from_plugin,
-        persist_agent_terminal_state, push_output_block, run_task_packet, AgentInput, AgentJob,
-        GlobalToolRegistry, LaneEventName, LaneFailureClass, SubagentToolExecutor,
+        persist_agent_terminal_state, push_output_block, register_hosted_agent_control,
+        run_task_packet, unregister_hosted_agent_control, AgentInput, AgentJob, AgentOutput,
+        GlobalToolRegistry, HostedAgentCancellationSource, HostedAgentLocator, LaneEventName,
+        LaneFailureClass, SubagentToolExecutor, ToolExecutionScope,
     };
     use orbit_api::OutputContentBlock;
     use orbit_runtime::{
         permission_enforcer::PermissionEnforcer, ApiRequest, AssistantEvent, ConversationRuntime,
-        PermissionMode, PermissionPolicy, RuntimeError, Session, TaskPacket, ToolExecutor,
+        HookAbortSignal, PermissionMode, PermissionPolicy, RuntimeError, Session, TaskPacket,
+        ToolExecutor,
     };
+    use orbit_telemetry::{MemoryTelemetrySink, SessionTracer, TelemetryEvent};
     use serde_json::json;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -5289,6 +6504,32 @@ mod tests {
             .expect("time")
             .as_nanos();
         std::env::temp_dir().join(format!("orbit-tools-{unique}-{name}"))
+    }
+
+    struct EnvRestoreGuard {
+        values: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvRestoreGuard {
+        fn capture(keys: &[&'static str]) -> Self {
+            Self {
+                values: keys
+                    .iter()
+                    .map(|key| (*key, std::env::var(key).ok()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvRestoreGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.values {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 
     fn run_git(cwd: &Path, args: &[&str]) {
@@ -5539,8 +6780,11 @@ mod tests {
     fn subagent_tool_executor_denies_blocked_tool_before_dispatch() {
         // given
         let policy = permission_policy_for_mode(PermissionMode::ReadOnly);
-        let mut executor = SubagentToolExecutor::new(BTreeSet::from([String::from("write_file")]))
-            .with_enforcer(PermissionEnforcer::new(policy));
+        let mut executor = SubagentToolExecutor::new(
+            BTreeSet::from([String::from("write_file")]),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .with_enforcer(PermissionEnforcer::new(policy));
 
         // when
         let error = executor
@@ -5558,6 +6802,59 @@ mod tests {
         assert!(error
             .to_string()
             .contains("requires workspace-write permission"));
+    }
+
+    #[test]
+    fn given_read_only_enforcer_when_memory_upsert_then_denied() {
+        let registry = read_only_registry();
+        let error = registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "blocked-memory",
+                    "source": "test",
+                    "text": "should be denied"
+                }),
+                &ToolExecutionScope::for_session("read-only-memory"),
+            )
+            .expect_err("memory upsert should be denied in read-only mode");
+        assert!(error.contains("requires workspace-write permission"));
+    }
+
+    #[test]
+    fn given_read_only_enforcer_when_style_train_then_denied() {
+        let registry = read_only_registry();
+        let error = registry
+            .execute_scoped(
+                "StyleTrain",
+                &json!({
+                    "action": "train",
+                    "samples": [
+                        {"source": "a.rs", "content": "fn parse_args() {\n    let user_name = 1;\n}\n"}
+                    ]
+                }),
+                &ToolExecutionScope::for_session("read-only-style"),
+            )
+            .expect_err("style train should be denied in read-only mode");
+        assert!(error.contains("requires workspace-write permission"));
+    }
+
+    #[test]
+    fn given_read_only_enforcer_when_knowledge_graph_add_relation_then_denied() {
+        let registry = read_only_registry();
+        let error = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "add_relation",
+                    "subject_id": "crate:tools",
+                    "predicate": "depends_on",
+                    "object_id": "crate:memory"
+                }),
+                &ToolExecutionScope::for_session("read-only-kg"),
+            )
+            .expect_err("knowledge graph write should be denied in read-only mode");
+        assert!(error.contains("requires workspace-write permission"));
     }
 
     #[test]
@@ -6429,6 +7726,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("ship-audit".to_string()),
                 model: None,
+                hosted_task_id: Some("task_hosted_123".to_string()),
             },
             move |job| {
                 *captured_for_spawn
@@ -6443,6 +7741,7 @@ mod tests {
         assert_eq!(manifest.name, "ship-audit");
         assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
         assert_eq!(manifest.status, "running");
+        assert_eq!(manifest.hosted_task_id.as_deref(), Some("task_hosted_123"));
         assert!(!manifest.created_at.is_empty());
         assert!(manifest.started_at.is_some());
         assert!(manifest.completed_at.is_none());
@@ -6455,6 +7754,7 @@ mod tests {
         assert!(contents.contains("Check tests and outstanding work."));
         assert!(manifest_contents.contains("\"subagentType\": \"Explore\""));
         assert!(manifest_contents.contains("\"status\": \"running\""));
+        assert!(manifest_contents.contains("\"hostedTaskId\": \"task_hosted_123\""));
         assert_eq!(manifest_json["laneEvents"][0]["event"], "lane.started");
         assert_eq!(manifest_json["laneEvents"][0]["status"], "running");
         assert!(manifest_json["currentBlocker"].is_null());
@@ -6495,6 +7795,263 @@ mod tests {
     }
 
     #[test]
+    fn cancel_hosted_agent_persists_cancelled_manifest_state() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = temp_path("agent-cancel");
+        std::env::set_var("ORBIT_AGENT_STORE", &dir);
+
+        let manifest = execute_agent_with_spawn(
+            AgentInput {
+                description: "Cancelable agent".to_string(),
+                prompt: "Wait for cancellation".to_string(),
+                subagent_type: Some("Explore".to_string()),
+                name: Some("cancelable-agent".to_string()),
+                model: None,
+                hosted_task_id: Some("task-cancelled".to_string()),
+            },
+            |_| Ok(()),
+        )
+        .expect("agent should register hosted control");
+
+        let cancellation = cancel_hosted_agent(&manifest.agent_id);
+        assert!(cancellation.found);
+        assert_eq!(
+            cancellation.source,
+            HostedAgentCancellationSource::LiveControl
+        );
+        assert!(cancellation.detail.contains("cancellation requested"));
+
+        let manifest_contents =
+            std::fs::read_to_string(&manifest.manifest_file).expect("manifest should exist");
+        let manifest_json: serde_json::Value =
+            serde_json::from_str(&manifest_contents).expect("manifest should be valid json");
+        let output_contents =
+            std::fs::read_to_string(&manifest.output_file).expect("output should exist");
+
+        assert_eq!(manifest_json["status"], "cancelled");
+        assert_eq!(manifest_json["derivedState"], "cancelled");
+        assert!(manifest_json["currentBlocker"].is_null());
+        assert!(output_contents.contains("sub-agent cancelled by control plane"));
+
+        unregister_hosted_agent_control(&manifest.agent_id);
+        std::env::remove_var("ORBIT_AGENT_STORE");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn hosted_agent_status_reads_live_control_and_manifest_fallback() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = temp_path("agent-status");
+        std::env::set_var("ORBIT_AGENT_STORE", &dir);
+
+        let manifest = execute_agent_with_spawn(
+            AgentInput {
+                description: "Status agent".to_string(),
+                prompt: "Report status".to_string(),
+                subagent_type: Some("Explore".to_string()),
+                name: Some("status-agent".to_string()),
+                model: None,
+                hosted_task_id: Some("task-status".to_string()),
+            },
+            |_| Ok(()),
+        )
+        .expect("agent should register hosted control");
+
+        let live = hosted_agent_status(&manifest.agent_id);
+        assert!(live.found);
+        assert!(live.live_control);
+        assert!(!live.orphaned);
+        assert_eq!(live.status.as_deref(), Some("running"));
+        assert_eq!(live.hosted_task_id.as_deref(), Some("task-status"));
+
+        unregister_hosted_agent_control(&manifest.agent_id);
+        let restored = hosted_agent_status(&manifest.agent_id);
+        assert!(restored.found);
+        assert!(!restored.live_control);
+        assert!(restored.orphaned);
+        assert_eq!(restored.status.as_deref(), Some("running"));
+        assert_eq!(
+            restored.manifest_file.as_deref(),
+            Some(manifest.manifest_file.as_str())
+        );
+
+        let wrong_store = temp_path("agent-status-wrong-store");
+        std::fs::create_dir_all(&wrong_store).expect("wrong store dir should exist");
+        std::env::set_var("ORBIT_AGENT_STORE", &wrong_store);
+        let restored_from_locator = hosted_agent_status_with_locator(&HostedAgentLocator {
+            agent_id: Some(manifest.agent_id.clone()),
+            manifest_file: Some(manifest.manifest_file.clone()),
+            output_file: Some(manifest.output_file.clone()),
+            hosted_task_id: manifest.hosted_task_id.clone(),
+        });
+        assert!(restored_from_locator.found);
+        assert!(!restored_from_locator.live_control);
+        assert!(restored_from_locator.orphaned);
+        assert_eq!(restored_from_locator.status.as_deref(), Some("running"));
+        assert_eq!(
+            restored_from_locator.manifest_file.as_deref(),
+            Some(manifest.manifest_file.as_str())
+        );
+        assert_eq!(
+            restored_from_locator.output_file.as_deref(),
+            Some(manifest.output_file.as_str())
+        );
+        assert_eq!(
+            restored_from_locator.detail.as_deref(),
+            Some("hosted agent manifest restored from locator path")
+        );
+
+        std::env::remove_var("ORBIT_AGENT_STORE");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(wrong_store);
+    }
+
+    #[test]
+    fn hosted_agent_status_does_not_mark_terminal_manifest_as_orphaned() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = temp_path("agent-status-terminal");
+        std::fs::create_dir_all(&dir).expect("agent store dir should exist");
+        std::env::set_var("ORBIT_AGENT_STORE", &dir);
+
+        let manifest = AgentOutput {
+            agent_id: "agent-status-terminal".to_string(),
+            name: "status-terminal".to_string(),
+            description: "terminal status test".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            model: Some("claude-opus-4-6".to_string()),
+            status: "completed".to_string(),
+            output_file: dir.join("agent-status-terminal.md").display().to_string(),
+            manifest_file: dir.join("agent-status-terminal.json").display().to_string(),
+            created_at: iso8601_now(),
+            started_at: Some(iso8601_now()),
+            completed_at: Some(iso8601_now()),
+            lane_events: vec![],
+            current_blocker: None,
+            derived_state: "finished_cleanable".to_string(),
+            hosted_task_id: Some("task-status-terminal".to_string()),
+            error: None,
+        };
+        std::fs::write(&manifest.output_file, "# Agent Task\n").expect("output should exist");
+        std::fs::write(
+            &manifest.manifest_file,
+            serde_json::to_string_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("manifest should exist");
+
+        let restored = hosted_agent_status_with_locator(&HostedAgentLocator {
+            agent_id: Some(manifest.agent_id.clone()),
+            manifest_file: Some(manifest.manifest_file.clone()),
+            output_file: Some(manifest.output_file.clone()),
+            hosted_task_id: manifest.hosted_task_id.clone(),
+        });
+        assert!(restored.found);
+        assert!(!restored.live_control);
+        assert!(!restored.orphaned);
+        assert_eq!(restored.status.as_deref(), Some("completed"));
+
+        std::env::remove_var("ORBIT_AGENT_STORE");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cancel_hosted_agent_marks_manifest_cancelled_without_live_control() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = temp_path("agent-cancel-fallback");
+        std::fs::create_dir_all(&dir).expect("agent store dir should exist");
+        std::env::set_var("ORBIT_AGENT_STORE", &dir);
+
+        let manifest = AgentOutput {
+            agent_id: "agent-cancel-fallback".to_string(),
+            name: "cancel-fallback".to_string(),
+            description: "cancel fallback test".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            model: Some("claude-opus-4-6".to_string()),
+            status: "running".to_string(),
+            output_file: dir.join("agent-cancel-fallback.md").display().to_string(),
+            manifest_file: dir.join("agent-cancel-fallback.json").display().to_string(),
+            created_at: iso8601_now(),
+            started_at: Some(iso8601_now()),
+            completed_at: None,
+            lane_events: vec![],
+            current_blocker: None,
+            derived_state: "working".to_string(),
+            hosted_task_id: Some("task-cancel-fallback".to_string()),
+            error: None,
+        };
+        std::fs::write(&manifest.output_file, "# Agent Task\n").expect("output should exist");
+        std::fs::write(
+            &manifest.manifest_file,
+            serde_json::to_string_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("manifest should exist");
+
+        let wrong_store = temp_path("agent-cancel-fallback-wrong-store");
+        std::fs::create_dir_all(&wrong_store).expect("wrong store dir should exist");
+        std::env::set_var("ORBIT_AGENT_STORE", &wrong_store);
+
+        let cancellation = cancel_hosted_agent_with_locator(&HostedAgentLocator {
+            agent_id: Some(manifest.agent_id.clone()),
+            manifest_file: Some(manifest.manifest_file.clone()),
+            output_file: Some(manifest.output_file.clone()),
+            hosted_task_id: manifest.hosted_task_id.clone(),
+        });
+        assert!(cancellation.found);
+        assert_eq!(
+            cancellation.source,
+            HostedAgentCancellationSource::ManifestFallback
+        );
+        assert!(cancellation.detail.contains("restored from manifest"));
+
+        let manifest_contents =
+            std::fs::read_to_string(&manifest.manifest_file).expect("manifest should exist");
+        let manifest_json: serde_json::Value =
+            serde_json::from_str(&manifest_contents).expect("manifest should be valid json");
+        let output_contents =
+            std::fs::read_to_string(&manifest.output_file).expect("output should exist");
+        assert_eq!(manifest_json["status"], "cancelled");
+        assert_eq!(manifest_json["derivedState"], "cancelled");
+        assert!(output_contents.contains("sub-agent cancelled by control plane after restart"));
+
+        std::env::remove_var("ORBIT_AGENT_STORE");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(wrong_store);
+    }
+
+    #[test]
+    fn cancel_hosted_agent_with_locator_returns_not_found_when_manifest_path_is_missing() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = temp_path("agent-cancel-missing-locator");
+        std::fs::create_dir_all(&dir).expect("missing locator dir should exist");
+        std::env::set_var("ORBIT_AGENT_STORE", temp_path("agent-cancel-missing-store"));
+
+        let cancellation = cancel_hosted_agent_with_locator(&HostedAgentLocator {
+            agent_id: Some("missing-agent".to_string()),
+            manifest_file: Some(dir.join("missing-agent.json").display().to_string()),
+            output_file: Some(dir.join("missing-agent.md").display().to_string()),
+            hosted_task_id: Some("task-missing-agent".to_string()),
+        });
+
+        assert!(!cancellation.found);
+        assert_eq!(cancellation.source, HostedAgentCancellationSource::NotFound);
+        assert!(cancellation
+            .detail
+            .contains("no hosted agent control or manifest found"));
+
+        std::env::remove_var("ORBIT_AGENT_STORE");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn agent_fake_runner_can_persist_completion_and_failure() {
         let _guard = env_lock()
@@ -6510,6 +8067,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("complete-task".to_string()),
                 model: Some("claude-sonnet-4-6".to_string()),
+                hosted_task_id: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6559,6 +8117,7 @@ mod tests {
                 subagent_type: Some("Verification".to_string()),
                 name: Some("fail-task".to_string()),
                 model: None,
+                hosted_task_id: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -6606,6 +8165,7 @@ mod tests {
                 subagent_type: None,
                 name: Some("spawn-error".to_string()),
                 model: None,
+                hosted_task_id: None,
             },
             |_| Err(String::from("thread creation failed")),
         )
@@ -6635,6 +8195,164 @@ mod tests {
 
         std::env::remove_var("ORBIT_AGENT_STORE");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn agent_terminal_state_reports_hosted_task_completion_when_configured() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::env::set_var("ORBIT_SERVER_URL", "http://hosted.orbit.test/");
+        let manifest = AgentOutput {
+            agent_id: "agent-success".to_string(),
+            name: "hosted-report-success".to_string(),
+            description: "Report hosted task completion".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            model: None,
+            status: "running".to_string(),
+            output_file: "out.md".to_string(),
+            manifest_file: "manifest.json".to_string(),
+            created_at: iso8601_now(),
+            started_at: Some(iso8601_now()),
+            completed_at: None,
+            lane_events: vec![],
+            current_blocker: None,
+            derived_state: "working".to_string(),
+            hosted_task_id: Some("task-hosted-success".to_string()),
+            error: None,
+        };
+        let (url, request) = hosted_task_completion_request(
+            &manifest,
+            "completed",
+            Some("Hosted completion reported"),
+            None,
+        )
+        .expect("request should be created");
+        let request_json = serde_json::to_value(request).expect("request should serialize");
+        assert_eq!(
+            url,
+            "http://hosted.orbit.test/v1/tasks/task-hosted-success/complete"
+        );
+        assert_eq!(request_json["finish_reason"], "stop");
+        assert_eq!(request_json["result"], "Hosted completion reported");
+        assert!(request_json.get("error").is_none());
+        std::env::remove_var("ORBIT_SERVER_URL");
+    }
+
+    #[test]
+    fn agent_terminal_state_reports_hosted_task_failure_when_configured() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::env::set_var("ORBIT_SERVER_URL", "http://hosted.orbit.test/");
+        let manifest = AgentOutput {
+            agent_id: "agent-failure".to_string(),
+            name: "hosted-report-failure".to_string(),
+            description: "Report hosted task failure".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            model: None,
+            status: "running".to_string(),
+            output_file: "out.md".to_string(),
+            manifest_file: "manifest.json".to_string(),
+            created_at: iso8601_now(),
+            started_at: Some(iso8601_now()),
+            completed_at: None,
+            lane_events: vec![],
+            current_blocker: None,
+            derived_state: "working".to_string(),
+            hosted_task_id: Some("task-hosted-report".to_string()),
+            error: None,
+        };
+        let (url, request) = hosted_task_completion_request(
+            &manifest,
+            "failed",
+            None,
+            Some("tool failed: simulated hosted failure"),
+        )
+        .expect("request should be created");
+        let request_json = serde_json::to_value(request).expect("request should serialize");
+        assert_eq!(
+            url,
+            "http://hosted.orbit.test/v1/tasks/task-hosted-report/complete"
+        );
+        assert_eq!(request_json["finish_reason"], "error");
+        assert_eq!(
+            request_json["error"],
+            "tool failed: simulated hosted failure"
+        );
+        assert!(request_json.get("result").is_none());
+        std::env::remove_var("ORBIT_SERVER_URL");
+    }
+
+    #[test]
+    fn hosted_agent_cancel_sets_registered_controls() {
+        let manifest = AgentOutput {
+            agent_id: "agent-cancel-test".to_string(),
+            name: "cancel-test".to_string(),
+            description: "cancel test".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            model: Some("claude-opus-4-6".to_string()),
+            status: "running".to_string(),
+            output_file: "cancel-test.md".to_string(),
+            manifest_file: "cancel-test.json".to_string(),
+            created_at: iso8601_now(),
+            started_at: Some(iso8601_now()),
+            completed_at: None,
+            lane_events: vec![],
+            current_blocker: None,
+            derived_state: "working".to_string(),
+            hosted_task_id: Some("task-cancel-test".to_string()),
+            error: None,
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let hook_abort_signal = HookAbortSignal::new();
+        register_hosted_agent_control(&manifest, cancelled.clone(), hook_abort_signal.clone());
+
+        let result = cancel_hosted_agent("agent-cancel-test");
+
+        assert!(result.found);
+        assert_eq!(result.source, HostedAgentCancellationSource::LiveControl);
+        assert!(result.detail.contains("cancellation requested"));
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(hook_abort_signal.is_aborted());
+
+        unregister_hosted_agent_control("agent-cancel-test");
+    }
+
+    #[test]
+    fn cancelled_agents_skip_hosted_completion_callbacks() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::env::set_var("ORBIT_SERVER_URL", "http://hosted.orbit.test/");
+        let manifest = AgentOutput {
+            agent_id: "agent-cancelled".to_string(),
+            name: "hosted-report-cancelled".to_string(),
+            description: "Skip hosted callback on cancellation".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            model: None,
+            status: "running".to_string(),
+            output_file: "out.md".to_string(),
+            manifest_file: "manifest.json".to_string(),
+            created_at: iso8601_now(),
+            started_at: Some(iso8601_now()),
+            completed_at: None,
+            lane_events: vec![],
+            current_blocker: None,
+            derived_state: "working".to_string(),
+            hosted_task_id: Some("task-hosted-cancelled".to_string()),
+            error: None,
+        };
+
+        let request = hosted_task_completion_request(
+            &manifest,
+            "cancelled",
+            None,
+            Some("sub-agent cancelled by control plane"),
+        );
+        assert!(request.is_none());
+
+        std::env::remove_var("ORBIT_SERVER_URL");
     }
 
     #[test]
@@ -6824,7 +8542,10 @@ mod tests {
                 calls: 0,
                 input_path: path.display().to_string(),
             },
-            SubagentToolExecutor::new(BTreeSet::from([String::from("read_file")])),
+            SubagentToolExecutor::new(
+                BTreeSet::from([String::from("read_file")]),
+                Arc::new(AtomicBool::new(false)),
+            ),
             agent_permission_policy(),
             vec![String::from("system prompt")],
         );
@@ -7462,8 +9183,9 @@ mod tests {
         assert_eq!(enter_output["previousLocalMode"], "acceptEdits");
         assert_eq!(enter_output["currentLocalMode"], "plan");
 
-        let local_settings = std::fs::read_to_string(cwd.join(".orbit").join("settings.local.json"))
-            .expect("local settings after enter");
+        let local_settings =
+            std::fs::read_to_string(cwd.join(".orbit").join("settings.local.json"))
+                .expect("local settings after enter");
         assert!(local_settings.contains(r#""defaultMode": "plan""#));
         let state =
             std::fs::read_to_string(cwd.join(".orbit").join("tool-state").join("plan-mode.json"))
@@ -7478,8 +9200,9 @@ mod tests {
         assert_eq!(exit_output["previousLocalMode"], "acceptEdits");
         assert_eq!(exit_output["currentLocalMode"], "acceptEdits");
 
-        let local_settings = std::fs::read_to_string(cwd.join(".orbit").join("settings.local.json"))
-            .expect("local settings after exit");
+        let local_settings =
+            std::fs::read_to_string(cwd.join(".orbit").join("settings.local.json"))
+                .expect("local settings after exit");
         assert!(local_settings.contains(r#""defaultMode": "acceptEdits""#));
         assert!(!cwd
             .join(".orbit")
@@ -7533,8 +9256,9 @@ mod tests {
         assert_eq!(exit_output["changed"], true);
         assert_eq!(exit_output["currentLocalMode"], serde_json::Value::Null);
 
-        let local_settings = std::fs::read_to_string(cwd.join(".orbit").join("settings.local.json"))
-            .expect("local settings after exit");
+        let local_settings =
+            std::fs::read_to_string(cwd.join(".orbit").join("settings.local.json"))
+                .expect("local settings after exit");
         let local_settings_json: serde_json::Value =
             serde_json::from_str(&local_settings).expect("valid settings json");
         assert_eq!(
@@ -7825,6 +9549,894 @@ printf 'pwsh:%s' "$1"
         );
     }
 
+    #[test]
+    fn memory_tools_store_and_find_entries() {
+        execute_tool(
+            "MemoryUpsert",
+            &json!({
+                "id": "mem-style-1",
+                "source": "git:commit",
+                "text": "Prefer snake_case names and concise commit messages",
+                "tags": ["style", "git"]
+            }),
+        )
+        .expect("memory upsert should succeed");
+
+        let result = execute_tool(
+            "MemorySearch",
+            &json!({
+                "query": "snake_case style",
+                "top_k": 3
+            }),
+        )
+        .expect("memory search should succeed");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("json");
+        let first_id = output["results"][0]["id"].as_str().unwrap_or_default();
+        assert_eq!(first_id, "mem-style-1");
+        assert_eq!(
+            output["results"][0]["embedding_model"],
+            "local-hash-embedding-v1"
+        );
+        assert_eq!(output["results"][0]["embedding_provider"], "local-hash");
+    }
+
+    #[test]
+    fn memory_upsert_supports_delete_action() {
+        let registry = GlobalToolRegistry::builtin();
+        let scope = ToolExecutionScope::for_session("memory-delete-session");
+
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "mem-delete-1",
+                    "source": "git:commit",
+                    "text": "temporary memory token delete_unique_4812",
+                    "tags": ["temp"]
+                }),
+                &scope,
+            )
+            .expect("memory upsert should succeed");
+
+        let deleted = registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "action": "delete",
+                    "id": "mem-delete-1"
+                }),
+                &scope,
+            )
+            .expect("memory delete should succeed");
+        let deleted_output: serde_json::Value = serde_json::from_str(&deleted).expect("json");
+        assert_eq!(deleted_output["deleted"], true);
+
+        let result = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "delete_unique_4812",
+                    "top_k": 3,
+                    "min_score": 0.2
+                }),
+                &scope,
+            )
+            .expect("memory search should succeed");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(output["results"].as_array().map_or(0, Vec::len), 0);
+    }
+
+    #[test]
+    fn knowledge_graph_tool_supports_entity_and_relation_flows() {
+        execute_tool(
+            "KnowledgeGraph",
+            &json!({
+                "action": "upsert_entity",
+                "entity_id": "crate:memory",
+                "label": "orbit-memory",
+                "entity_type": "crate"
+            }),
+        )
+        .expect("entity upsert should succeed");
+
+        execute_tool(
+            "KnowledgeGraph",
+            &json!({
+                "action": "upsert_entity",
+                "entity_id": "crate:tools",
+                "label": "orbit-tools",
+                "entity_type": "crate"
+            }),
+        )
+        .expect("entity upsert should succeed");
+
+        execute_tool(
+            "KnowledgeGraph",
+            &json!({
+                "action": "add_relation",
+                "subject_id": "crate:tools",
+                "predicate": "depends_on",
+                "object_id": "crate:memory"
+            }),
+        )
+        .expect("relation upsert should succeed");
+
+        let result = execute_tool(
+            "KnowledgeGraph",
+            &json!({
+                "action": "neighbors",
+                "entity_id": "crate:memory"
+            }),
+        )
+        .expect("neighbors should succeed");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(output["neighbors"].as_array().map_or(0, Vec::len), 1);
+    }
+
+    #[test]
+    fn knowledge_graph_tool_supports_delete_flows() {
+        let registry = GlobalToolRegistry::builtin();
+        let scope = ToolExecutionScope::for_session("kg-delete-session");
+
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "upsert_entity",
+                    "entity_id": "crate:memory",
+                    "label": "orbit-memory",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity upsert should succeed");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "upsert_entity",
+                    "entity_id": "crate:tools",
+                    "label": "orbit-tools",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity upsert should succeed");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "add_relation",
+                    "subject_id": "crate:tools",
+                    "predicate": "depends_on",
+                    "object_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("relation add should succeed");
+
+        let deleted_relation = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "delete_relation",
+                    "subject_id": "crate:tools",
+                    "predicate": "depends_on",
+                    "object_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("relation delete should succeed");
+        let deleted_relation_output: serde_json::Value =
+            serde_json::from_str(&deleted_relation).expect("json");
+        assert_eq!(deleted_relation_output["deleted"], true);
+
+        let neighbors = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "neighbors",
+                    "entity_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("neighbors should succeed");
+        let neighbors_output: serde_json::Value = serde_json::from_str(&neighbors).expect("json");
+        assert_eq!(
+            neighbors_output["neighbors"].as_array().map_or(0, Vec::len),
+            0
+        );
+
+        let deleted_entity = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "delete_entity",
+                    "entity_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("entity delete should succeed");
+        let deleted_entity_output: serde_json::Value =
+            serde_json::from_str(&deleted_entity).expect("json");
+        assert_eq!(deleted_entity_output["deleted"], true);
+    }
+
+    #[test]
+    fn knowledge_graph_inspect_lists_entities_and_relations() {
+        let registry = GlobalToolRegistry::builtin();
+        let scope = ToolExecutionScope::for_session("kg-inspect-session");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "upsert_entity",
+                    "entity_id": "crate:memory",
+                    "label": "orbit-memory",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity upsert should succeed");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "upsert_entity",
+                    "entity_id": "service:memory",
+                    "label": "memory-service",
+                    "entity_type": "service"
+                }),
+                &scope,
+            )
+            .expect("entity upsert should succeed");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "add_relation",
+                    "subject_id": "crate:memory",
+                    "predicate": "owns",
+                    "object_id": "service:memory"
+                }),
+                &scope,
+            )
+            .expect("relation add should succeed");
+
+        let entities = registry
+            .execute_scoped(
+                "KnowledgeGraphInspect",
+                &json!({
+                    "action": "list_entities",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity inspect should succeed");
+        let entities_output: serde_json::Value = serde_json::from_str(&entities).expect("json");
+        assert_eq!(entities_output["count"], 1);
+        assert_eq!(entities_output["entities"][0]["id"], "crate:memory");
+
+        let relations = registry
+            .execute_scoped(
+                "KnowledgeGraphInspect",
+                &json!({
+                    "action": "list_relations",
+                    "predicate": "owns"
+                }),
+                &scope,
+            )
+            .expect("relation inspect should succeed");
+        let relations_output: serde_json::Value = serde_json::from_str(&relations).expect("json");
+        assert_eq!(relations_output["count"], 1);
+        assert_eq!(relations_output["relations"][0]["predicate"], "owns");
+    }
+
+    #[test]
+    fn style_train_tool_trains_and_scores() {
+        execute_tool(
+            "StyleTrain",
+            &json!({
+                "action": "train",
+                "samples": [
+                    {"source": "a.rs", "content": "fn parse_args() {\n    let user_name = 1;\n}\n"},
+                    {"source": "b.rs", "content": "fn build_graph() {\n    let node_count = 2;\n}\n"}
+                ]
+            }),
+        )
+        .expect("style train should succeed");
+
+        let result = execute_tool(
+            "StyleTrain",
+            &json!({
+                "action": "score",
+                "candidate_code": "fn parse_args() {\n    let user_name = 3;\n}\n"
+            }),
+        )
+        .expect("style score should succeed");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("json");
+        let score = output["score"].as_f64().unwrap_or_default();
+        assert!(
+            score > 0.5,
+            "expected style score above threshold, got {score}"
+        );
+    }
+
+    #[test]
+    fn memory_tools_are_isolated_by_session_scope() {
+        let registry = GlobalToolRegistry::builtin();
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "session-a-memory",
+                    "source": "git:commit",
+                    "text": "Prefer scoped session memory",
+                    "tags": ["style"]
+                }),
+                &ToolExecutionScope::for_session("session-a"),
+            )
+            .expect("memory upsert should succeed");
+
+        let first = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "scoped session memory",
+                    "top_k": 3
+                }),
+                &ToolExecutionScope::for_session("session-a"),
+            )
+            .expect("session-a search should succeed");
+        let second = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "scoped session memory",
+                    "top_k": 3
+                }),
+                &ToolExecutionScope::for_session("session-b"),
+            )
+            .expect("session-b search should succeed");
+
+        let first_output: serde_json::Value = serde_json::from_str(&first).expect("json");
+        let second_output: serde_json::Value = serde_json::from_str(&second).expect("json");
+        assert_eq!(first_output["results"][0]["id"], "session-a-memory");
+        assert_eq!(second_output["results"].as_array().map_or(0, Vec::len), 0);
+    }
+
+    #[test]
+    fn memory_search_min_score_can_return_empty_results() {
+        let registry = GlobalToolRegistry::builtin();
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "session-a-memory",
+                    "source": "git:commit",
+                    "text": "Prefer scoped session memory",
+                    "tags": ["style"]
+                }),
+                &ToolExecutionScope::for_session("session-threshold"),
+            )
+            .expect("memory upsert should succeed");
+
+        let result = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "totally unrelated galaxy query",
+                    "top_k": 3,
+                    "min_score": 0.95
+                }),
+                &ToolExecutionScope::for_session("session-threshold"),
+            )
+            .expect("thresholded memory search should succeed");
+
+        let output: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(output["results"].as_array().map_or(0, Vec::len), 0);
+    }
+
+    #[test]
+    fn memory_search_supports_source_filter_and_preferred_source() {
+        let registry = GlobalToolRegistry::builtin();
+        let scope = ToolExecutionScope::for_session("memory-source-search");
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "git-memory",
+                    "source": "git:commit",
+                    "text": "shared search text",
+                    "tags": ["style"]
+                }),
+                &scope,
+            )
+            .expect("memory upsert should succeed");
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "docs-memory",
+                    "source": "docs",
+                    "text": "shared search text",
+                    "tags": ["style"]
+                }),
+                &scope,
+            )
+            .expect("memory upsert should succeed");
+
+        let filtered = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "shared search text",
+                    "top_k": 5,
+                    "source_filter": "git:commit"
+                }),
+                &scope,
+            )
+            .expect("filtered memory search should succeed");
+        let filtered_output: serde_json::Value = serde_json::from_str(&filtered).expect("json");
+        assert_eq!(filtered_output["results"].as_array().map_or(0, Vec::len), 1);
+        assert_eq!(filtered_output["results"][0]["id"], "git-memory");
+
+        let preferred = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "shared search text",
+                    "top_k": 5,
+                    "preferred_source": "git:commit"
+                }),
+                &scope,
+            )
+            .expect("preferred-source memory search should succeed");
+        let preferred_output: serde_json::Value = serde_json::from_str(&preferred).expect("json");
+        assert_eq!(preferred_output["results"][0]["id"], "git-memory");
+    }
+
+    #[test]
+    fn memory_inspect_lists_scoped_entries() {
+        let registry = GlobalToolRegistry::builtin();
+        let scope = ToolExecutionScope::for_session("memory-inspect-session");
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "inspect-1",
+                    "source": "git:commit",
+                    "text": "inspectable memory",
+                    "tags": ["style", "git"]
+                }),
+                &scope,
+            )
+            .expect("memory upsert should succeed");
+
+        let result = registry
+            .execute_scoped(
+                "MemoryInspect",
+                &json!({
+                    "action": "list",
+                    "source_filter": "git:commit",
+                    "tags": ["style"]
+                }),
+                &scope,
+            )
+            .expect("memory inspect should succeed");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(output["count"], 1);
+        assert_eq!(output["items"][0]["id"], "inspect-1");
+        assert_eq!(
+            output["items"][0]["embedding_model"],
+            "local-hash-embedding-v1"
+        );
+    }
+
+    #[test]
+    fn memory_search_telemetry_reports_filter_diagnostics() {
+        let sink = Arc::new(MemoryTelemetrySink::default());
+        let tracer = SessionTracer::new("memory-telemetry-session", sink.clone());
+        let registry = GlobalToolRegistry::builtin().with_session_tracer(tracer);
+        let scope = ToolExecutionScope::for_session("memory-telemetry-session");
+
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "memory-1",
+                    "source": "docs",
+                    "text": "commit messages should be imperative",
+                    "tags": ["git"]
+                }),
+                &scope,
+            )
+            .expect("memory upsert should succeed");
+
+        registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "commit message style",
+                    "top_k": 5,
+                    "min_score": 1.1
+                }),
+                &scope,
+            )
+            .expect("memory search should succeed");
+
+        let analytics = sink
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                TelemetryEvent::Analytics(event) => Some(event),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let search_event = analytics
+            .iter()
+            .find(|event| event.namespace == "memory" && event.action == "search")
+            .expect("memory search analytics event should be recorded");
+        assert_eq!(
+            search_event.properties.get("candidate_count"),
+            Some(&json!(1))
+        );
+        assert_eq!(search_event.properties.get("result_count"), Some(&json!(0)));
+        assert_eq!(
+            search_event.properties.get("min_score_drops"),
+            Some(&json!(1))
+        );
+        assert!(sink.events().iter().any(|event| matches!(
+            event,
+            TelemetryEvent::SessionTrace(trace)
+                if trace.session_id == "memory-telemetry-session" && trace.name == "analytics"
+        )));
+    }
+
+    #[test]
+    fn env_backed_memory_tools_route_requests_to_pinecone_and_neo4j() {
+        if !loopback_bind_available() {
+            return;
+        }
+
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _env = EnvRestoreGuard::capture(&[
+            "ORBIT_MEMORY_METADATA_PATH",
+            "ORBIT_MEMORY_PINECONE_URL",
+            "ORBIT_MEMORY_PINECONE_NAMESPACE",
+            "ORBIT_MEMORY_PINECONE_API_KEY",
+            "ORBIT_MEMORY_NEO4J_URL",
+            "ORBIT_MEMORY_NEO4J_DATABASE",
+            "ORBIT_MEMORY_NEO4J_USERNAME",
+            "ORBIT_MEMORY_NEO4J_PASSWORD",
+        ]);
+
+        let metadata_path = temp_path("memory-tool-backend.tsv");
+        let pinecone_requests = Arc::new(Mutex::new(Vec::<CapturedHttpRequest>::new()));
+        let pinecone_server = {
+            let requests = pinecone_requests.clone();
+            RecordingTestServer::spawn(Arc::new(move |request: &CapturedHttpRequest| {
+                requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(request.clone());
+                if request.request_line.contains("/points/search")
+                    || request.request_line.contains("/query")
+                {
+                    HttpResponse::json(200, "OK", r#"{"result":[{"id":"memory-1","score":0.93}]}"#)
+                } else {
+                    HttpResponse::json(200, "OK", r#"{"status":"ok"}"#)
+                }
+            }))
+        };
+
+        let neo4j_requests = Arc::new(Mutex::new(Vec::<CapturedHttpRequest>::new()));
+        let neo4j_server = {
+            let requests = neo4j_requests.clone();
+            RecordingTestServer::spawn(Arc::new(move |request: &CapturedHttpRequest| {
+                requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(request.clone());
+                if request.body.contains("RETURN n.id, n.label, n.entity_type") {
+                    HttpResponse::json(
+                        200,
+                        "OK",
+                        r#"{"results":[{"columns":["n.id","n.label","n.entity_type"],"data":[{"row":["crate:tools","orbit-tools","crate"]},{"row":["crate:memory","orbit-memory","crate"]}]}],"errors":[]}"#,
+                    )
+                } else if request.body.contains("RETURN s.id, r.predicate, o.id") {
+                    HttpResponse::json(
+                        200,
+                        "OK",
+                        r#"{"results":[{"columns":["s.id","r.predicate","o.id"],"data":[{"row":["crate:tools","depends_on","crate:memory"]}]}],"errors":[]}"#,
+                    )
+                } else {
+                    HttpResponse::json(200, "OK", r#"{"results":[],"errors":[]}"#)
+                }
+            }))
+        };
+
+        std::env::set_var("ORBIT_MEMORY_METADATA_PATH", &metadata_path);
+        std::env::set_var(
+            "ORBIT_MEMORY_PINECONE_URL",
+            format!("http://{}", pinecone_server.addr()),
+        );
+        std::env::set_var("ORBIT_MEMORY_PINECONE_NAMESPACE", "memories");
+        std::env::set_var("ORBIT_MEMORY_PINECONE_API_KEY", "pinecone-secret");
+        std::env::set_var(
+            "ORBIT_MEMORY_NEO4J_URL",
+            format!("http://{}", neo4j_server.addr()),
+        );
+        std::env::set_var("ORBIT_MEMORY_NEO4J_DATABASE", "neo4j");
+        std::env::set_var("ORBIT_MEMORY_NEO4J_USERNAME", "neo4j");
+        std::env::set_var("ORBIT_MEMORY_NEO4J_PASSWORD", "neo4j-secret");
+
+        let registry = GlobalToolRegistry::builtin();
+        let scope = ToolExecutionScope {
+            session_id: "session-e2e".to_string(),
+            repo_id: Some("repo-a".to_string()),
+            branch_id: Some("main".to_string()),
+        };
+
+        registry
+            .execute_scoped(
+                "MemoryUpsert",
+                &json!({
+                    "id": "memory-1",
+                    "source": "git:commit",
+                    "text": "Prefer scoped session memory",
+                    "tags": ["style"]
+                }),
+                &scope,
+            )
+            .expect("memory upsert should succeed");
+
+        let search = registry
+            .execute_scoped(
+                "MemorySearch",
+                &json!({
+                    "query": "scoped session memory",
+                    "top_k": 3,
+                    "min_score": 0.2
+                }),
+                &scope,
+            )
+            .expect("memory search should succeed");
+        let search_output: serde_json::Value = serde_json::from_str(&search).expect("json");
+        assert_eq!(search_output["results"][0]["id"], "memory-1");
+
+        let backend = registry
+            .execute_scoped(
+                "MemoryInspect",
+                &json!({
+                    "action": "backend"
+                }),
+                &scope,
+            )
+            .expect("memory backend inspect should succeed");
+        let backend_output: serde_json::Value = serde_json::from_str(&backend).expect("json");
+        assert_eq!(backend_output["pinecone"]["enabled"], true);
+        assert_eq!(backend_output["neo4j"]["enabled"], true);
+        assert_eq!(backend_output["pinecone"]["api_key_configured"], true);
+        assert_eq!(backend_output["neo4j"]["password_configured"], true);
+
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "upsert_entity",
+                    "entity_id": "crate:tools",
+                    "label": "orbit-tools",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity upsert should succeed");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "upsert_entity",
+                    "entity_id": "crate:memory",
+                    "label": "orbit-memory",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity upsert should succeed");
+        registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "add_relation",
+                    "subject_id": "crate:tools",
+                    "predicate": "depends_on",
+                    "object_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("relation add should succeed");
+        let neighbors = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "neighbors",
+                    "entity_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("neighbors should succeed");
+        let neighbors_output: serde_json::Value = serde_json::from_str(&neighbors).expect("json");
+        assert_eq!(neighbors_output["neighbors"][0]["predicate"], "depends_on");
+
+        let inspect_entities = registry
+            .execute_scoped(
+                "KnowledgeGraphInspect",
+                &json!({
+                    "action": "list_entities",
+                    "entity_type": "crate"
+                }),
+                &scope,
+            )
+            .expect("entity inspect should succeed");
+        let inspect_entities_output: serde_json::Value =
+            serde_json::from_str(&inspect_entities).expect("json");
+        assert_eq!(inspect_entities_output["count"], 2);
+
+        let inspect_relations = registry
+            .execute_scoped(
+                "KnowledgeGraphInspect",
+                &json!({
+                    "action": "list_relations",
+                    "predicate": "depends_on"
+                }),
+                &scope,
+            )
+            .expect("relation inspect should succeed");
+        let inspect_relations_output: serde_json::Value =
+            serde_json::from_str(&inspect_relations).expect("json");
+        assert_eq!(inspect_relations_output["count"], 1);
+
+        let deleted_relation = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "delete_relation",
+                    "subject_id": "crate:tools",
+                    "predicate": "depends_on",
+                    "object_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("relation delete should succeed");
+        let deleted_relation_output: serde_json::Value =
+            serde_json::from_str(&deleted_relation).expect("json");
+        assert_eq!(deleted_relation_output["deleted"], true);
+
+        let deleted_entity = registry
+            .execute_scoped(
+                "KnowledgeGraph",
+                &json!({
+                    "action": "delete_entity",
+                    "entity_id": "crate:memory"
+                }),
+                &scope,
+            )
+            .expect("entity delete should succeed");
+        let deleted_entity_output: serde_json::Value =
+            serde_json::from_str(&deleted_entity).expect("json");
+        assert_eq!(deleted_entity_output["deleted"], true);
+
+        let pinecone_requests = pinecone_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(pinecone_requests.len(), 2);
+        assert_eq!(
+            pinecone_requests[0].header("api-key"),
+            Some("pinecone-secret")
+        );
+        assert!(pinecone_requests[0]
+            .body
+            .contains("\"session_id\":\"session-e2e\""));
+        assert!(pinecone_requests[0].body.contains("\"repo_id\":\"repo-a\""));
+        assert!(pinecone_requests[0].body.contains("\"branch_id\":\"main\""));
+        assert!(
+            pinecone_requests[0]
+                .request_line
+                .contains("/vectors/upsert")
+                || pinecone_requests[0]
+                    .request_line
+                    .contains("/collections/memories/points")
+        );
+        assert!(
+            pinecone_requests[1].body.contains("\"memory_id\"")
+                || pinecone_requests[1].body.contains("\"filter\"")
+                || pinecone_requests[1].body.contains("\"topK\"")
+        );
+        assert!(
+            pinecone_requests[1].request_line.contains("/query")
+                || pinecone_requests[1]
+                    .request_line
+                    .contains("/collections/memories/points/search")
+        );
+
+        let neo4j_requests = neo4j_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(neo4j_requests.len(), 6);
+        assert_eq!(
+            neo4j_requests[0].request_line,
+            "POST /db/neo4j/tx/commit HTTP/1.1"
+        );
+        assert!(neo4j_requests
+            .iter()
+            .all(|request| request.header("authorization").is_some()));
+        assert!(neo4j_requests
+            .iter()
+            .any(|request| request.body.contains("session-e2e:repo-a:main")));
+        assert!(neo4j_requests
+            .iter()
+            .any(|request| request.body.contains("MERGE (s)-[r:RELATED")));
+        assert!(neo4j_requests
+            .iter()
+            .any(|request| request.body.contains("RETURN s.id, r.predicate, o.id")));
+        assert!(neo4j_requests
+            .iter()
+            .any(|request| request.body.contains("DELETE r")));
+        assert!(neo4j_requests
+            .iter()
+            .any(|request| request.body.contains("DETACH DELETE n")));
+
+        let _ = std::fs::remove_file(metadata_path);
+    }
+
+    #[test]
+    fn style_train_profiles_are_isolated_by_session_scope() {
+        let registry = GlobalToolRegistry::builtin();
+        registry
+            .execute_scoped(
+                "StyleTrain",
+                &json!({
+                    "action": "train",
+                    "samples": [
+                        {"source": "a.rs", "content": "fn parse_args() {\n\tlet snake_case = 1;\n}\n"}
+                    ]
+                }),
+                &ToolExecutionScope::for_session("session-style-a"),
+            )
+            .expect("style train should succeed");
+
+        let trained = registry
+            .execute_scoped(
+                "StyleTrain",
+                &json!({
+                    "action": "get_profile"
+                }),
+                &ToolExecutionScope::for_session("session-style-a"),
+            )
+            .expect("trained profile should load");
+        let missing = registry
+            .execute_scoped(
+                "StyleTrain",
+                &json!({
+                    "action": "get_profile"
+                }),
+                &ToolExecutionScope::for_session("session-style-b"),
+            )
+            .expect("default profile should load");
+
+        let trained_output: serde_json::Value = serde_json::from_str(&trained).expect("json");
+        let missing_output: serde_json::Value = serde_json::from_str(&missing).expect("json");
+        assert_eq!(trained_output["profile"]["preferred_indent"], "tabs");
+        assert_eq!(missing_output["profile"]["sample_count"], 0);
+        assert_eq!(missing_output["profile"]["preferred_indent"], "spaces:4");
+    }
+
     struct TestServer {
         addr: SocketAddr,
         shutdown: Option<std::sync::mpsc::Sender<()>>,
@@ -7875,6 +10487,144 @@ printf 'pwsh:%s' "$1"
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CapturedHttpRequest {
+        request_line: String,
+        headers: Vec<(String, String)>,
+        body: String,
+    }
+
+    impl CapturedHttpRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        }
+    }
+
+    struct RecordingTestServer {
+        addr: SocketAddr,
+        shutdown: Option<std::sync::mpsc::Sender<()>>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl RecordingTestServer {
+        fn spawn(
+            handler: Arc<dyn Fn(&CapturedHttpRequest) -> HttpResponse + Send + Sync + 'static>,
+        ) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind recording test server");
+            listener
+                .set_nonblocking(true)
+                .expect("set nonblocking listener");
+            let addr = listener.local_addr().expect("local addr");
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+
+            let handle = thread::spawn(move || loop {
+                if rx.try_recv().is_ok() {
+                    break;
+                }
+
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = read_http_request(&mut stream);
+                        let response = handler(&request);
+                        stream
+                            .write_all(response.to_bytes().as_slice())
+                            .expect("write response");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("server accept failed: {error}"),
+                }
+            });
+
+            Self {
+                addr,
+                shutdown: Some(tx),
+                handle: Some(handle),
+            }
+        }
+
+        fn addr(&self) -> SocketAddr {
+            self.addr
+        }
+    }
+
+    impl Drop for RecordingTestServer {
+        fn drop(&mut self) {
+            if let Some(tx) = self.shutdown.take() {
+                let _ = tx.send(());
+            }
+            if let Some(handle) = self.handle.take() {
+                handle.join().expect("join test server");
+            }
+        }
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> CapturedHttpRequest {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set read timeout");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+
+        loop {
+            let size = stream.read(&mut buffer).expect("read request");
+            if size == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..size]);
+            if let Some(headers_end) = find_headers_end(&bytes) {
+                let header_text = String::from_utf8_lossy(&bytes[..headers_end]).into_owned();
+                let content_length = parse_content_length(&header_text);
+                let body_start = headers_end + 4;
+                if bytes.len() >= body_start + content_length {
+                    return parse_http_request(&bytes[..body_start + content_length]);
+                }
+            }
+        }
+
+        parse_http_request(&bytes)
+    }
+
+    fn find_headers_end(bytes: &[u8]) -> Option<usize> {
+        bytes.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    fn parse_content_length(header_text: &str) -> usize {
+        header_text
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn parse_http_request(bytes: &[u8]) -> CapturedHttpRequest {
+        let request = String::from_utf8_lossy(bytes).into_owned();
+        let (header_text, body) = request.split_once("\r\n\r\n").unwrap_or((&request, ""));
+        let mut lines = header_text.lines();
+        let request_line = lines.next().unwrap_or_default().to_string();
+        let headers = lines
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                Some((name.trim().to_string(), value.trim().to_string()))
+            })
+            .collect();
+        CapturedHttpRequest {
+            request_line,
+            headers,
+            body: body.to_string(),
+        }
+    }
+
     impl Drop for TestServer {
         fn drop(&mut self) {
             if let Some(tx) = self.shutdown.take() {
@@ -7894,6 +10644,15 @@ printf 'pwsh:%s' "$1"
     }
 
     impl HttpResponse {
+        fn json(status: u16, reason: &'static str, body: &str) -> Self {
+            Self {
+                status,
+                reason,
+                content_type: "application/json; charset=utf-8",
+                body: body.to_string(),
+            }
+        }
+
         fn html(status: u16, reason: &'static str, body: &str) -> Self {
             Self {
                 status,

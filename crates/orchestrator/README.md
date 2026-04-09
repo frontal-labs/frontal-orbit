@@ -1,11 +1,7 @@
 # Orbit Orchestrator
 
-Orchestration capabilities for the Orbit ecosystem.
+Orchestration-focused crate for routing work items, building execution plans, and assigning lanes.
 
-## Status
+## Current Status
 
-This crate is currently a stub and contains minimal functionality. It is intended for future development of orchestration capabilities.
-
-## Usage
-
-This crate is not yet functional for production use.
+This crate now exposes the minimal planning API used by the hosted server: typed work items, sources, priorities, and lane assignments with routing tests.

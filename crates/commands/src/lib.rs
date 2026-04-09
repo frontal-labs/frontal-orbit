@@ -11,6 +11,9 @@ use orbit_runtime::{
 };
 use serde_json::{json, Value};
 
+pub const SUPPORTED_CONFIG_SECTIONS: &[&str] = &["env", "hooks", "model", "telemetry", "plugins"];
+pub const CONFIG_SECTION_ARGUMENT_HINT: &str = "[env|hooks|model|telemetry|plugins]";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {
     pub name: String,
@@ -124,7 +127,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "config",
         aliases: &[],
         summary: "Inspect Claude config files or merged sections",
-        argument_hint: Some("[env|hooks|model|plugins]"),
+        argument_hint: Some(CONFIG_SECTION_ARGUMENT_HINT),
         resume_supported: true,
     },
     SlashCommandSpec {
@@ -256,20 +259,6 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
-        name: "login",
-        aliases: &[],
-        summary: "Log in to the service",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
-        name: "logout",
-        aliases: &[],
-        summary: "Log out of the current session",
-        argument_hint: None,
-        resume_supported: false,
-    },
-    SlashCommandSpec {
         name: "plan",
         aliases: &[],
         summary: "Toggle or inspect planning mode",
@@ -314,7 +303,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "upgrade",
         aliases: &[],
-        summary: "Check for and install CLI updates",
+        summary: "Show CLI upgrade instructions",
         argument_hint: None,
         resume_supported: false,
     },
@@ -441,7 +430,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         name: "ide",
         aliases: &[],
         summary: "Open or configure IDE integration",
-        argument_hint: Some("[vscode|cursor]"),
+        argument_hint: Some("[vscode|cursor|antigravity|windsurf]"),
         resume_supported: false,
     },
     SlashCommandSpec {
@@ -508,7 +497,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
     },
     SlashCommandSpec {
-        name: "privacy-settings",
+        name: "privacy",
         aliases: &[],
         summary: "View or modify privacy settings",
         argument_hint: None,
@@ -1087,6 +1076,10 @@ pub enum SlashCommand {
     Config {
         section: Option<String>,
     },
+    Telemetry {
+        action: Option<String>,
+        target: Option<String>,
+    },
     Mcp {
         action: Option<String>,
         target: Option<String>,
@@ -1113,8 +1106,6 @@ pub enum SlashCommand {
         args: Option<String>,
     },
     Doctor,
-    Login,
-    Logout,
     Vim,
     Upgrade,
     Stats,
@@ -1289,6 +1280,7 @@ pub fn validate_slash_command_input(
         "config" => SlashCommand::Config {
             section: parse_config_section(&args)?,
         },
+        "telemetry" => parse_telemetry_command(&args)?,
         "mcp" => parse_mcp_command(&args)?,
         "memory" => {
             validate_no_args(command, &args)?;
@@ -1318,14 +1310,6 @@ pub fn validate_slash_command_input(
         "doctor" => {
             validate_no_args(command, &args)?;
             SlashCommand::Doctor
-        }
-        "login" => {
-            validate_no_args(command, &args)?;
-            SlashCommand::Login
-        }
-        "logout" => {
-            validate_no_args(command, &args)?;
-            SlashCommand::Logout
         }
         "vim" => {
             validate_no_args(command, &args)?;
@@ -1417,7 +1401,9 @@ pub fn validate_slash_command_input(
         "effort" => SlashCommand::Effort { level: remainder },
         "branch" => SlashCommand::Branch { name: remainder },
         "rewind" => SlashCommand::Rewind { steps: remainder },
-        "ide" => SlashCommand::Ide { target: remainder },
+        "ide" => SlashCommand::Ide {
+            target: parse_ide_target(&args)?,
+        },
         "tag" => SlashCommand::Tag { label: remainder },
         "output-style" => SlashCommand::OutputStyle { style: remainder },
         "add-dir" => SlashCommand::AddDir { path: remainder },
@@ -1494,20 +1480,29 @@ fn parse_clear_args(args: &[&str]) -> Result<bool, SlashCommandParseError> {
     }
 }
 
-fn parse_config_section(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
-    let section = optional_single_arg("config", args, "[env|hooks|model|plugins]")?;
-    if let Some(section) = section {
-        if matches!(section.as_str(), "env" | "hooks" | "model" | "plugins") {
-            return Ok(Some(section));
+fn parse_ide_target(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
+    let target = optional_single_arg("ide", args, "[vscode|cursor|antigravity|windsurf]")?;
+    if let Some(target) = target {
+        let normalized = target.to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "vscode" | "cursor" | "antigravity" | "windsurf"
+        ) {
+            return Ok(Some(normalized));
         }
         return Err(command_error(
-            &format!("Unsupported /config section '{section}'. Use env, hooks, model, or plugins."),
-            "config",
-            "/config [env|hooks|model|plugins]",
+            &format!(
+                "Unsupported /ide target '{target}'. Use vscode, cursor, antigravity, or windsurf."
+            ),
+            "ide",
+            "/ide [vscode|cursor|antigravity|windsurf]",
         ));
     }
-
     Ok(None)
+}
+
+fn parse_config_section(args: &[&str]) -> Result<Option<String>, SlashCommandParseError> {
+    optional_single_arg("config", args, CONFIG_SECTION_ARGUMENT_HINT)
 }
 
 fn parse_session_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseError> {
@@ -1550,6 +1545,46 @@ fn parse_session_command(args: &[&str]) -> Result<SlashCommand, SlashCommandPars
             ),
             "session",
             "/session [list|switch <session-id>|fork [branch-name]]",
+        )),
+    }
+}
+
+fn parse_telemetry_command(args: &[&str]) -> Result<SlashCommand, SlashCommandParseError> {
+    match args {
+        [] => Ok(SlashCommand::Telemetry {
+            action: None,
+            target: None,
+        }),
+        ["status"] => Ok(SlashCommand::Telemetry {
+            action: Some("status".to_string()),
+            target: None,
+        }),
+        ["status", target @ ("project" | "local")] => Ok(SlashCommand::Telemetry {
+            action: Some("status".to_string()),
+            target: Some((*target).to_string()),
+        }),
+        ["on"] => Ok(SlashCommand::Telemetry {
+            action: Some("on".to_string()),
+            target: None,
+        }),
+        ["on", target @ ("project" | "local")] => Ok(SlashCommand::Telemetry {
+            action: Some("on".to_string()),
+            target: Some((*target).to_string()),
+        }),
+        ["off"] => Ok(SlashCommand::Telemetry {
+            action: Some("off".to_string()),
+            target: None,
+        }),
+        ["off", target @ ("project" | "local")] => Ok(SlashCommand::Telemetry {
+            action: Some("off".to_string()),
+            target: Some((*target).to_string()),
+        }),
+        [action, ..] => Err(command_error(
+            &format!(
+                "Unknown /telemetry action '{action}'. Use status, on, or off, with optional target project or local."
+            ),
+            "telemetry",
+            "/telemetry [status|on|off] [project|local]",
         )),
     }
 }
@@ -1787,7 +1822,7 @@ pub fn resume_supported_slash_commands() -> Vec<&'static SlashCommandSpec> {
 fn slash_command_category(name: &str) -> &'static str {
     match name {
         "help" | "status" | "sandbox" | "model" | "permissions" | "cost" | "resume" | "session"
-        | "version" | "login" | "logout" | "usage" | "stats" | "rename" | "privacy-settings" => {
+        | "version" | "usage" | "stats" | "rename" | "privacy-settings" | "telemetry" => {
             "Session & visibility"
         }
         "compact" | "clear" | "config" | "memory" | "init" | "diff" | "commit" | "pr" | "issue"
@@ -3710,9 +3745,9 @@ fn definition_source_id(source: DefinitionSource) -> &'static str {
         DefinitionSource::UserOrbitConfigHome | DefinitionSource::UserCodexHome => {
             "user_orbit_config_home"
         }
-        DefinitionSource::UserOrbit | DefinitionSource::UserCodex | DefinitionSource::UserClaude => {
-            "user_orbit"
-        }
+        DefinitionSource::UserOrbit
+        | DefinitionSource::UserCodex
+        | DefinitionSource::UserClaude => "user_orbit",
     }
 }
 
@@ -3886,6 +3921,7 @@ pub fn handle_slash_command(
         | SlashCommand::Cost
         | SlashCommand::Resume { .. }
         | SlashCommand::Config { .. }
+        | SlashCommand::Telemetry { .. }
         | SlashCommand::Mcp { .. }
         | SlashCommand::Memory
         | SlashCommand::Init
@@ -3897,8 +3933,6 @@ pub fn handle_slash_command(
         | SlashCommand::Agents { .. }
         | SlashCommand::Skills { .. }
         | SlashCommand::Doctor
-        | SlashCommand::Login
-        | SlashCommand::Logout
         | SlashCommand::Vim
         | SlashCommand::Upgrade
         | SlashCommand::Stats
@@ -3952,7 +3986,9 @@ mod tests {
         suggest_slash_commands, validate_slash_command_input, DefinitionSource, SkillOrigin,
         SkillRoot, SkillSlashDispatch, SlashCommand,
     };
-    use orbit_plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
+    use orbit_plugins::{
+        PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary,
+    };
     use orbit_runtime::{
         CompactionConfig, ConfigLoader, ContentBlock, ConversationMessage, MessageRole, Session,
     };
@@ -4171,6 +4207,39 @@ mod tests {
             }))
         );
         assert_eq!(
+            SlashCommand::parse("/config telemetry"),
+            Ok(Some(SlashCommand::Config {
+                section: Some("telemetry".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/config unknown"),
+            Ok(Some(SlashCommand::Config {
+                section: Some("unknown".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/telemetry"),
+            Ok(Some(SlashCommand::Telemetry {
+                action: None,
+                target: None
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/telemetry status"),
+            Ok(Some(SlashCommand::Telemetry {
+                action: Some("status".to_string()),
+                target: None
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/telemetry on local"),
+            Ok(Some(SlashCommand::Telemetry {
+                action: Some("on".to_string()),
+                target: Some("local".to_string())
+            }))
+        );
+        assert_eq!(
             SlashCommand::parse("/mcp"),
             Ok(Some(SlashCommand::Mcp {
                 action: None,
@@ -4248,6 +4317,34 @@ mod tests {
                 target: Some("incident-review".to_string())
             }))
         );
+        assert_eq!(
+            SlashCommand::parse("/ide"),
+            Ok(Some(SlashCommand::Ide { target: None }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/ide vscode"),
+            Ok(Some(SlashCommand::Ide {
+                target: Some("vscode".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/ide cursor"),
+            Ok(Some(SlashCommand::Ide {
+                target: Some("cursor".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/ide antigravity"),
+            Ok(Some(SlashCommand::Ide {
+                target: Some("antigravity".to_string())
+            }))
+        );
+        assert_eq!(
+            SlashCommand::parse("/ide windsurf"),
+            Ok(Some(SlashCommand::Ide {
+                target: Some("windsurf".to_string())
+            }))
+        );
     }
 
     #[test]
@@ -4279,6 +4376,12 @@ mod tests {
         assert!(error.contains(
             "  Usage            /permissions [read-only|workspace-write|danger-full-access]"
         ));
+
+        let ide_error = parse_error_message("/ide jetbrains");
+        assert!(ide_error.contains(
+            "Unsupported /ide target 'jetbrains'. Use vscode, cursor, antigravity, or windsurf."
+        ));
+        assert!(ide_error.contains("  Usage            /ide [vscode|cursor|antigravity|windsurf]"));
     }
 
     #[test]
@@ -4385,7 +4488,7 @@ mod tests {
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model|plugins]"));
+        assert!(help.contains("/config [env|hooks|model|telemetry|plugins]"));
         assert!(help.contains("/mcp [list|show <server>|help]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
@@ -4401,7 +4504,7 @@ mod tests {
         assert!(help.contains("/agents [list|help]"));
         assert!(help.contains("/skills [list|install <path>|help|<skill> [args]]"));
         assert!(help.contains("aliases: /skill"));
-        assert_eq!(slash_command_specs().len(), 141);
+        assert_eq!(slash_command_specs().len(), 139);
         assert!(resume_supported_slash_commands().len() >= 39);
     }
 
@@ -4848,8 +4951,9 @@ mod tests {
             super::handle_agents_slash_command(Some("help"), &cwd).expect("agents help");
         assert!(agents_help.contains("Usage            /agents [list|help]"));
         assert!(agents_help.contains("Direct CLI       orbit agents"));
-        assert!(agents_help
-            .contains("Sources          .orbit/agents, ~/.orbit/agents, $ORBIT_CONFIG_HOME/agents"));
+        assert!(agents_help.contains(
+            "Sources          .orbit/agents, ~/.orbit/agents, $ORBIT_CONFIG_HOME/agents"
+        ));
 
         let agents_unexpected =
             super::handle_agents_slash_command(Some("show planner"), &cwd).expect("agents usage");
@@ -4861,7 +4965,9 @@ mod tests {
             .contains("Usage            /skills [list|install <path>|help|<skill> [args]]"));
         assert!(skills_help.contains("Alias            /skill"));
         assert!(skills_help.contains("Invoke           /skills help overview -> $help overview"));
-        assert!(skills_help.contains("Install root     $ORBIT_CONFIG_HOME/skills or ~/.orbit/skills"));
+        assert!(
+            skills_help.contains("Install root     $ORBIT_CONFIG_HOME/skills or ~/.orbit/skills")
+        );
         assert!(skills_help.contains(".omc/skills"));
         assert!(skills_help.contains(".agents/skills"));
         assert!(skills_help.contains("~/.claude/skills/omc-learned"));
