@@ -95,6 +95,30 @@ Model aliases currently supported by the CLI:
 - `sonnet` → `claude-sonnet-4-6`
 - `haiku` → `claude-haiku-4-5-20251213`
 
+## Provider Selection
+
+Use the `--provider` flag to force a specific AI provider:
+
+```bash
+# Force Anthropic provider
+orbit --provider anthropic prompt "your question"
+
+# Force OpenAI provider
+orbit --provider openai prompt "your question"
+
+# Force xAI provider
+orbit --provider xai prompt "your question"
+
+# Combine with model aliases
+orbit --provider anthropic --model opus prompt "complex task"
+orbit --provider openai --model gpt-4 prompt "your question"
+```
+
+Supported providers:
+- `anthropic` - Claude models via Anthropic API
+- `openai` - GPT models via OpenAI API
+- `xai` - Grok models via xAI API
+
 ## Authentication
 
 ### API key

@@ -156,8 +156,28 @@ orbit status --detailed
 orbit status --json
 
 # Specific component
-orbit status --component api
-orbit status --component mcp
+ orbit status --component api
+ orbit status --component mcp
+```
+
+### hosted
+
+```bash
+orbit hosted tasks list [--status STATUS[,STATUS...]] [--source SOURCE] [--repository REPO] [--channel-id ID] [--thread-ts TS] [--needs-followup] [--limit N]
+orbit hosted task approval <TASK_ID> [retry|cancel|ack] [--kind orphaned_hosted_agent|github_review_followup] [--resolved-by NAME] [--reason TEXT]
+```
+
+**Examples:**
+
+```bash
+# List active Slack-created tasks
+orbit hosted tasks list --status pending,running --source slack --limit 10
+
+# List tasks that have GitHub review follow-up pending
+orbit hosted tasks list --needs-followup
+
+# Clear GitHub review follow-up and rerun the lane
+orbit hosted task approval task_123 retry --kind github_review_followup --resolved-by reviewer
 ```
 
 ### config

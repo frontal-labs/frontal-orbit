@@ -81,29 +81,40 @@ Primary artifacts:
 
 | Feature | Status |
 |---------|--------|
-| Anthropic / OpenAI-compatible provider flows + streaming (OpenAI, xAI, Frontal, Bedrock, Azure) | ✅ |
-| Environment-variable auth (Anthropic/OpenAI/xAI/Frontal/Bedrock/Azure/Ollama) | ✅ |
-| Interactive REPL (rustyline) | ✅ |
-| Tool system (bash, read, write, edit, grep, glob) | ✅ |
-| Web tools (search, fetch) | ✅ |
-| Sub-agent / agent surfaces | ✅ |
-| Todo tracking | ✅ |
-| Notebook editing | ✅ |
-| ORBIT.md / project memory | ✅ |
-| Config file hierarchy (`.orbit.json` + merged config sections) | ✅ |
-| Permission system | ✅ |
-| MCP server lifecycle + inspection | ✅ |
-| Session persistence + resume | ✅ |
-| Cost / usage / stats surfaces | ✅ |
-| Git integration | ✅ |
-| Markdown terminal rendering (ANSI) | ✅ |
-| Model aliases (opus/sonnet/haiku) | ✅ |
-| Direct CLI subcommands (`status`, `sandbox`, `agents`, `mcp`, `skills`, `doctor`) | ✅ |
-| Slash commands (including `/skills`, `/agents`, `/mcp`, `/doctor`, `/plugin`, `/subagent`) | ✅ |
-| Hooks (`/hooks`, config-backed lifecycle hooks) | ✅ |
-| Plugin management surfaces | ✅ |
-| Skills inventory / install surfaces | ✅ |
-| Machine-readable JSON output across core CLI surfaces | ✅ |
+| Anthropic / OpenAI-compatible provider flows + streaming (OpenAI, xAI, Frontal, Bedrock, Azure) |  |
+| Environment-variable auth (Anthropic/OpenAI/xAI/Frontal/Bedrock/Azure/Ollama) |  |
+| Interactive REPL (rustyline) |  |
+| Tool system (bash, read, write, edit, grep, glob) |  |
+| Web tools (search, fetch) |  |
+| Sub-agent / agent surfaces |  |
+| Todo tracking |  |
+| Notebook editing |  |
+| ORBIT.md / project memory |  |
+| Config file hierarchy (`.orbit.json` + merged config sections) |  |
+| Permission system |  |
+| MCP server lifecycle + inspection |  |
+| Session persistence + resume |  |
+| Cost / usage / stats surfaces |  |
+| Git integration |  |
+| Markdown terminal rendering (ANSI) |  |
+| Model aliases (opus/sonnet/haiku) |  |
+| Provider flag support (anthropic, openai, xai) |  |
+| Direct CLI subcommands (`status`, `sandbox`, `agents`, `mcp`, `skills`, `doctor`) |  |
+| Slash commands (including `/skills`, `/agents`, `/mcp`, `/doctor`, `/plugin`, `/subagent`) |  |
+| Hooks (`/hooks`, config-backed lifecycle hooks) |  |
+| Plugin management surfaces |  |
+| Skills inventory / install surfaces |  |
+| Machine-readable JSON output across core CLI surfaces |  |
+| GitHub integration (PRs, issues, check runs) |  |
+| IDE integration (VS Code, Cursor, Windsurf, Antigravity) |  |
+| Embedding and semantic memory |  |
+| Event system and messaging |  |
+| Training and style adaptation |  |
+| Webhook processing |  |
+| Repository lifecycle management |  |
+| Sandbox and isolation |  |
+| Observability and monitoring |  |
+| Orchestration and workflow management |  |
 
 ## Model Aliases
 
@@ -178,38 +189,66 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 
 ```text
 .
-├── Cargo.toml              # Workspace root
-├── Cargo.lock
-├── crates/
-    ├── api/                # Public API facade re-exporting provider/model APIs
-    ├── commands/           # Shared slash-command registry + help rendering
-    ├── compat-harness/     # TS manifest extraction harness
-    ├── providers/          # Provider clients and routing (Anthropic/OpenAI/xAI/Frontal/...)
-    ├── mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
-    ├── plugins/            # Plugin metadata, manager, install/enable/disable surfaces
-    ├── runtime/            # Session, config, permissions, MCP, prompts, auth/runtime loop
-    ├── cli/                # Main CLI binary (`orbit`)
-    ├── telemetry/          # Session tracing and usage telemetry types
-    └── tools/              # Built-in tools, skill resolution, tool search, agent runtime surfaces
+|   Cargo.toml              # Workspace root
+|   Cargo.lock
+|   crates/
+|   |   api/                # Public API facade re-exporting provider/model APIs
+|   |   agents/             # Agent management and coordination
+|   |   cli/                # Main CLI binary (`orbit`)
+|   |   commands/           # Shared slash-command registry + help rendering
+|   |   compat-harness/     # TS manifest extraction harness
+|   |   core/               # Shared core capabilities and foundational types
+|   |   embeddings/         # Embedding primitives for semantic memory
+|   |   events/             # Event system and messaging infrastructure
+|   |   github/             # GitHub API client integration
+|   |   integrations/       # MCP interoperability and IDE integration
+|   |   memory/             # Semantic memory and knowledge graph utilities
+|   |   mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
+|   |   observability/      # Structured observability primitives
+|   |   orchestrator/       # Workflow management and resource allocation
+|   |   plugins/            # Plugin metadata, manager, install/enable/disable surfaces
+|   |   providers/          # Provider clients and routing (Anthropic/OpenAI/xAI/Frontal/...)
+|   |   repo/               # Repository lifecycle management
+|   |   runtime/            # Session, config, permissions, MCP, prompts, auth/runtime loop
+|   |   sandbox/            # Sandboxing and isolation capabilities
+|   |   server/             # Hosted control-plane services
+|   |   telemetry/          # Session tracing and usage telemetry types
+|   |   tools/              # Built-in tools, skill resolution, tool search, agent runtime surfaces
+|   |   training/           # Style-learning and adaptation system
+|   |   webhooks/           # Webhook receiving and processing
 ```
 
 ### Crate Responsibilities
 
-- **api** — public API facade crate that re-exports provider and model APIs
-- **providers** — provider clients, routing, SSE streaming, request/response types, env-var auth, request-size/context-window preflight
-- **commands** — slash command definitions, parsing, help text generation, JSON/text command rendering
-- **compat-harness** — extracts tool/prompt manifests from upstream TS source
-- **mock-anthropic-service** — deterministic `/v1/messages` mock for CLI parity tests and local harness runs
-- **plugins** — plugin metadata, install/enable/disable/update flows, plugin tool definitions, hook integration surfaces
-- **runtime** — `ConversationRuntime`, config loading, session persistence, permission policy, MCP client lifecycle, system prompt assembly, usage tracking
-- **orbit-cli** — REPL, one-shot prompt, direct CLI subcommands, streaming display, tool call rendering, CLI argument parsing
-- **telemetry** — session trace events and supporting telemetry payloads
-- **tools** — tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, and runtime-facing tool discovery
+- **api** - public API facade crate that re-exports provider and model APIs
+- **agents** - agent management, coordination, and sub-agent orchestration
+- **cli** - REPL, one-shot prompt, direct CLI subcommands, streaming display, tool call rendering, CLI argument parsing
+- **commands** - slash command definitions, parsing, help text generation, JSON/text command rendering
+- **compat-harness** - extracts tool/prompt manifests from upstream TS source
+- **core** - shared types, traits, utilities, error handling, and foundational components
+- **embeddings** - embedding primitives, vector operations, and semantic similarity
+- **events** - event types, handlers, bus implementation, and messaging infrastructure
+- **github** - GitHub API client for PRs, issues, check runs, and repository operations
+- **integrations** - MCP server management, IDE integration, and external service bridges
+- **memory** - semantic memory, knowledge graphs, and persistent storage abstractions
+- **mock-anthropic-service** - deterministic `/v1/messages` mock for CLI parity tests and local harness runs
+- **observability** - error reporting, structured logging, and agent-level observability
+- **orchestrator** - work item routing, execution planning, lane assignment, and resource management
+- **plugins** - plugin metadata, install/enable/disable/update flows, plugin tool definitions, hook integration surfaces
+- **providers** - provider clients, routing, SSE streaming, request/response types, env-var auth, request-size/context-window preflight
+- **repo** - repository lifecycle, checkout management, and source tree preparation
+- **runtime** - `ConversationRuntime`, config loading, session persistence, permission policy, MCP client lifecycle, system prompt assembly, usage tracking
+- **sandbox** - filesystem isolation, namespace restrictions, and security policies
+- **server** - hosted task APIs, event streaming, Docker lane execution, and policy-driven recovery
+- **telemetry** - session trace events, usage analytics, and monitoring infrastructure
+- **tools** - tool specs + execution: Bash, ReadFile, WriteFile, EditFile, GlobSearch, GrepSearch, WebSearch, WebFetch, Agent, TodoWrite, NotebookEdit, Skill, ToolSearch, and runtime-facing tool discovery
+- **training** - style learning, dataset building, profile training, and code adaptation
+- **webhooks** - webhook authentication, event processing, and HTTP endpoint management
 
 ## Stats
 
-- **~20K lines** of Rust
-- **10+ crates** in workspace
+- **~25K lines** of Rust
+- **21 crates** in workspace
 - **Binary name:** `orbit`
 - **Default model:** `claude-opus-4-6`
 - **Default permissions:** `danger-full-access`
