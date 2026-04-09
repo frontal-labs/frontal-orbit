@@ -11,6 +11,7 @@ pub mod branch_lock;
 mod compact;
 mod config;
 mod conversation;
+pub mod core_config;
 mod file_ops;
 pub mod green_contract;
 mod hooks;
@@ -61,6 +62,7 @@ pub use conversation::{
     ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor, ToolError,
     ToolExecutor, TurnSummary,
 };
+pub use core_config::ConfigurationManager;
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
     GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,

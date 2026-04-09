@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+orbit-core = { path = "../core" }
 sha2 = "0.10"
 glob = "0.3"
 orbit-plugins = { path = "../plugins" }

@@ -6,10 +6,6 @@ use crossterm::style::{Color, Print, ResetColor, SetForegroundColor, Stylize};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, queue};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{Theme, ThemeSet};
-use syntect::parsing::SyntaxSet;
-use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorTheme {
@@ -214,26 +210,9 @@ impl RenderState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TerminalRenderer {
-    syntax_set: SyntaxSet,
-    syntax_theme: Theme,
     color_theme: ColorTheme,
-}
-
-impl Default for TerminalRenderer {
-    fn default() -> Self {
-        let syntax_set = SyntaxSet::load_defaults_newlines();
-        let syntax_theme = ThemeSet::load_defaults()
-            .themes
-            .remove("base16-ocean.dark")
-            .unwrap_or_default();
-        Self {
-            syntax_set,
-            syntax_theme,
-            color_theme: ColorTheme::default(),
-        }
-    }
 }
 
 impl TerminalRenderer {
@@ -565,22 +544,15 @@ impl TerminalRenderer {
     }
 
     #[must_use]
-    pub fn highlight_code(&self, code: &str, language: &str) -> String {
-        let syntax = self
-            .syntax_set
-            .find_syntax_by_token(language)
-            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
-        let mut syntax_highlighter = HighlightLines::new(syntax, &self.syntax_theme);
+    pub fn highlight_code(&self, code: &str, _language: &str) -> String {
         let mut colored_output = String::new();
 
-        for line in LinesWithEndings::from(code) {
-            match syntax_highlighter.highlight_line(line, &self.syntax_set) {
-                Ok(ranges) => {
-                    let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
-                    colored_output.push_str(&apply_code_block_background(&escaped));
-                }
-                Err(_) => colored_output.push_str(&apply_code_block_background(line)),
-            }
+        for line in code.split_inclusive('\n') {
+            colored_output.push_str(&apply_code_block_background(line));
+        }
+
+        if !code.is_empty() && !code.ends_with('\n') && !code.contains('\n') {
+            return colored_output;
         }
 
         colored_output

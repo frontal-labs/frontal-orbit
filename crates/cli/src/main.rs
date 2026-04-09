@@ -57,10 +57,10 @@ use orbit_repo::{push_branch, repo_status, stage_and_commit, RepoCommitRequest};
 use orbit_runtime::{
     format_usd, load_system_prompt, permission_enforcer::PermissionEnforcer, pricing_for_model,
     resolve_sandbox_status, ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader,
-    ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, McpServerManager,
-    McpTool, MessageRole, ModelPricing, PermissionMode, PermissionPolicy, ProjectContext,
-    PromptCacheEvent, ResolvedPermissionMode, RuntimeError, Session, TokenUsage, ToolError,
-    ToolExecutor, UsageTracker,
+    ConfigSource, ConfigurationManager, ContentBlock, ConversationMessage, ConversationRuntime,
+    McpServerManager, McpTool, MessageRole, ModelPricing, PermissionMode, PermissionPolicy,
+    ProjectContext, PromptCacheEvent, ResolvedPermissionMode, RuntimeError, Session, TokenUsage,
+    ToolError, ToolExecutor, UsageTracker,
 };
 use orbit_tools::{
     GlobalToolRegistry, RuntimeToolDefinition, ToolExecutionScope, ToolSearchOutput,
@@ -549,6 +549,20 @@ struct HostedTaskSnapshot {
     github_feedback_required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     github_feedback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linear_issue_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linear_issue_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linear_issue_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linear_issue_identifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graphite_stack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graphite_head_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graphite_base_branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     orphan_policy: Option<HostedAppliedOrphanPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2043,6 +2057,17 @@ fn render_doctor_report() -> Result<DoctorReport, Box<dyn std::error::Error>> {
     let config_loader = ConfigLoader::default_for(&cwd);
     let config = config_loader.load();
     let discovered_config = config_loader.discover();
+
+    // Load core configuration
+    let config_manager = ConfigurationManager::load_with_cwd(&cwd).unwrap_or_else(|_| {
+        // Fallback to just runtime config if core config fails
+        let empty_config = orbit_runtime::RuntimeConfig::empty();
+        ConfigurationManager {
+            core_config: std::sync::Arc::new(orbit_core::config::ProjectConfig::default()),
+            runtime_config: std::sync::Arc::new(empty_config),
+        }
+    });
+
     let project_context = ProjectContext::discover_with_git(&cwd, DEFAULT_DATE)?;
     let (project_root, git_branch) =
         parse_git_status_metadata(project_context.git_status.as_deref());
@@ -2063,16 +2088,97 @@ fn render_doctor_report() -> Result<DoctorReport, Box<dyn std::error::Error>> {
         git_summary,
         sandbox_status: resolve_sandbox_status(sandbox_config.sandbox(), &cwd),
     };
+
+    // Add core configuration information to the report
+    let core_info = format!(
+        "Core Configuration:\n  Default Provider: {}\n  Max Concurrent Requests: {}\n  Request Timeout: {}s\n  Telemetry Enabled: {}\n  Plugins Enabled: {}\n  Caching Enabled: {}",
+        config_manager.default_provider(),
+        config_manager.max_concurrent_requests(),
+        config_manager.request_timeout_seconds(),
+        config_manager.is_telemetry_enabled(),
+        config_manager.are_plugins_enabled(),
+        config_manager.is_caching_enabled()
+    );
     Ok(DoctorReport {
         checks: vec![
             check_auth_health(),
             check_config_health(&config_loader, config.as_ref()),
+            check_core_config_health(&config_manager),
             check_workspace_health(&context),
             check_sandbox_health(&context.sandbox_status),
             check_system_health(&cwd, config.as_ref().ok()),
             check_ide_integration_health(&cwd),
         ],
     })
+}
+
+fn check_core_config_health(config_manager: &ConfigurationManager) -> DiagnosticCheck {
+    let mut details = vec![
+        format!("Default provider: {}", config_manager.default_provider()),
+        format!(
+            "Max concurrent requests: {}",
+            config_manager.max_concurrent_requests()
+        ),
+        format!(
+            "Request timeout: {}s",
+            config_manager.request_timeout_seconds()
+        ),
+        format!(
+            "Telemetry enabled: {}",
+            config_manager.is_telemetry_enabled()
+        ),
+        format!("Plugins enabled: {}", config_manager.are_plugins_enabled()),
+        format!("Caching enabled: {}", config_manager.is_caching_enabled()),
+        format!("Metrics enabled: {}", config_manager.are_metrics_enabled()),
+        format!("UI theme: {}", config_manager.ui_theme()),
+    ];
+
+    // Check provider configurations
+    for provider in ["anthropic", "openai", "xai"] {
+        if config_manager.is_provider_enabled(provider) {
+            if let Some(model) = config_manager.default_model(provider) {
+                details.push(format!("{} model: {}", provider, model));
+            }
+        }
+    }
+
+    DiagnosticCheck::new(
+        "Core Configuration",
+        DiagnosticLevel::Ok,
+        "core configuration loaded successfully",
+    )
+    .with_details(details)
+    .with_data(Map::from_iter([
+        (
+            "default_provider".to_string(),
+            json!(config_manager.default_provider()),
+        ),
+        (
+            "max_concurrent_requests".to_string(),
+            json!(config_manager.max_concurrent_requests()),
+        ),
+        (
+            "request_timeout_seconds".to_string(),
+            json!(config_manager.request_timeout_seconds()),
+        ),
+        (
+            "telemetry_enabled".to_string(),
+            json!(config_manager.is_telemetry_enabled()),
+        ),
+        (
+            "plugins_enabled".to_string(),
+            json!(config_manager.are_plugins_enabled()),
+        ),
+        (
+            "caching_enabled".to_string(),
+            json!(config_manager.is_caching_enabled()),
+        ),
+        (
+            "metrics_enabled".to_string(),
+            json!(config_manager.are_metrics_enabled()),
+        ),
+        ("ui_theme".to_string(), json!(config_manager.ui_theme())),
+    ]))
 }
 
 fn run_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
@@ -2880,6 +2986,23 @@ fn hosted_server_url() -> String {
         .unwrap_or_else(|| DEFAULT_HOSTED_SERVER_URL.to_string())
 }
 
+fn hosted_server_api_key() -> Option<String> {
+    env::var("ORBIT_SERVER_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn authorize_hosted_request(
+    builder: reqwest::blocking::RequestBuilder,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(api_key) = hosted_server_api_key() {
+        builder.header("x-api-key", api_key)
+    } else {
+        builder
+    }
+}
+
 fn fetch_hosted_policy(
     client: &HttpClient,
     server_url: &str,
@@ -2900,7 +3023,9 @@ fn fetch_hosted_policy(
             query.append_pair("priority", &priority);
         }
     }
-    let response = client.get(url).send()?.error_for_status()?;
+    let response = authorize_hosted_request(client.get(url))
+        .send()?
+        .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -2936,7 +3061,9 @@ fn list_hosted_tasks(
             query_pairs.append_pair("limit", &limit.to_string());
         }
     }
-    let response = client.get(url).send()?.error_for_status()?;
+    let response = authorize_hosted_request(client.get(url))
+        .send()?
+        .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -2945,8 +3072,7 @@ fn get_hosted_task(
     server_url: &str,
     task_id: &str,
 ) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
-    let response = client
-        .get(format!("{server_url}/v1/tasks/{task_id}"))
+    let response = authorize_hosted_request(client.get(format!("{server_url}/v1/tasks/{task_id}")))
         .send()?
         .error_for_status()?;
     Ok(response.json()?)
@@ -2957,10 +3083,10 @@ fn get_hosted_task_runtime(
     server_url: &str,
     task_id: &str,
 ) -> Result<HostedTaskRuntimeResponse, Box<dyn std::error::Error>> {
-    let response = client
-        .get(format!("{server_url}/v1/tasks/{task_id}/runtime"))
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.get(format!("{server_url}/v1/tasks/{task_id}/runtime")))
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -2969,10 +3095,10 @@ fn get_hosted_task_github(
     server_url: &str,
     task_id: &str,
 ) -> Result<HostedTaskGithubResponse, Box<dyn std::error::Error>> {
-    let response = client
-        .get(format!("{server_url}/v1/tasks/{task_id}/github"))
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.get(format!("{server_url}/v1/tasks/{task_id}/github")))
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -2981,10 +3107,10 @@ fn reconcile_hosted_task(
     server_url: &str,
     task_id: &str,
 ) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
-    let response = client
-        .post(format!("{server_url}/v1/tasks/{task_id}/reconcile"))
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.post(format!("{server_url}/v1/tasks/{task_id}/reconcile")))
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -2993,10 +3119,10 @@ fn cancel_hosted_task(
     server_url: &str,
     task_id: &str,
 ) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
-    let response = client
-        .post(format!("{server_url}/v1/tasks/{task_id}/cancel"))
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.post(format!("{server_url}/v1/tasks/{task_id}/cancel")))
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -3009,16 +3135,16 @@ fn resolve_hosted_task_approval(
     reason: Option<String>,
     approval_kind: String,
 ) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
-    let response = client
-        .post(format!("{server_url}/v1/tasks/{task_id}/approval"))
-        .json(&json!({
-            "approval_kind": approval_kind,
-            "action": action.as_str(),
-            "resolved_by": resolved_by,
-            "reason": reason,
-        }))
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.post(format!("{server_url}/v1/tasks/{task_id}/approval")))
+            .json(&json!({
+                "approval_kind": approval_kind,
+                "action": action.as_str(),
+                "resolved_by": resolved_by,
+                "reason": reason,
+            }))
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -3031,16 +3157,16 @@ fn complete_hosted_task(
     result: Option<String>,
     error: Option<String>,
 ) -> Result<HostedTaskSnapshot, Box<dyn std::error::Error>> {
-    let response = client
-        .post(format!("{server_url}/v1/tasks/{task_id}/complete"))
-        .json(&json!({
-            "finish_reason": finish_reason,
-            "tokens_output": tokens_output,
-            "result": result,
-            "error": error,
-        }))
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.post(format!("{server_url}/v1/tasks/{task_id}/complete")))
+            .json(&json!({
+                "finish_reason": finish_reason,
+                "tokens_output": tokens_output,
+                "result": result,
+                "error": error,
+            }))
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -3050,11 +3176,11 @@ fn update_hosted_task_github(
     task_id: &str,
     github: &HostedTaskGithubResponse,
 ) -> Result<HostedTaskGithubResponse, Box<dyn std::error::Error>> {
-    let response = client
-        .post(format!("{server_url}/v1/tasks/{task_id}/github"))
-        .json(github)
-        .send()?
-        .error_for_status()?;
+    let response =
+        authorize_hosted_request(client.post(format!("{server_url}/v1/tasks/{task_id}/github")))
+            .json(github)
+            .send()?
+            .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -3441,7 +3567,7 @@ async fn watch_hosted_events(
         println!("{}", report_row("Stop", "Ctrl-C"));
     }
 
-    let (stream, _) = connect_async(ws_url.as_str()).await?;
+    let (stream, _) = connect_async(hosted_events_ws_request(&ws_url)?).await?;
     let (_, mut reader) = stream.split();
     let mut matched_events = 0usize;
 
@@ -3539,7 +3665,7 @@ async fn watch_hosted_tasks(
         println!("{}", report_row("Stop", "Ctrl-C"));
     }
 
-    let (stream, _) = connect_async(ws_url.as_str()).await?;
+    let (stream, _) = connect_async(hosted_events_ws_request(&ws_url)?).await?;
     let (_, mut reader) = stream.split();
     let mut matched_updates = 0usize;
 
@@ -3647,6 +3773,16 @@ fn hosted_events_ws_url(
     }
     url.set_fragment(None);
     Ok(url.to_string())
+}
+
+fn hosted_events_ws_request(
+    ws_url: &str,
+) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, Box<dyn std::error::Error>> {
+    let mut builder = tokio_tungstenite::tungstenite::http::Request::builder().uri(ws_url);
+    if let Some(api_key) = hosted_server_api_key() {
+        builder = builder.header("x-api-key", api_key);
+    }
+    Ok(builder.body(())?)
 }
 
 fn hosted_event_query_pairs(query: &HostedEventWatchQuery) -> Vec<(String, String)> {
@@ -3837,6 +3973,34 @@ fn hosted_task_snapshot_from_event(event: &EventEnvelope) -> Option<HostedTaskSn
             .and_then(|payload| payload.get("github_feedback_reason"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        linear_issue_id: payload
+            .and_then(|payload| payload.get("linear_issue_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        linear_issue_url: payload
+            .and_then(|payload| payload.get("linear_issue_url"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        linear_issue_state: payload
+            .and_then(|payload| payload.get("linear_issue_state"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        linear_issue_identifier: payload
+            .and_then(|payload| payload.get("linear_issue_identifier"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        graphite_stack_id: payload
+            .and_then(|payload| payload.get("graphite_stack_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        graphite_head_branch: payload
+            .and_then(|payload| payload.get("graphite_head_branch"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        graphite_base_branch: payload
+            .and_then(|payload| payload.get("graphite_base_branch"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         orphan_policy: None,
         error: payload
             .and_then(|payload| payload.get("error"))
@@ -3899,6 +4063,16 @@ fn render_hosted_task_watch_line(item: &HostedTaskWatchItem) -> String {
     }
     if task.github_feedback_required.unwrap_or(false) {
         parts.push("followup=github".to_string());
+    }
+    if let Some(linear) = task
+        .linear_issue_identifier
+        .as_ref()
+        .or_else(|| task.linear_issue_id.as_ref())
+    {
+        parts.push(format!("linear={linear}"));
+    }
+    if let Some(stack) = task.graphite_stack_id.as_ref() {
+        parts.push(format!("graphite={stack}"));
     }
     if let Some(error) = &task.error {
         parts.push(format!("error={}", truncate_single_line(error, 80)));
