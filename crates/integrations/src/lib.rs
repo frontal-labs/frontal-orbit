@@ -1,7 +1,18 @@
 //! # Orbit Integrations
-//! 
-//! This crate provides integration capabilities for the Orbit system.
+//!
+//! This crate provides integration capabilities for the Orbit system,
+//! including Model Context Protocol (MCP) server management and tool bridging.
 
+pub mod ide;
+pub mod mcp;
+
+// Re-export commonly used MCP types for convenience
+pub use mcp::{
+    client::McpClientTransport,
+    stdio::{McpServerManager, McpToolDiscoveryReport},
+    tool_bridge::{McpConnectionStatus, McpServerState, McpToolRegistry},
+    tools::{execute_mcp_tool, mcp_tool_specs, ToolSpec},
+};
 
 #[cfg(test)]
 mod tests {

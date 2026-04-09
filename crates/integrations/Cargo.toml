@@ -6,6 +6,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
+regex = "1"
+sha2 = "0.10"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true
