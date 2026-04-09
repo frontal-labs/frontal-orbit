@@ -207,7 +207,6 @@ describe('Environment Variables', () => {
         );
       } finally {
         if (originalWindow === undefined) {
-          // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
           delete (globalThis as { window?: unknown }).window;
         } else {
           Object.defineProperty(globalThis, 'window', {
