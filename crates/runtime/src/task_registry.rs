@@ -57,6 +57,12 @@ pub struct TaskRegistry {
     inner: Arc<Mutex<RegistryInner>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRegistrySnapshot {
+    pub tasks: Vec<Task>,
+    pub counter: u64,
+}
+
 #[derive(Debug, Default)]
 struct RegistryInner {
     tasks: HashMap<String, Task>,
@@ -216,6 +222,30 @@ impl TaskRegistry {
     pub fn remove(&self, task_id: &str) -> Option<Task> {
         let mut inner = self.inner.lock().expect("registry lock poisoned");
         inner.tasks.remove(task_id)
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> TaskRegistrySnapshot {
+        let inner = self.inner.lock().expect("registry lock poisoned");
+        TaskRegistrySnapshot {
+            tasks: inner.tasks.values().cloned().collect(),
+            counter: inner.counter,
+        }
+    }
+
+    #[must_use]
+    pub fn from_snapshot(snapshot: TaskRegistrySnapshot) -> Self {
+        let tasks = snapshot
+            .tasks
+            .into_iter()
+            .map(|task| (task.task_id.clone(), task))
+            .collect();
+        Self {
+            inner: Arc::new(Mutex::new(RegistryInner {
+                tasks,
+                counter: snapshot.counter,
+            })),
+        }
     }
 
     #[must_use]
@@ -499,5 +529,29 @@ mod tests {
         // then
         let error = result.expect_err("missing task should be rejected");
         assert_eq!(error, "task not found: missing");
+    }
+
+    #[test]
+    fn snapshots_and_restores_registry_state() {
+        let registry = TaskRegistry::new();
+        let task = registry.create("Persist me", Some("snapshot"));
+        registry
+            .set_status(&task.task_id, TaskStatus::Running)
+            .expect("status should update");
+        registry
+            .append_output(&task.task_id, "partial output")
+            .expect("output should append");
+        registry
+            .assign_team(&task.task_id, "lane_123")
+            .expect("team should assign");
+
+        let snapshot = registry.snapshot();
+        let restored = TaskRegistry::from_snapshot(snapshot);
+        let restored_task = restored.get(&task.task_id).expect("task should restore");
+
+        assert_eq!(restored_task.prompt, "Persist me");
+        assert_eq!(restored_task.status, TaskStatus::Running);
+        assert_eq!(restored_task.output, "partial output");
+        assert_eq!(restored_task.team_id.as_deref(), Some("lane_123"));
     }
 }

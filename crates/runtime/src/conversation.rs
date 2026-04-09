@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
-use serde_json::{Map, Value};
 use orbit_telemetry::SessionTracer;
+use serde_json::{Map, Value};
 
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
@@ -798,11 +798,11 @@ mod tests {
     use crate::session::{ContentBlock, MessageRole, Session};
     use crate::usage::TokenUsage;
     use crate::ToolError;
+    use orbit_telemetry::{MemoryTelemetrySink, SessionTracer, TelemetryEvent};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use orbit_telemetry::{MemoryTelemetrySink, SessionTracer, TelemetryEvent};
 
     struct ScriptedApiClient {
         call_count: usize,

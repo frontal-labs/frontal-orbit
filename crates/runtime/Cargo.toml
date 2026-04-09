@@ -9,6 +9,8 @@ publish.workspace = true
 sha2 = "0.10"
 glob = "0.3"
 orbit-plugins = { path = "../plugins" }
+orbit-integrations = { path = "../integrations" }
+orbit-sandbox = { path = "../sandbox" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true

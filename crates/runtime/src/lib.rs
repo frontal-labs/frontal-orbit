@@ -17,11 +17,7 @@ mod hooks;
 mod json;
 mod lane_events;
 pub mod lsp_client;
-mod mcp;
-mod mcp_client;
-pub mod mcp_lifecycle_hardened;
-mod mcp_stdio;
-pub mod mcp_tool_bridge;
+// MCP modules moved to orbit-integrations crate
 mod oauth;
 pub mod permission_enforcer;
 mod permissions;
@@ -57,8 +53,8 @@ pub use config::{
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
     McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
     ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
-    RuntimePermissionRuleConfig, RuntimePluginConfig, ScopedMcpServerConfig,
-    ORBIT_SETTINGS_SCHEMA_NAME,
+    RuntimePermissionRuleConfig, RuntimePluginConfig, RuntimeTelemetryConfig,
+    ScopedMcpServerConfig, ORBIT_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{
     auto_compaction_threshold_from_env, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
@@ -77,19 +73,15 @@ pub use lane_events::{
     dedupe_superseded_commit_events, LaneCommitProvenance, LaneEvent, LaneEventBlocker,
     LaneEventName, LaneEventStatus, LaneFailureClass,
 };
-pub use mcp::{
-    mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
-    scoped_mcp_config_hash, unwrap_ccr_proxy_url,
-};
-pub use mcp_client::{
+pub use orbit_integrations::mcp::client::{
     McpClientAuth, McpClientBootstrap, McpClientTransport, McpManagedProxyTransport,
     McpRemoteTransport, McpSdkTransport, McpStdioTransport,
 };
-pub use mcp_lifecycle_hardened::{
+pub use orbit_integrations::mcp::lifecycle::{
     McpDegradedReport, McpErrorSurface, McpFailedServer, McpLifecyclePhase, McpLifecycleState,
     McpLifecycleValidator, McpPhaseResult,
 };
-pub use mcp_stdio::{
+pub use orbit_integrations::mcp::stdio::{
     spawn_mcp_stdio_process, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
     ManagedMcpTool, McpDiscoveryFailure, McpInitializeClientInfo, McpInitializeParams,
     McpInitializeResult, McpInitializeServerInfo, McpListResourcesParams, McpListResourcesResult,
@@ -98,6 +90,17 @@ pub use mcp_stdio::{
     McpTool, McpToolCallContent, McpToolCallParams, McpToolCallResult, McpToolDiscoveryReport,
     UnsupportedMcpServer,
 };
+pub use orbit_integrations::mcp::tool_bridge::{
+    McpConnectionStatus, McpServerState, McpToolRegistry,
+};
+pub use orbit_integrations::mcp::tools::{
+    execute_mcp_tool, mcp_tool_specs, ToolSpec as McpToolSpec,
+};
+pub use orbit_integrations::mcp::utils::{
+    mcp_server_signature, scoped_mcp_config_hash, unwrap_ccr_proxy_url,
+};
+pub use orbit_integrations::mcp::{mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp};
+
 pub use oauth::{
     clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
     generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
@@ -131,10 +134,10 @@ pub use remote::{
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
 pub use sandbox::{
-    build_linux_sandbox_command, detect_container_environment, detect_container_environment_from,
-    resolve_sandbox_status, resolve_sandbox_status_for_request, ContainerEnvironment,
-    FilesystemIsolationMode, LinuxSandboxCommand, SandboxConfig, SandboxDetectionInputs,
-    SandboxRequest, SandboxStatus,
+    build_linux_sandbox_command, build_macos_sandbox_command, build_sandbox_command,
+    detect_container_environment, detect_container_environment_from, resolve_sandbox_status,
+    resolve_sandbox_status_for_request, ContainerEnvironment, FilesystemIsolationMode,
+    LinuxSandboxCommand, SandboxConfig, SandboxDetectionInputs, SandboxRequest, SandboxStatus,
 };
 pub use session::{
     ContentBlock, ConversationMessage, MessageRole, Session, SessionCompaction, SessionError,

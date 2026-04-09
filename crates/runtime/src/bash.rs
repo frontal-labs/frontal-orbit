@@ -9,7 +9,7 @@ use tokio::runtime::Builder;
 use tokio::time::timeout;
 
 use crate::sandbox::{
-    build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
+    build_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
     SandboxConfig, SandboxStatus,
 };
 use crate::ConfigLoader;
@@ -192,7 +192,7 @@ fn prepare_command(
         prepare_sandbox_dirs(cwd);
     }
 
-    if let Some(launcher) = build_linux_sandbox_command(command, cwd, sandbox_status) {
+    if let Some(launcher) = build_sandbox_command(command, cwd, sandbox_status) {
         let mut prepared = Command::new(launcher.program);
         prepared.args(launcher.args);
         prepared.current_dir(cwd);
@@ -200,8 +200,9 @@ fn prepare_command(
         return prepared;
     }
 
-    let mut prepared = Command::new("sh");
-    prepared.arg("-lc").arg(command).current_dir(cwd);
+    let (shell, shell_arg) = default_shell();
+    let mut prepared = Command::new(shell);
+    prepared.arg(shell_arg).arg(command).current_dir(cwd);
     if sandbox_status.filesystem_active {
         prepared.env("HOME", cwd.join(".sandbox-home"));
         prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
@@ -219,7 +220,7 @@ fn prepare_tokio_command(
         prepare_sandbox_dirs(cwd);
     }
 
-    if let Some(launcher) = build_linux_sandbox_command(command, cwd, sandbox_status) {
+    if let Some(launcher) = build_sandbox_command(command, cwd, sandbox_status) {
         let mut prepared = TokioCommand::new(launcher.program);
         prepared.args(launcher.args);
         prepared.current_dir(cwd);
@@ -227,8 +228,9 @@ fn prepare_tokio_command(
         return prepared;
     }
 
-    let mut prepared = TokioCommand::new("sh");
-    prepared.arg("-lc").arg(command).current_dir(cwd);
+    let (shell, shell_arg) = default_shell();
+    let mut prepared = TokioCommand::new(shell);
+    prepared.arg(shell_arg).arg(command).current_dir(cwd);
     if sandbox_status.filesystem_active {
         prepared.env("HOME", cwd.join(".sandbox-home"));
         prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
@@ -239,6 +241,14 @@ fn prepare_tokio_command(
 fn prepare_sandbox_dirs(cwd: &std::path::Path) {
     let _ = std::fs::create_dir_all(cwd.join(".sandbox-home"));
     let _ = std::fs::create_dir_all(cwd.join(".sandbox-tmp"));
+}
+
+fn default_shell() -> (&'static str, &'static str) {
+    if cfg!(target_os = "windows") {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-lc")
+    }
 }
 
 #[cfg(test)]

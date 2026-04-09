@@ -58,9 +58,17 @@ pub struct RuntimeFeatureConfig {
     mcp: McpConfigCollection,
     oauth: Option<OAuthConfig>,
     model: Option<String>,
+    telemetry: RuntimeTelemetryConfig,
     permission_mode: Option<ResolvedPermissionMode>,
     permission_rules: RuntimePermissionRuleConfig,
     sandbox: SandboxConfig,
+}
+
+/// Telemetry configuration for session-level tracing sinks.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeTelemetryConfig {
+    enabled: Option<bool>,
+    path: Option<String>,
 }
 
 /// Hook command lists grouped by lifecycle stage.
@@ -280,6 +288,7 @@ impl ConfigLoader {
             },
             oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
             model: parse_optional_model(&merged_value),
+            telemetry: parse_optional_telemetry_config(&merged_value)?,
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
@@ -354,6 +363,11 @@ impl RuntimeConfig {
     }
 
     #[must_use]
+    pub fn telemetry(&self) -> &RuntimeTelemetryConfig {
+        &self.feature_config.telemetry
+    }
+
+    #[must_use]
     pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
         self.feature_config.permission_mode
     }
@@ -408,6 +422,17 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
+    pub fn with_telemetry(mut self, telemetry: RuntimeTelemetryConfig) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    #[must_use]
+    pub fn telemetry(&self) -> &RuntimeTelemetryConfig {
+        &self.telemetry
+    }
+
+    #[must_use]
     pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
         self.permission_mode
     }
@@ -459,6 +484,23 @@ impl RuntimePluginConfig {
             .get(plugin_id)
             .copied()
             .unwrap_or(default_enabled)
+    }
+}
+
+impl RuntimeTelemetryConfig {
+    #[must_use]
+    pub fn new(enabled: Option<bool>, path: Option<String>) -> Self {
+        Self { enabled, path }
+    }
+
+    #[must_use]
+    pub fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
     }
 }
 
@@ -735,6 +777,22 @@ fn parse_optional_permission_mode(
         return Ok(None);
     };
     parse_permission_mode_label(mode, "merged settings.permissions.defaultMode").map(Some)
+}
+
+fn parse_optional_telemetry_config(
+    root: &JsonValue,
+) -> Result<RuntimeTelemetryConfig, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(RuntimeTelemetryConfig::default());
+    };
+    let Some(telemetry_value) = object.get("telemetry") else {
+        return Ok(RuntimeTelemetryConfig::default());
+    };
+    let telemetry = expect_object(telemetry_value, "merged settings.telemetry")?;
+    Ok(RuntimeTelemetryConfig {
+        enabled: optional_bool(telemetry, "enabled", "merged settings.telemetry")?,
+        path: optional_string(telemetry, "path", "merged settings.telemetry")?.map(str::to_string),
+    })
 }
 
 fn parse_permission_mode_label(
@@ -1173,6 +1231,8 @@ mod tests {
             loaded.permission_mode(),
             Some(ResolvedPermissionMode::WorkspaceWrite)
         );
+        assert_eq!(loaded.telemetry().enabled(), None);
+        assert_eq!(loaded.telemetry().path(), None);
         assert_eq!(
             loaded
                 .get("env")
@@ -1205,6 +1265,38 @@ mod tests {
         assert_eq!(loaded.permission_rules().ask(), &["Edit".to_string()]);
         assert!(loaded.mcp().get("home").is_some());
         assert!(loaded.mcp().get("project").is_some());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_telemetry_config() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".orbit");
+        fs::create_dir_all(cwd.join(".orbit")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "telemetry": {
+                "enabled": true,
+                "path": "/tmp/orbit-telemetry.jsonl"
+              }
+            }"#,
+        )
+        .expect("write telemetry settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(loaded.telemetry().enabled(), Some(true));
+        assert_eq!(
+            loaded.telemetry().path(),
+            Some("/tmp/orbit-telemetry.jsonl")
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
