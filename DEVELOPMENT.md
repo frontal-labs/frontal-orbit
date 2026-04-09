@@ -21,7 +21,24 @@ cargo build --workspace
 cargo run -p orbit-cli -- --help
 ```
 
-## Environment Variables
+## Configuration
+
+### Development Configuration
+
+For development, you can create a local configuration file at `config/project.json.dev` and symlink it:
+
+```bash
+# Create development configuration
+cp config/project.json config/project.json.dev
+
+# Edit for development needs
+# vim config/project.json.dev
+
+# Use for development
+ln -sf config/project.json.dev config/project.json
+```
+
+### Environment Variables
 
 Create a `.env` file for local development:
 
@@ -37,6 +54,48 @@ DATABASE_URL=postgresql://orbit:orbit_password@localhost:5432/orbit_db
 
 # Webhook secret for server mode
 WEBHOOK_SECRET=your_webhook_secret_here
+
+# Configuration overrides
+ORBIT_LOG_LEVEL=debug
+ORBIT_PERMISSION_MODE=permissive
+ORBIT_CONFIG_HOME=./dev-config
+```
+
+### Core Configuration Development
+
+When developing with the core configuration system:
+
+```rust
+use orbit_core::config::ProjectConfig;
+use orbit_runtime::ConfigurationManager;
+
+// In development, you can load configuration directly
+let config = ProjectConfig::load_or_default();
+
+// Or use the configuration manager for bridge functionality
+let manager = ConfigurationManager::load_with_cwd(".")?;
+
+// Enable development-specific features
+if std::env::var("ORBIT_DEV_MODE").is_ok() {
+    println!("Development mode enabled");
+    println!("Telemetry: {}", config.features.enable_telemetry);
+    println!("Plugins: {}", config.features.enable_plugins);
+}
+```
+
+### Testing Configuration
+
+Test configuration changes without affecting your main setup:
+
+```bash
+# Test with custom config directory
+export ORBIT_CONFIG_HOME=./test-config
+orbit /doctor
+
+# Test with specific config file
+cp config/project.json config/test-project.json
+# Edit test-project.json
+ORBIT_CONFIG_HOME=./test-config orbit /doctor
 ```
 
 ## Pre-commit Hooks

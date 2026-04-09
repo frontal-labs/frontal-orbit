@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Core Configuration System**: New type-safe configuration system with `orbit-core` crate
+- **Project Configuration**: Centralized `config/project.json` for feature flags and internal settings
+- **Configuration Manager**: Bridge between core and runtime configuration systems
+- **Type-safe Configuration**: Rust structs for all configuration values with validation
+- **Feature Flags**: Comprehensive feature flag system for telemetry, plugins, caching, metrics
+- **Provider Configuration**: Centralized AI provider configuration with default models
+- **Service Configuration**: Database, Redis, and memory service configuration
+- **UI Configuration**: Theme, colors, and progress bar settings
+- **Sandbox Configuration**: Docker and execution limit settings
+- **Configuration Documentation**: Comprehensive configuration guides and API references
+- **Configuration Examples**: Working examples demonstrating configuration usage
+- **Doctor Integration**: Core configuration status in `orbit doctor` command
+- **Environment Variable Overrides**: Support for overriding configuration via environment variables
+- **Multiple Configuration Locations**: Support for user, project, and local configuration files
+- **Backward Compatibility**: Seamless integration with existing runtime configuration system
 - Complete development infrastructure setup
 - Nix flake for reproducible development environment
 - Pre-commit hooks configuration

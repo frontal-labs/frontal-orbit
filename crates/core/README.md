@@ -8,6 +8,7 @@ The `orbit-core` crate provides essential shared types, traits, and utilities th
 
 ## Features
 
+- **Configuration Management**: JSON-based project configuration with type-safe access
 - **Shared Types**: Common data structures used across Orbit components
 - **Foundation Traits**: Core traits for component integration
 - **Utility Functions**: Essential helper functions and macros
@@ -16,6 +17,13 @@ The `orbit-core` crate provides essential shared types, traits, and utilities th
 - **Extensions**: Common extensions to standard library types
 
 ## Key Components
+
+### Configuration Management
+- **ProjectConfig**: Main configuration structure with type-safe JSON parsing
+- **Provider Configuration**: AI provider settings and models
+- **Path Management**: Configurable directory paths
+- **Service Configuration**: Database, Redis, and memory service settings
+- **Feature Flags**: Toggleable features and thresholds
 
 ### Shared Types
 - Common request/response structures
@@ -41,6 +49,35 @@ This crate is included in workspace build/test gates and provides a minimal base
 
 ## Usage
 
+### Configuration Management
+
+```rust
+use orbit_core::config::ProjectConfig;
+
+// Load configuration from default location (falls back to defaults if not found)
+let config = ProjectConfig::load_or_default();
+
+// Access project information
+println!("Project: {} v{}", config.project.name, config.project.version);
+
+// Check provider settings
+if config.is_provider_enabled("anthropic") {
+    let model = config.get_default_model("anthropic").unwrap();
+    println!("Using Anthropic with model: {}", model);
+}
+
+// Access service configuration
+let db_url = &config.services.database.url;
+let redis_url = &config.services.redis.url;
+
+// Check feature flags
+if config.features.enable_telemetry {
+    // Initialize telemetry
+}
+```
+
+### General Usage
+
 ```rust
 use orbit_core::{SharedType, CoreTrait, core_utility};
 
@@ -65,11 +102,22 @@ The core crate follows these principles:
 - **Performance**: Optimized for common use cases
 - **Extensibility**: Designed to grow with the ecosystem
 
+## Configuration File Locations
+
+The configuration system looks for `project.json` in the following locations (in order):
+
+1. `$ORBIT_CONFIG_HOME/project.json` - Custom config directory
+2. `$ORBIT_HOME/project.json` - Orbit home directory  
+3. `~/.orbit/project.json` - User's home directory
+4. `config/project.json` - Project-local configuration
+
+If no configuration file is found, the system falls back to sensible defaults.
+
 ## Dependencies
 
 The core crate has minimal external dependencies to keep it lightweight and fast to compile. It primarily depends on:
 - Standard library types
-- Common serialization libraries (serde)
+- Common serialization libraries (serde, serde_json)
 - Essential utility crates
 
 ## Testing

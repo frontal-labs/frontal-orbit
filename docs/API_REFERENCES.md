@@ -9,6 +9,7 @@ This comprehensive reference covers the Orbit API for programmatic integration a
 - [REST API](#rest-api)
 - [WebSocket API](#websocket-api)
 - [Rust API](#rust-api)
+  - [Configuration API](#configuration-api)
 - [Python API](#python-api)
 - [JavaScript API](#javascript-api)
 - [Error Handling](#error-handling)
@@ -40,11 +41,16 @@ All API requests require authentication using an API key:
 ```bash
 # Using environment variable
 export ORBIT_API_KEY="your-api-key-here"
+export ORBIT_SERVER_API_KEY="your-hosted-server-api-key"
 
 # Using header
 curl -H "Authorization: Bearer your-api-key-here" \
      https://api.orbit.ai/v1/completions
 ```
+
+For self-hosted `orbit-server` deployments, set `ORBIT_SERVER_API_KEY` on the server and
+have connectors or other clients present that same shared secret as `ORBIT_API_KEY` or
+the `x-api-key` header when calling hosted control-plane routes.
 
 ### Token Types
 
@@ -396,6 +402,140 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Response: {}", response.content);
     
     Ok(())
+}
+```
+
+### Configuration API
+
+The Orbit configuration system provides type-safe configuration management:
+
+```rust
+use orbit_core::config::ProjectConfig;
+use orbit_runtime::ConfigurationManager;
+
+// Load core configuration
+let config = ProjectConfig::load_or_default();
+
+// Access configuration values
+println!("Default provider: {}", config.runtime.default_provider);
+println!("Telemetry enabled: {}", config.features.enable_telemetry);
+
+// Provider configuration
+if config.is_provider_enabled("anthropic") {
+    let model = config.get_default_model("anthropic").unwrap();
+    println!("Using Anthropic with model: {}", model);
+}
+
+// Use ConfigurationManager for bridge functionality
+let manager = ConfigurationManager::load()?;
+let provider = manager.default_provider();
+let max_requests = manager.max_concurrent_requests();
+
+// Feature flags
+if manager.is_telemetry_enabled() {
+    // Initialize telemetry
+}
+
+// Service configuration
+let services = manager.service_config();
+println!("Database pool size: {}", services.database.connection_pool_size);
+```
+
+### Configuration Structs
+
+#### ProjectConfig
+```rust
+pub struct ProjectConfig {
+    pub project: ProjectInfo,
+    pub runtime: RuntimeConfig,
+    pub paths: PathConfig,
+    pub features: FeatureConfig,
+    pub ui: UiConfig,
+    pub services: ServiceConfig,
+    pub sandbox: SandboxConfig,
+    pub experimental: ExperimentalConfig,
+}
+```
+
+#### RuntimeConfig
+```rust
+pub struct RuntimeConfig {
+    pub default_provider: String,
+    pub providers: ProviderConfig,
+    pub permission_mode: String,
+    pub log_level: String,
+    pub max_concurrent_requests: u32,
+    pub request_timeout_seconds: u32,
+}
+```
+
+#### FeatureConfig
+```rust
+pub struct FeatureConfig {
+    pub auto_compaction_threshold: u32,
+    pub enable_telemetry: bool,
+    pub enable_plugins: bool,
+    pub enable_caching: bool,
+    pub enable_metrics: bool,
+    pub enable_tracing: bool,
+    pub enable_hot_reload: bool,
+    pub max_file_size_mb: u32,
+    pub max_memory_usage_mb: u32,
+}
+```
+
+### Configuration Methods
+
+#### ProjectConfig Methods
+```rust
+impl ProjectConfig {
+    // Load configuration with fallback to defaults
+    pub fn load_or_default() -> Self;
+    
+    // Load from specific path
+    pub fn load_from_path(path: &PathBuf) -> Result<Self, Error>;
+    
+    // Provider methods
+    pub fn is_provider_enabled(&self, provider: &str) -> bool;
+    pub fn get_default_model(&self, provider: &str) -> Option<String>;
+    pub fn get_provider_config(&self, provider: &str) -> Option<&ProviderDetails>;
+    
+    // Save configuration
+    pub fn save(&self) -> Result<(), Error>;
+    pub fn save_to_path(&self, path: &PathBuf) -> Result<(), Error>;
+}
+```
+
+#### ConfigurationManager Methods
+```rust
+impl ConfigurationManager {
+    // Load both core and runtime configurations
+    pub fn load() -> Result<Self, Error>;
+    pub fn load_with_cwd(cwd: impl AsRef<Path>) -> Result<Self, Error>;
+    
+    // Core configuration accessors
+    pub fn default_provider(&self) -> &str;
+    pub fn max_concurrent_requests(&self) -> u32;
+    pub fn request_timeout_seconds(&self) -> u32;
+    pub fn permission_mode(&self) -> &str;
+    pub fn log_level(&self) -> &str;
+    
+    // Feature flag accessors
+    pub fn is_telemetry_enabled(&self) -> bool;
+    pub fn are_plugins_enabled(&self) -> bool;
+    pub fn is_caching_enabled(&self) -> bool;
+    pub fn are_metrics_enabled(&self) -> bool;
+    
+    // Provider methods
+    pub fn is_provider_enabled(&self, provider: &str) -> bool;
+    pub fn default_model(&self, provider: &str) -> Option<String>;
+    
+    // Configuration access
+    pub fn core(&self) -> &ProjectConfig;
+    pub fn runtime(&self) -> &RuntimeConfig;
+    pub fn service_config(&self) -> &ServiceConfig;
+    pub fn sandbox_config(&self) -> &SandboxConfig;
+    pub fn feature_config(&self) -> &FeatureConfig;
 }
 ```
 

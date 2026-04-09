@@ -29,6 +29,86 @@ orbit
 - Optional: `ANTHROPIC_BASE_URL` when targeting a proxy or local service
 - Optional: `FRONTAL_BASE_URL` when targeting a custom Frontal gateway URL
 
+## Configuration
+
+Orbit uses a centralized configuration system that allows you to customize behavior without modifying code.
+
+### Configuration File
+
+The main configuration file is `config/project.json`. It contains:
+
+- **Project settings**: name, version, description
+- **Runtime configuration**: default AI provider, timeouts, concurrency limits
+- **Feature flags**: telemetry, plugins, caching, metrics, tracing
+- **UI settings**: theme, colors, progress bars
+- **Service configuration**: database, Redis, memory settings
+- **Sandbox settings**: Docker configuration, execution limits
+
+### Configuration File Locations
+
+The system looks for `project.json` in this order:
+
+1. `$ORBIT_CONFIG_HOME/project.json` - Custom config directory
+2. `$ORBIT_HOME/project.json` - Orbit home directory  
+3. `~/.orbit/project.json` - User's home directory
+4. `config/project.json` - Project-local configuration
+
+### Common Configuration Options
+
+```json
+{
+  "runtime": {
+    "default_provider": "anthropic",
+    "max_concurrent_requests": 10,
+    "request_timeout_seconds": 30,
+    "permission_mode": "permissive",
+    "log_level": "info"
+  },
+  "features": {
+    "enable_telemetry": true,
+    "enable_plugins": true,
+    "enable_caching": true,
+    "enable_metrics": true,
+    "enable_tracing": false
+  },
+  "ui": {
+    "theme": "default",
+    "enable_colors": true,
+    "show_progress_bars": true
+  }
+}
+```
+
+### Checking Your Configuration
+
+Run the doctor command to see your current configuration:
+
+```bash
+orbit
+/doctor
+```
+
+The doctor report now includes a "Core Configuration" section showing:
+- Default provider and settings
+- Feature flags status
+- UI preferences
+- Service configurations
+
+### Environment Variables
+
+Environment variables take precedence over configuration file settings:
+
+```bash
+# Override default provider
+export ORBIT_DEFAULT_PROVIDER="openai"
+
+# Override log level
+export ORBIT_LOG_LEVEL="debug"
+
+# Override permission mode
+export ORBIT_PERMISSION_MODE="restricted"
+```
+
 ## Install / build the workspace
 
 ```bash
