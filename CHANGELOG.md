@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-09
+
+### Changed
+- Updated `extensions/orbit-slack` test tooling to `vitest` 3.2.4 and pinned `vite` 6.4.2 to resolve Dependabot alerts in the lockfile.
+- Removed the unused `ultracite` dependency from the Slack extension in favor of the existing Biome-based linting workflow.
+
+### Fixed
+- Resolved vulnerable transitive `vite` and `esbuild` versions in `extensions/orbit-slack/package-lock.json`.
+
 ### Added
 - **Core Configuration System**: New type-safe configuration system with `orbit-core` crate
 - **Project Configuration**: Centralized `config/project.json` for feature flags and internal settings
