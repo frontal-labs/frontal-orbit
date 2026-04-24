@@ -6,3 +6,4 @@ archive/
 .orbit/sessions/
 target/
 # Orbit local artifacts
+*.vsix
