@@ -234,13 +234,7 @@ impl ProjectConfig {
 
     /// Load configuration with fallback to defaults
     pub fn load_or_default() -> Self {
-        match Self::load() {
-            Ok(config) => config,
-            Err(_) => {
-                eprintln!("Warning: Could not load config file, using defaults");
-                ProjectConfig::default()
-            }
-        }
+        Self::load().unwrap_or_else(|_| ProjectConfig::default())
     }
 
     /// Get the default configuration file path
