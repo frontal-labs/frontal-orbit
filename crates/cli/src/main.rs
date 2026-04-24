@@ -5978,7 +5978,13 @@ impl LiveCli {
             |path| path.display().to_string(),
         );
         format!(
-            "\x1b[38;5;208mCode\x1b[0m \n\n\
+            "  \x1b[90m█████╗ ███████╗ ██████╗ ██╗████████╗\x1b[0m\n\
+  \x1b[90m██╔══██╗██╔════╝██╔══██╗██║╚══██╔══╝\x1b[0m\n\
+  \x1b[90m██████╔╝█████╗  ██║  ██║██║   ██║   \x1b[0m\n\
+  \x1b[90m██╔══██╗██╔══╝  ██║  ██║██║   ██║   \x1b[0m\n\
+  \x1b[90m██████╔╝███████╗██████╔╝██║   ██║   \x1b[0m\n\
+  \x1b[90m╚═════╝ ╚══════╝╚═════╝ ╚═╝   ╚═╝   \x1b[0m\n\n\
+\x1b[38;5;208mOrbit\x1b[0m \n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
@@ -8379,7 +8385,7 @@ fn render_version_report() -> String {
     let git_sha = GIT_SHA.unwrap_or("unknown");
     let target = BUILD_TARGET.unwrap_or("unknown");
     format!(
-        "Orbit\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}"
+        "```\n  ██████╗ ██████╗ ██████╗ ██╗████████╗\n ██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝\n ██║   ██║██████╔╝██████╔╝██║   ██║   \n ██║   ██║██╔══██╗██╔══██╗██║   ██║   \n ╚██████╔╝██║  ██║██████╔╝██║   ██║   \n  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝   \n```\nOrbit\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}"
     )
 }
 
@@ -10580,6 +10586,14 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
 
 #[allow(clippy::too_many_lines)]
 fn print_help_to(out: &mut impl Write) -> io::Result<()> {
+    writeln!(out, "```")?;
+    writeln!(out, "  ██████╗ ██████╗ ██████╗ ██╗████████╗")?;
+    writeln!(out, " ██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝")?;
+    writeln!(out, " ██║   ██║██████╔╝██████╔╝██║   ██║   ")?;
+    writeln!(out, " ██║   ██║██╔══██╗██╔══██╗██║   ██║   ")?;
+    writeln!(out, " ╚██████╔╝██║  ██║██████╔╝██║   ██║   ")?;
+    writeln!(out, "  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝   ")?;
+    writeln!(out, "```")?;
     writeln!(out, "orbit v{VERSION}")?;
     writeln!(out)?;
     writeln!(out, "Usage:")?;
@@ -13449,7 +13463,10 @@ UU conflicted.rs",
             SlashCommand::parse("/memory"),
             Ok(Some(SlashCommand::Memory))
         );
-        assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init { path: None })));
+        assert_eq!(
+            SlashCommand::parse("/init"),
+            Ok(Some(SlashCommand::Init { path: None }))
+        );
         assert_eq!(
             SlashCommand::parse("/session fork incident-review"),
             Ok(Some(SlashCommand::Session {
