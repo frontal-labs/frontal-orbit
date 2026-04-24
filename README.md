@@ -151,7 +151,7 @@ Primary artifacts:
 | Sub-agent / agent surfaces |  |
 | Todo tracking |  |
 | Notebook editing |  |
-| ORBIT.md / project memory |  |
+| AGENTS.md / project memory |  |
 | Config file hierarchy (`.orbit.json` + merged config sections) |  |
 | Permission system |  |
 | MCP server lifecycle + inspection |  |

@@ -72,6 +72,8 @@ struct RepoDetection {
     react: bool,
     vite: bool,
     nest: bool,
+    bun: bool,
+    pnpm: bool,
     src_dir: bool,
     tests_dir: bool,
     crates_dir: bool,
@@ -98,10 +100,10 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
         status: ensure_gitignore_entries(&gitignore)?,
     });
 
-    let claude_md = cwd.join("ORBIT.md");
+    let claude_md = cwd.join("AGENTS.md");
     let content = render_init_claude_md(cwd);
     artifacts.push(InitArtifact {
-        name: "ORBIT.md",
+        name: "AGENTS.md",
         status: write_file_if_missing(&claude_md, &content)?,
     });
 
@@ -139,7 +141,18 @@ fn ensure_gitignore_entries(path: &Path) -> Result<InitStatus, std::io::Error> {
     let mut lines = existing.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
     let mut changed = false;
 
-    if !lines.iter().any(|line| line == GITIGNORE_COMMENT) {
+    // Ensure we start on a new line if the file wasn't empty
+    let needs_newline_prefix = !existing.is_empty() && !existing.ends_with('\n');
+    let entries_missing = !lines.iter().any(|line| line == GITIGNORE_COMMENT);
+
+    if needs_newline_prefix && entries_missing {
+        // We handle this by ensuring subsequent logic treats GITIGNORE_COMMENT as a new block
+    }
+
+    if entries_missing {
+        if !lines.is_empty() && !lines.last().unwrap().is_empty() {
+            lines.push(String::new());
+        }
         lines.push(GITIGNORE_COMMENT.to_string());
         changed = true;
     }
@@ -162,9 +175,18 @@ fn ensure_gitignore_entries(path: &Path) -> Result<InitStatus, std::io::Error> {
 pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
     let detection = detect_repo(cwd);
     let mut lines = vec![
+        "```".to_string(),
+        r#"  ██████╗ ██████╗ ██████╗ ██╗████████╗"#.to_string(),
+        r#" ██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝"#.to_string(),
+        r#" ██║   ██║██████╔╝██████╔╝██║   ██║   "#.to_string(),
+        r#" ██║   ██║██╔══██╗██╔══██╗██║   ██║   "#.to_string(),
+        r#" ╚██████╔╝██║  ██║██████╔╝██║   ██║   "#.to_string(),
+        r#"  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝   "#.to_string(),
+        "```".to_string(),
+        String::new(),
         "# ORBIT.md".to_string(),
         String::new(),
-        "This file provides guidance to Orbit (orbitcode.dev) when working with code in this repository.".to_string(),
+        "This file provides guidance to Frontal Orbit when working with code in this repository.".to_string(),
         String::new(),
     ];
 
@@ -210,7 +232,7 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
     lines.push("## Working agreement".to_string());
     lines.push("- Prefer small, reviewable changes and keep generated bootstrap files aligned with actual repo workflows.".to_string());
     lines.push("- Keep shared defaults in `.orbit.json`; reserve `.orbit/settings.local.json` for machine-local overrides.".to_string());
-    lines.push("- Do not overwrite existing `ORBIT.md` content automatically; update it intentionally when repo workflows change.".to_string());
+    lines.push("- Do not overwrite existing `AGENTS.md` content automatically; update it intentionally when repo workflows change.".to_string());
     lines.push(String::new());
 
     lines.join("\n")
@@ -234,6 +256,8 @@ fn detect_repo(cwd: &Path) -> RepoDetection {
         react: package_json_contents.contains("\"react\""),
         vite: package_json_contents.contains("\"vite\""),
         nest: package_json_contents.contains("@nestjs"),
+        bun: cwd.join("bun.lock").is_file() || cwd.join("bun.lockb").is_file(),
+        pnpm: cwd.join("pnpm-lock.yaml").is_file(),
         src_dir: cwd.join("src").is_dir(),
         tests_dir: cwd.join("tests").is_dir(),
         crates_dir: cwd.join("crates").is_dir() || cwd.join("rust").join("crates").is_dir(),
@@ -270,6 +294,12 @@ fn detected_frameworks(detection: &RepoDetection) -> Vec<&'static str> {
     if detection.nest {
         frameworks.push("NestJS");
     }
+    if detection.bun {
+        frameworks.push("Bun");
+    }
+    if detection.pnpm {
+        frameworks.push("pnpm");
+    }
     frameworks
 }
 
@@ -288,7 +318,17 @@ fn verification_lines(cwd: &Path, detection: &RepoDetection) -> Vec<String> {
         }
     }
     if detection.package_json {
-        lines.push("- Run the JavaScript/TypeScript checks from `package.json` before shipping changes (`npm test`, `npm run lint`, `npm run build`, or the repo equivalent).".to_string());
+        let pkg_mgr = if detection.bun {
+            "bun"
+        } else if detection.pnpm {
+            "pnpm"
+        } else {
+            "npm"
+        };
+        lines.push(format!(
+            "- Run the JavaScript/TypeScript checks from `package.json` before shipping changes (`{} test`, `{} run lint`, `{} run build`, or the repo equivalent).",
+            pkg_mgr, pkg_mgr, pkg_mgr
+        ));
     }
     if detection.tests_dir && detection.src_dir {
         lines.push("- `src/` and `tests/` are both present; update both surfaces together when behavior changes.".to_string());
@@ -362,10 +402,10 @@ mod tests {
         assert!(rendered.contains(".orbit.json"));
         assert!(rendered.contains("created"));
         assert!(rendered.contains(".gitignore"));
-        assert!(rendered.contains("ORBIT.md"));
+        assert!(rendered.contains("AGENTS.md"));
         assert!(root.join(".orbit").is_dir());
         assert!(root.join(".orbit.json").is_file());
-        assert!(root.join("ORBIT.md").is_file());
+        assert!(root.join("AGENTS.md").is_file());
         assert_eq!(
             fs::read_to_string(root.join(".orbit.json")).expect("read orbit json"),
             concat!(
@@ -379,7 +419,7 @@ mod tests {
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
         assert!(gitignore.contains(".orbit/settings.local.json"));
         assert!(gitignore.contains(".orbit/sessions/"));
-        let orbit_md = fs::read_to_string(root.join("ORBIT.md")).expect("read orbit md");
+        let orbit_md = fs::read_to_string(root.join("AGENTS.md")).expect("read orbit md");
         assert!(orbit_md.contains("## Working agreement"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
@@ -389,12 +429,12 @@ mod tests {
     fn initialize_repo_is_idempotent_and_preserves_existing_files() {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("create root");
-        fs::write(root.join("ORBIT.md"), "custom guidance\n").expect("write existing claude md");
+        fs::write(root.join("AGENTS.md"), "custom guidance\n").expect("write existing claude md");
         fs::write(root.join(".gitignore"), ".orbit/settings.local.json\n")
             .expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
-        assert!(first.render().contains("ORBIT.md"));
+        assert!(first.render().contains("AGENTS.md"));
         assert!(first.render().contains("skipped (already exists)"));
         let second = initialize_repo(&root).expect("second init should succeed");
         let second_rendered = second.render();
@@ -402,9 +442,9 @@ mod tests {
         assert!(second_rendered.contains(".orbit.json"));
         assert!(second_rendered.contains("skipped (already exists)"));
         assert!(second_rendered.contains(".gitignore       skipped (already exists)"));
-        assert!(second_rendered.contains("ORBIT.md"));
+        assert!(second_rendered.contains("AGENTS.md"));
         assert_eq!(
-            fs::read_to_string(root.join("ORBIT.md")).expect("read existing orbit md"),
+            fs::read_to_string(root.join("AGENTS.md")).expect("read existing orbit md"),
             "custom guidance\n"
         );
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
