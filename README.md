@@ -1,6 +1,6 @@
 <picture>
-  <source srcset="./assets/banner.jpg" media="(prefers-color-scheme: dark)">
-  <img src="./assets/banner.jpg" alt="Frontal Banner">
+  <source srcset="banner.jpg" media="(prefers-color-scheme: dark)">
+  <img src="banner.jpg" alt="Frontal Banner">
 </picture>
 
 # Frontal Orbit
@@ -61,7 +61,7 @@ Orbit now uses a centralized configuration system located at `config/project.jso
 The system looks for `project.json` in this order:
 
 1. `$ORBIT_CONFIG_HOME/project.json` - Custom config directory
-2. `$ORBIT_HOME/project.json` - Orbit home directory  
+2. `$ORBIT_HOME/project.json` - Orbit home directory
 3. `~/.orbit/project.json` - User's home directory
 4. `config/project.json` - Project-local configuration
 
@@ -141,52 +141,52 @@ Primary artifacts:
 
 ## Features
 
-| Feature | Status |
-|---------|--------|
-| Anthropic / OpenAI-compatible provider flows + streaming (OpenAI, xAI, Frontal, Bedrock, Azure) |  |
-| Environment-variable auth (Anthropic/OpenAI/xAI/Frontal/Bedrock/Azure/Ollama) |  |
-| Interactive REPL (rustyline) |  |
-| Tool system (bash, read, write, edit, grep, glob) |  |
-| Web tools (search, fetch) |  |
-| Sub-agent / agent surfaces |  |
-| Todo tracking |  |
-| Notebook editing |  |
-| AGENTS.md / project memory |  |
-| Config file hierarchy (`.orbit.json` + merged config sections) |  |
-| Permission system |  |
-| MCP server lifecycle + inspection |  |
-| Session persistence + resume |  |
-| Cost / usage / stats surfaces |  |
-| Git integration |  |
-| Markdown terminal rendering (ANSI) |  |
-| Model aliases (opus/sonnet/haiku) |  |
-| Provider flag support (anthropic, openai, xai) |  |
-| Direct CLI subcommands (`status`, `sandbox`, `agents`, `mcp`, `skills`, `doctor`) |  |
-| Slash commands (including `/skills`, `/agents`, `/mcp`, `/doctor`, `/plugin`, `/subagent`) |  |
-| Hooks (`/hooks`, config-backed lifecycle hooks) |  |
-| Plugin management surfaces |  |
-| Skills inventory / install surfaces |  |
-| Machine-readable JSON output across core CLI surfaces |  |
-| GitHub integration (PRs, issues, check runs) |  |
-| IDE integration (VS Code, Cursor, Windsurf, Antigravity) |  |
-| Embedding and semantic memory |  |
-| Event system and messaging |  |
-| Training and style adaptation |  |
-| Webhook processing |  |
-| Repository lifecycle management |  |
-| Sandbox and isolation |  |
-| Observability and monitoring |  |
-| Orchestration and workflow management |  |
+| Feature                                                                                         | Status |
+| ----------------------------------------------------------------------------------------------- | ------ |
+| Anthropic / OpenAI-compatible provider flows + streaming (OpenAI, xAI, Frontal, Bedrock, Azure) |        |
+| Environment-variable auth (Anthropic/OpenAI/xAI/Frontal/Bedrock/Azure/Ollama)                   |        |
+| Interactive REPL (rustyline)                                                                    |        |
+| Tool system (bash, read, write, edit, grep, glob)                                               |        |
+| Web tools (search, fetch)                                                                       |        |
+| Sub-agent / agent surfaces                                                                      |        |
+| Todo tracking                                                                                   |        |
+| Notebook editing                                                                                |        |
+| AGENTS.md / project memory                                                                      |        |
+| Config file hierarchy (`.orbit.json` + merged config sections)                                  |        |
+| Permission system                                                                               |        |
+| MCP server lifecycle + inspection                                                               |        |
+| Session persistence + resume                                                                    |        |
+| Cost / usage / stats surfaces                                                                   |        |
+| Git integration                                                                                 |        |
+| Markdown terminal rendering (ANSI)                                                              |        |
+| Model aliases (opus/sonnet/haiku)                                                               |        |
+| Provider flag support (anthropic, openai, xai)                                                  |        |
+| Direct CLI subcommands (`status`, `sandbox`, `agents`, `mcp`, `skills`, `doctor`)               |        |
+| Slash commands (including `/skills`, `/agents`, `/mcp`, `/doctor`, `/plugin`, `/subagent`)      |        |
+| Hooks (`/hooks`, config-backed lifecycle hooks)                                                 |        |
+| Plugin management surfaces                                                                      |        |
+| Skills inventory / install surfaces                                                             |        |
+| Machine-readable JSON output across core CLI surfaces                                           |        |
+| GitHub integration (PRs, issues, check runs)                                                    |        |
+| IDE integration (VS Code, Cursor, Windsurf, Antigravity)                                        |        |
+| Embedding and semantic memory                                                                   |        |
+| Event system and messaging                                                                      |        |
+| Training and style adaptation                                                                   |        |
+| Webhook processing                                                                              |        |
+| Repository lifecycle management                                                                 |        |
+| Sandbox and isolation                                                                           |        |
+| Observability and monitoring                                                                    |        |
+| Orchestration and workflow management                                                           |        |
 
 ## Model Aliases
 
 Short names resolve to the latest model versions:
 
-| Alias | Resolves To |
-|-------|------------|
-| `opus` | `claude-opus-4-6` |
-| `sonnet` | `claude-sonnet-4-6` |
-| `haiku` | `claude-haiku-4-5-20251213` |
+| Alias    | Resolves To                 |
+| -------- | --------------------------- |
+| `opus`   | `claude-opus-4-6`           |
+| `sonnet` | `claude-sonnet-4-6`         |
+| `haiku`  | `claude-haiku-4-5-20251213` |
 
 ## CLI Flags and Commands
 
@@ -238,6 +238,7 @@ The REPL now exposes a much broader surface than the original minimal shell:
 - plugin management: `/plugin` (with aliases `/plugins`, `/marketplace`)
 
 Notable orbit-first surfaces now available directly in slash form:
+
 - `/skills [list|install <path>|help]`
 - `/agents [list|help]`
 - `/mcp [list|show <server>|help]`
