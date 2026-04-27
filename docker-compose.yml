@@ -1,0 +1,221 @@
+version: '3.8'
+
+services:
+  # Main Orbit CLI service
+  orbit-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: orbit-cli
+    volumes:
+      - .:/workspace
+      - orbit-data:/workspace/.orbit
+      - sandbox-data:/workspace/.sandbox-home
+    environment:
+      - CARGO_TERM_COLOR=always
+      - ORBIT_HOME=/workspace/.orbit
+      - SANDBOX_HOME=/workspace/.sandbox-home
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+      # API Keys (set these in .env file)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - FRONTAL_API_KEY=${FRONTAL_API_KEY:-}
+      - FRONTAL_BASE_URL=${FRONTAL_BASE_URL:-}
+    ports:
+      - "8080:8080"
+    networks:
+      - orbit-network
+    stdin_open: true
+    tty: true
+    profiles:
+      - cli
+      - dev
+
+  # Orbit Server (control plane)
+  orbit-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: orbit-server
+    volumes:
+      - orbit-server-data:/workspace/.orbit
+      - sandbox-data:/workspace/.sandbox-home
+      - ./config:/workspace/config:ro
+    environment:
+      - ORBIT_HOME=/workspace/.orbit
+      - SANDBOX_HOME=/workspace/.sandbox-home
+      - ORBIT_SERVER_HOST=0.0.0.0
+      - ORBIT_SERVER_PORT=8788
+      - ORBIT_SERVER_API_KEY=${ORBIT_SERVER_API_KEY:-orbit-server-key}
+      - ORBIT_SERVER_WORKSPACE_ROOT=/workspace
+      - ORBIT_SERVER_LANE_TRANSPORT=in-memory
+      - ORBIT_SERVER_RECONCILE_INTERVAL_SECS=15
+      # API Keys
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - FRONTAL_API_KEY=${FRONTAL_API_KEY:-}
+    ports:
+      - "8788:8788"
+    networks:
+      - orbit-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8788/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles:
+      - server
+      - production
+
+  # Mock Anthropic Service (for testing/development)
+  mock-anthropic-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mock-anthropic
+    command: ["mock-anthropic-service", "--bind", "0.0.0.0:8081"]
+    volumes:
+      - mock-data:/workspace/data
+    environment:
+      - RUST_LOG=info
+    ports:
+      - "8081:8081"
+    networks:
+      - orbit-network
+    profiles:
+      - mock
+      - dev
+
+  # PostgreSQL Database (optional, for persistent storage)
+  postgres:
+    image: postgres:16-alpine@sha256:8866b2263a8c4d277476e9b21e3eea6868f9f4bc7e76b3535a6fb9b7e6295f5b
+    container_name: orbit-postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      - POSTGRES_DB=orbit
+      - POSTGRES_USER=orbit
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-orbit123}
+    ports:
+      - "5432:5432"
+    networks:
+      - orbit-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbit -d orbit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - database
+      - production
+
+  # Redis (caching and session storage)
+  redis:
+    image: redis:7-alpine@sha256:2d7b227c75865716f6b3a2b9d4b8b1a8a9c3a3b3b3b3b3b3b3b3b3b3b3b3b3b3b
+    container_name: orbit-redis
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - orbit-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    profiles:
+      - cache
+      - production
+
+  # Nginx reverse proxy (optional)
+  nginx:
+    image: nginx:alpine@sha256:2d7b227c75865716f6b3a2b9d4b8b1a8a9c3a3b3b3b3b3b3b3b3b3b3b3b3b3b3b
+    container_name: orbit-nginx
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/conf.d:/etc/nginx/conf.d:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - orbit-network
+    depends_on:
+      - orbit-server
+    restart: unless-stopped
+    profiles:
+      - proxy
+      - production
+
+  # Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:latest@sha256:2d7b227c75865716f6b3a2b9d4b8b1a8a9c3a3b3b3b3b3b3b3b3b3b3b3b3b3b3b
+    container_name: orbit-prometheus
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - orbit-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana dashboard
+  grafana:
+    image: grafana/grafana:latest@sha256:2d7b227c75865716f6b3a2b9d4b8b1a8a9c3a3b3b3b3b3b3b3b3b3b3b3b3b3b3b
+    container_name: orbit-grafana
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    networks:
+      - orbit-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+networks:
+  orbit-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  orbit-data:
+    driver: local
+  orbit-server-data:
+    driver: local
+  sandbox-data:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  mock-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
