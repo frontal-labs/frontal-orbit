@@ -1,0 +1,81 @@
+{
+  "name": "context7",
+  "version": "1.0.0",
+  "description": "Context7 MCP server configuration for Orbit - Up-to-date library documentation",
+  "server": {
+    "command": "npx",
+    "args": ["-y", "@upstash/context7-mcp@latest"],
+    "env": {
+      "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}",
+      "NODE_ENV": "production"
+    },
+    "timeout": 30,
+    "auto_start": true,
+    "enabled": true,
+    "max_retries": 3,
+    "retry_delay": 1000
+  },
+  "capabilities": {
+    "tools": {
+      "resolve_library_id": {
+        "description": "Resolve library name to Context7 library ID",
+        "enabled": true
+      },
+      "get_library_docs": {
+        "description": "Get up-to-date documentation for a library",
+        "enabled": true
+      },
+      "search_libraries": {
+        "description": "Search for available libraries in Context7",
+        "enabled": true
+      }
+    },
+    "resources": {
+      "library_index": {
+        "description": "Index of all available libraries",
+        "enabled": true
+      },
+      "documentation_cache": {
+        "description": "Cached documentation for faster access",
+        "enabled": true,
+        "ttl": 3600
+      }
+    }
+  },
+  "configuration": {
+    "api_endpoint": "https://mcp.context7.com/mcp",
+    "rate_limit": {
+      "requests_per_minute": 60,
+      "burst_limit": 10
+    },
+    "cache": {
+      "enabled": true,
+      "ttl_seconds": 300,
+      "max_size_mb": 100
+    },
+    "libraries": {
+      "auto_resolve": true,
+      "preferred_versions": {
+        "react": "latest",
+        "next": "latest",
+        "vue": "latest",
+        "angular": "latest",
+        "typescript": "latest",
+        "javascript": "latest"
+      }
+    }
+  },
+  "integration": {
+    "orbit": {
+      "auto_invoke": true,
+      "trigger_keywords": ["use context7", "docs", "documentation", "api reference"],
+      "priority": "high"
+    }
+  },
+  "security": {
+    "api_key_required": true,
+    "allowed_domains": ["context7.com", "mcp.context7.com"],
+    "sanitize_responses": true,
+    "validate_library_ids": true
+  }
+}
