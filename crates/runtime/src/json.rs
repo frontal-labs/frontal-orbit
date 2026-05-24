@@ -1,18 +1,15 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JsonValue {
     Null,
     Bool(bool),
-    Integer(i64),
-    Float(f64),
+    Number(i64),
     String(String),
     Array(Vec<JsonValue>),
     Object(BTreeMap<String, JsonValue>),
 }
-
-impl Eq for JsonValue {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonError {
@@ -42,8 +39,7 @@ impl JsonValue {
         match self {
             Self::Null => "null".to_string(),
             Self::Bool(value) => value.to_string(),
-            Self::Integer(value) => value.to_string(),
-            Self::Float(value) => value.to_string(),
+            Self::Number(value) => value.to_string(),
             Self::String(value) => render_string(value),
             Self::Array(values) => {
                 let rendered = values
@@ -110,16 +106,7 @@ impl JsonValue {
     #[must_use]
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            Self::Integer(value) => Some(*value),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub fn as_f64(&self) -> Option<f64> {
-        match self {
-            Self::Float(value) => Some(*value),
-            Self::Integer(value) => Some(*value as f64),
+            Self::Number(value) => Some(*value),
             _ => None,
         }
     }
@@ -180,7 +167,7 @@ impl<'a> Parser<'a> {
             Some('"') => self.parse_string().map(JsonValue::String),
             Some('[') => self.parse_array(),
             Some('{') => self.parse_object(),
-            Some('-' | '0'..='9') => self.parse_number(),
+            Some('-' | '0'..='9') => self.parse_number().map(JsonValue::Number),
             Some(other) => Err(JsonError::new(format!("unexpected character: {other}"))),
             None => Err(JsonError::new("unexpected end of input")),
         }
@@ -279,7 +266,7 @@ impl<'a> Parser<'a> {
         Ok(JsonValue::Object(entries))
     }
 
-    fn parse_number(&mut self) -> Result<JsonValue, JsonError> {
+    fn parse_number(&mut self) -> Result<i64, JsonError> {
         let mut value = String::new();
         if self.try_consume('-') {
             value.push('-');
@@ -290,40 +277,13 @@ impl<'a> Parser<'a> {
             self.index += 1;
         }
 
-        let is_float = if self.try_consume('.') {
-            value.push('.');
-            let mut has_fraction = false;
-            while let Some(ch @ '0'..='9') = self.peek() {
-                value.push(ch);
-                self.index += 1;
-                has_fraction = true;
-            }
-            if !has_fraction {
-                return Err(JsonError::new("invalid number: expected fraction after '.'"));
-            }
-            true
-        } else {
-            false
-        };
-
         if value.is_empty() || value == "-" {
             return Err(JsonError::new("invalid number"));
         }
 
-        if is_float {
-            value
-                .parse::<f64>()
-                .map(JsonValue::Float)
-                .map_err(|_| JsonError::new("number out of range"))
-        } else {
-            match value.parse::<i64>() {
-                Ok(int) => Ok(JsonValue::Integer(int)),
-                Err(_) => value
-                    .parse::<f64>()
-                    .map(JsonValue::Float)
-                    .map_err(|_| JsonError::new("number out of range")),
-            }
-        }
+        value
+            .parse::<i64>()
+            .map_err(|_| JsonError::new("number out of range"))
     }
 
     fn expect(&mut self, expected: char) -> Result<(), JsonError> {
@@ -380,7 +340,7 @@ mod tests {
         object.insert(
             "items".to_string(),
             JsonValue::Array(vec![
-                JsonValue::Integer(4),
+                JsonValue::Number(4),
                 JsonValue::String("ok".to_string()),
             ]),
         );
@@ -389,15 +349,6 @@ mod tests {
         let parsed = JsonValue::parse(&rendered).expect("json should parse");
 
         assert_eq!(parsed.as_object().expect("object").len(), 2);
-    }
-
-    #[test]
-    fn renders_and_parses_floats() {
-        let value = JsonValue::Float(0.05);
-        let rendered = value.render();
-        assert_eq!(rendered, "0.05");
-        let parsed = JsonValue::parse(&rendered).expect("float should parse");
-        assert_eq!(parsed.as_f64(), Some(0.05));
     }
 
     #[test]
