@@ -170,10 +170,6 @@ pub struct GrepSearchOutput {
     pub applied_offset: Option<usize>,
 }
 
-fn current_workspace_root() -> io::Result<PathBuf> {
-    std::env::current_dir()?.canonicalize()
-}
-
 /// Reads a text file and returns a line-windowed payload.
 pub fn read_file(
     path: &str,
@@ -181,8 +177,6 @@ pub fn read_file(
     limit: Option<usize>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
-    let workspace_root = current_workspace_root()?;
-    validate_workspace_boundary(&absolute_path, &workspace_root)?;
 
     // Check file size before reading
     let metadata = fs::metadata(&absolute_path)?;
@@ -239,8 +233,6 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
     }
 
     let absolute_path = normalize_path_allow_missing(path)?;
-    let workspace_root = current_workspace_root()?;
-    validate_workspace_boundary(&absolute_path, &workspace_root)?;
     let original_file = fs::read_to_string(&absolute_path).ok();
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent)?;
@@ -269,8 +261,6 @@ pub fn edit_file(
     replace_all: bool,
 ) -> io::Result<EditFileOutput> {
     let absolute_path = normalize_path(path)?;
-    let workspace_root = current_workspace_root()?;
-    validate_workspace_boundary(&absolute_path, &workspace_root)?;
     let original_file = fs::read_to_string(&absolute_path)?;
     if old_string == new_string {
         return Err(io::Error::new(

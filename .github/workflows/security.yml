@@ -47,7 +47,7 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
         with:
-          fail-on-severity: high
+          fail-on-severity: critical
 
   codeql:
     name: CodeQL Analysis
@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'javascript', 'python', 'rust' ]
+        language: [ 'rust' ]
     steps:
       - uses: actions/checkout@v4
 

@@ -17,7 +17,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install cargo-watch for hot reload
-RUN cargo install cargo-watch
+RUN cargo install cargo-watch --locked
 
 # Set working directory
 WORKDIR /workspace
