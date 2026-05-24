@@ -28,7 +28,6 @@ fn is_binary_file(path: &Path) -> io::Result<bool> {
 /// Validate that a resolved path stays within the given workspace root.
 /// Returns the canonical path on success, or an error if the path escapes
 /// the workspace boundary (e.g. via `../` traversal or symlink).
-#[allow(dead_code)]
 fn validate_workspace_boundary(resolved: &Path, workspace_root: &Path) -> io::Result<()> {
     if !resolved.starts_with(workspace_root) {
         return Err(io::Error::new(
@@ -171,6 +170,10 @@ pub struct GrepSearchOutput {
     pub applied_offset: Option<usize>,
 }
 
+fn current_workspace_root() -> io::Result<PathBuf> {
+    std::env::current_dir()?.canonicalize()
+}
+
 /// Reads a text file and returns a line-windowed payload.
 pub fn read_file(
     path: &str,
@@ -178,6 +181,8 @@ pub fn read_file(
     limit: Option<usize>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
+    let workspace_root = current_workspace_root()?;
+    validate_workspace_boundary(&absolute_path, &workspace_root)?;
 
     // Check file size before reading
     let metadata = fs::metadata(&absolute_path)?;
@@ -234,6 +239,8 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
     }
 
     let absolute_path = normalize_path_allow_missing(path)?;
+    let workspace_root = current_workspace_root()?;
+    validate_workspace_boundary(&absolute_path, &workspace_root)?;
     let original_file = fs::read_to_string(&absolute_path).ok();
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent)?;
@@ -262,6 +269,8 @@ pub fn edit_file(
     replace_all: bool,
 ) -> io::Result<EditFileOutput> {
     let absolute_path = normalize_path(path)?;
+    let workspace_root = current_workspace_root()?;
+    validate_workspace_boundary(&absolute_path, &workspace_root)?;
     let original_file = fs::read_to_string(&absolute_path)?;
     if old_string == new_string {
         return Err(io::Error::new(
@@ -557,8 +566,7 @@ fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
     Ok(candidate)
 }
 
-/// Read a file with workspace boundary enforcement.
-#[allow(dead_code)]
+/// Read a file with explicit workspace boundary enforcement.
 pub fn read_file_in_workspace(
     path: &str,
     offset: Option<usize>,
@@ -573,8 +581,7 @@ pub fn read_file_in_workspace(
     read_file(path, offset, limit)
 }
 
-/// Write a file with workspace boundary enforcement.
-#[allow(dead_code)]
+/// Write a file with explicit workspace boundary enforcement.
 pub fn write_file_in_workspace(
     path: &str,
     content: &str,
@@ -588,8 +595,7 @@ pub fn write_file_in_workspace(
     write_file(path, content)
 }
 
-/// Edit a file with workspace boundary enforcement.
-#[allow(dead_code)]
+/// Edit a file with explicit workspace boundary enforcement.
 pub fn edit_file_in_workspace(
     path: &str,
     old_string: &str,
@@ -606,7 +612,6 @@ pub fn edit_file_in_workspace(
 }
 
 /// Check whether a path is a symlink that resolves outside the workspace.
-#[allow(dead_code)]
 pub fn is_symlink_escape(path: &Path, workspace_root: &Path) -> io::Result<bool> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_symlink() {
