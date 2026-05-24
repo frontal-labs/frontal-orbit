@@ -1,5 +1,5 @@
 # Multi-stage build for Orbit
-FROM rust:1.75-bookworm@sha256:87f3b2f93b82995443a1a558c234212dafe79cfdc3af956539610560369ddcd0 as builder
+FROM rust:1.82-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update \

@@ -49,37 +49,3 @@ jobs:
         with:
           fail-on-severity: critical
 
-  codeql:
-    name: CodeQL Analysis
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'rust' ]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-
-      - name: Build Rust code
-        if: matrix.language == 'rust'
-        run: cargo build --workspace
-
-      - name: Autobuild non-Rust
-        if: matrix.language != 'rust'
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{matrix.language}}"

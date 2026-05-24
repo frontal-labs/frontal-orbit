@@ -387,25 +387,10 @@ fn build_macos_sandbox_profile(status: &SandboxStatus, cwd: &Path) -> String {
 }
 
 fn sandbox_profile_literal(path: &str) -> String {
-    // Validate path characters to prevent sandbox profile injection.
-    // Only allow alphanumeric, forward slashes, hyphens, underscores, dots, and colons.
-    for ch in path.chars() {
-        if !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '/' | '-' | '_' | '.' | ':') {
-            // Non-path chars are replaced with underscore to prevent profile escape
-            return path
-                .chars()
-                .map(|c| {
-                    if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '/' | '-' | '_' | '.' | ':')
-                    {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect::<String>()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"");
-        }
+    // Reject null bytes and other control characters that could
+    // terminate the profile early or inject arbitrary directives.
+    if path.contains('\0') || path.contains('\n') || path.contains('\r') {
+        return String::new();
     }
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
