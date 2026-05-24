@@ -194,7 +194,7 @@
       "type": "shell",
       "command": "./scripts/run_mock_parity_harness.sh",
       "options": {
-        "cwd": "${workspaceFolder}/rust"
+        "cwd": "${workspaceFolder}"
       },
       "group": "test",
       "problemMatcher": [],

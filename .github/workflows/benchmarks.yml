@@ -41,7 +41,7 @@ jobs:
       - name: Run benchmarks
         run: |
           if cargo bench --help > /dev/null 2>&1; then
-            cargo bench --all
+            cargo bench --workspace
           else
             echo "No benchmarks found, skipping..."
           fi

@@ -58,18 +58,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'javascript', 'python' ]
+        language: [ 'javascript', 'python', 'rust' ]
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-        
+
+      - name: Build Rust code
+        if: matrix.language == 'rust'
+        run: cargo build --workspace
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
