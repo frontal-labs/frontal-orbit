@@ -69,7 +69,7 @@ impl WebhookReceiver {
     /// Start the webhook server
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.config.port));
-        info!("Starting webhook server on {}", addr);
+        info!("Starting webhook server on {addr}");
 
         let app = self.create_app();
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -116,7 +116,7 @@ async fn handle_webhook(
 
     // Verify authentication if required
     if !verify_auth(&state.auth, &body, &header_map)? {
-        error!("Webhook authentication failed for source: {}", source);
+        error!("Webhook authentication failed for source: {source}");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -132,7 +132,7 @@ async fn handle_webhook(
         processor.add_event(event);
     }
 
-    info!("Webhook processed successfully from source: {}", source);
+    info!("Webhook processed successfully from source: {source}");
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -160,7 +160,7 @@ async fn handle_webhook_with_source(
 
     // Verify authentication if required
     if !verify_auth(&state.auth, &body, &header_map)? {
-        error!("Webhook authentication failed for source: {}", source);
+        error!("Webhook authentication failed for source: {source}");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -176,7 +176,7 @@ async fn handle_webhook_with_source(
         processor.add_event(event);
     }
 
-    info!("Webhook processed successfully from source: {}", source);
+    info!("Webhook processed successfully from source: {source}");
 
     Ok(Json(serde_json::json!({
         "status": "ok",

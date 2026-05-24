@@ -97,15 +97,15 @@ pub fn webhook_tool_specs() -> Vec<ToolSpec> {
 pub fn execute_webhook_tool(name: &str, input: &JsonValue) -> Result<String, String> {
     match name {
         "RemoteTrigger" => from_value::<RemoteTriggerInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_remote_trigger),
         "ListWebhookEvents" => from_value::<ListWebhookEventsInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_list_webhook_events),
         "TriggerWebhook" => from_value::<TriggerWebhookInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_trigger_webhook),
-        _ => Err(format!("Unknown webhook tool: {}", name)),
+        _ => Err(format!("Unknown webhook tool: {name}")),
     }
 }
 
@@ -120,7 +120,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
         "POST" => client.post(&input.url),
         "PUT" => client.put(&input.url),
         "DELETE" => client.delete(&input.url),
-        _ => return Err(format!("Unsupported HTTP method: {}", method)),
+        _ => return Err(format!("Unsupported HTTP method: {method}")),
     };
 
     // Add headers
@@ -148,7 +148,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
 
             let response_text = response
                 .text()
-                .map_err(|e| format!("Failed to read response: {}", e))?;
+                .map_err(|e| format!("Failed to read response: {e}"))?;
 
             let result = json!({
                 "url": input.url,
@@ -160,7 +160,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
             });
 
             serde_json::to_string_pretty(&result)
-                .map_err(|e| format!("Failed to serialize response: {}", e))
+                .map_err(|e| format!("Failed to serialize response: {e}"))
         }
         Err(error) => {
             let result = json!({
@@ -171,7 +171,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
             });
 
             serde_json::to_string_pretty(&result)
-                .map_err(|e| format!("Failed to serialize error: {}", e))
+                .map_err(|e| format!("Failed to serialize error: {e}"))
         }
     }
 }
@@ -207,7 +207,7 @@ fn run_list_webhook_events(input: ListWebhookEventsInput) -> Result<String, Stri
     });
 
     serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize response: {}", e))
+        .map_err(|e| format!("Failed to serialize response: {e}"))
 }
 
 /// Execute TriggerWebhook tool
@@ -234,7 +234,7 @@ fn run_trigger_webhook(input: TriggerWebhookInput) -> Result<String, String> {
     });
 
     serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize response: {}", e))
+        .map_err(|e| format!("Failed to serialize response: {e}"))
 }
 
 fn global_event_store() -> &'static RwLock<EventProcessor> {

@@ -145,7 +145,7 @@ fn generate_event_id() -> String {
 
     let timestamp = current_timestamp();
     let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("evt_{}_{}", timestamp, counter)
+    format!("evt_{timestamp}_{counter}")
 }
 
 /// Get current timestamp in seconds
