@@ -47,6 +47,12 @@ export default defineConfig({
       'tests/slack-constructor.test.ts',
       'tests/slack-formatting.test.ts',
       'tests/slack-behavior.test.ts',
+      'tests/bot.test.ts',
+      'tests/validators.test.ts',
+      'tests/utils/env.test.ts',
+      'tests/utils/validators.test.ts',
+      'tests/integration/slack-workflow.test.ts',
+      'tests/bot/slack-bot-service.test.ts',
     ],
 
     // Exclude patterns

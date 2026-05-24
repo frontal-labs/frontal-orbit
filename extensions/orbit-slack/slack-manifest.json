@@ -19,43 +19,8 @@
       {
         "command": "/orbit",
         "url": "https://your-orbit-server.com/slack/commands",
-        "description": "Autonomous engineering commands",
+        "description": "Autonomous engineering assistant",
         "usage_hint": "ask 'question' | task 'description' | status | help",
-        "should_escape": false
-      },
-      {
-        "command": "/orbit-branch",
-        "url": "https://your-orbit-server.com/slack/commands",
-        "description": "Git branch operations",
-        "usage_hint": "create <n> | switch <n> | list",
-        "should_escape": false
-      },
-      {
-        "command": "/orbit-commit",
-        "url": "https://your-orbit-server.com/slack/commands",
-        "description": "Commit changes",
-        "usage_hint": "<message>",
-        "should_escape": false
-      },
-      {
-        "command": "/orbit-pr",
-        "url": "https://your-orbit-server.com/slack/commands",
-        "description": "Pull request operations",
-        "usage_hint": "create <title> | merge <number> | review <number>",
-        "should_escape": false
-      },
-      {
-        "command": "/orbit-deploy",
-        "url": "https://your-orbit-server.com/slack/commands",
-        "description": "Deploy to environments",
-        "usage_hint": "<environment>",
-        "should_escape": false
-      },
-      {
-        "command": "/orbit-fix",
-        "url": "https://your-orbit-server.com/slack/commands",
-        "description": "Fix issues automatically",
-        "usage_hint": "issue <url> | bug <description> | test <n>",
         "should_escape": false
       }
     ],
