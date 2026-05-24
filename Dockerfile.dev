@@ -1,5 +1,5 @@
-# Development Dockerfile with hot reload and debugging
-FROM rust:1.82-bookworm@sha256:87f3b2f93b82995443a1a558c234212dafe79cfdc3af956539610560369ddcd0
+# Development Dockerfile with hot reload
+FROM rust:1.75-bookworm@sha256:87f3b2f93b82995443a1a558c234212dafe79cfdc3af956539610560369ddcd0
 
 # Install development dependencies
 RUN apt-get update \
@@ -14,22 +14,16 @@ RUN apt-get update \
         curl \
         build-essential \
         postgresql-client \
-        protobuf-compiler \
-        vim \
-        less \
-        htop \
-        procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Install development tools
-RUN cargo install cargo-watch cargo-nextest cargo-audit
+# Install cargo-watch for hot reload
+RUN cargo install cargo-watch
 
 # Set working directory
 WORKDIR /workspace
 
-# Create non-root user with sudo access for development
-RUN useradd --create-home --shell /bin/bash orbit \
-    && echo "orbit ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash orbit
 
 # Switch to non-root user
 USER orbit
@@ -38,17 +32,6 @@ USER orbit
 ENV CARGO_TERM_COLOR=always
 ENV ORBIT_HOME=/workspace/.orbit
 ENV SANDBOX_HOME=/workspace/.sandbox-home
-ENV RUST_LOG=debug
-ENV RUST_BACKTRACE=1
 
-# Create development directories
-RUN mkdir -p /workspace/.orbit /workspace/.sandbox-home /workspace/logs
-
-# Volume mounts for development
-VOLUME ["/workspace"]
-
-# Expose ports for development
-EXPOSE 8788 8080 3000
-
-# Default command with hot reload for CLI
-CMD ["cargo", "watch", "-x", "run -p orbit-cli -- --model claude-sonnet-4-6"]
+# Default command with hot reload
+CMD ["cargo", "watch", "-x", "run"]
