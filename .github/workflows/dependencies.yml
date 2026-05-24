@@ -73,7 +73,6 @@ jobs:
           cargo outdated --root-deps-only
           
       - name: Check for security advisories
-        continue-on-error: true
         run: |
           cargo install cargo-audit
           cargo audit
