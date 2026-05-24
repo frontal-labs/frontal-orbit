@@ -1,5 +1,5 @@
 # Development Dockerfile with hot reload
-FROM rust:1.82-bookworm
+FROM rust:1.85-bookworm
 
 # Install development dependencies
 RUN apt-get update \

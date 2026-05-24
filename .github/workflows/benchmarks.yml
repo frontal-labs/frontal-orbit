@@ -46,9 +46,19 @@ jobs:
             echo "No benchmarks found, skipping..."
           fi
           
+      - name: Check for benchmark results
+        id: bench-check
+        run: |
+          if [ -f target/criterion/reports/index.html ]; then
+            echo "has-benchmarks=true" >> $GITHUB_OUTPUT
+          else
+            echo "No benchmarks found, will skip storing results"
+            echo "has-benchmarks=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.bench-check.outputs.has-benchmarks == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           tool: 'cargo'
           output-file-path: target/criterion/reports/index.html
