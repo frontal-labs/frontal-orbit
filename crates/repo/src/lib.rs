@@ -12,7 +12,9 @@ use std::time::Duration;
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Spawn a child and wait for it to complete with a timeout, collecting stdout + stderr.
-fn wait_for_output_with_timeout(child: std::process::Child) -> io::Result<Option<std::process::Output>> {
+fn wait_for_output_with_timeout(
+    child: std::process::Child,
+) -> io::Result<Option<std::process::Output>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = child.wait_with_output();

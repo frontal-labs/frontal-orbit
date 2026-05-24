@@ -206,8 +206,7 @@ fn run_list_webhook_events(input: ListWebhookEventsInput) -> Result<String, Stri
         "events": events
     });
 
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize response: {e}"))
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Failed to serialize response: {e}"))
 }
 
 /// Execute TriggerWebhook tool
@@ -233,8 +232,7 @@ fn run_trigger_webhook(input: TriggerWebhookInput) -> Result<String, String> {
         "event": event
     });
 
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize response: {e}"))
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Failed to serialize response: {e}"))
 }
 
 fn global_event_store() -> &'static RwLock<EventProcessor> {
