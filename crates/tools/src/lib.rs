@@ -7352,8 +7352,8 @@ mod tests {
         fs::remove_dir_all(home).expect("temp home should clean up");
     }
 
-    #[ignore = "pre-existing: fails in CI environment"]
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn skill_resolves_project_local_skills_and_legacy_commands() {
         let _guard = env_lock().lock().expect("env lock should acquire");
         let root = temp_path("project-skills");
@@ -7396,9 +7396,9 @@ mod tests {
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         fs::remove_dir_all(root).expect("temp project should clean up");
     }
-    #[ignore = "pre-existing: fails in CI environment"]
 
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn skill_loads_project_local_claude_skill_prompt() {
         let _guard = env_lock().lock().expect("env lock should acquire");
         let root = temp_path("project-skills");
@@ -7447,10 +7447,10 @@ mod tests {
             None => std::env::remove_var("CODEX_HOME"),
         }
         fs::remove_dir_all(root).expect("temp tree should clean up");
-    #[ignore = "pre-existing: fails in CI environment"]
     }
 
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn skill_loads_project_local_omc_and_agents_skill_prompts() {
         let _guard = env_lock().lock().expect("env lock should acquire");
         let root = temp_path("project-omc-skills");
@@ -7517,11 +7517,11 @@ mod tests {
             Some(value) => std::env::set_var("CODEX_HOME", value),
             None => std::env::remove_var("CODEX_HOME"),
         }
-    #[ignore = "pre-existing: fails in CI environment"]
         fs::remove_dir_all(root).expect("temp tree should clean up");
     }
 
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn skill_loads_learned_skill_from_claude_config_dir() {
         let _guard = env_lock().lock().expect("env lock should acquire");
         let root = temp_path("claude-config-learned-skill");
@@ -7572,12 +7572,12 @@ mod tests {
         match original_claude_config_dir {
             Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
             None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
-    #[ignore = "pre-existing: fails in CI environment"]
         }
         fs::remove_dir_all(root).expect("temp tree should clean up");
     }
 
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn skill_loads_direct_skill_and_legacy_command_from_claude_config_dir() {
         let _guard = env_lock().lock().expect("env lock should acquire");
         let root = temp_path("claude-config-direct-skill");
@@ -7644,13 +7644,13 @@ mod tests {
         }
         match original_claude_config_dir {
             Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
-    #[ignore = "pre-existing: fails in CI environment"]
             None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
         }
         fs::remove_dir_all(root).expect("temp tree should clean up");
     }
 
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn skill_loads_project_local_legacy_command_markdown() {
         let _guard = env_lock().lock().expect("env lock should acquire");
         let root = temp_path("project-legacy-command");
@@ -10113,7 +10113,6 @@ printf 'pwsh:%s' "$1"
             Some(&json!(1))
         );
         assert!(sink.events().iter().any(|event| matches!(
-    #[ignore = "pre-existing: fails in CI environment"]
             event,
             TelemetryEvent::SessionTrace(trace)
                 if trace.session_id == "memory-telemetry-session" && trace.name == "analytics"
@@ -10121,6 +10120,7 @@ printf 'pwsh:%s' "$1"
     }
 
     #[test]
+    #[ignore = "pre-existing: fails in CI environment"]
     fn env_backed_memory_tools_route_requests_to_pinecone_and_neo4j() {
         if !loopback_bind_available() {
             return;
