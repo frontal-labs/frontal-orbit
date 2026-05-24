@@ -260,7 +260,7 @@ Released: 2026-04-03
 - **PARITY.md**: Implementation status and roadmap
 
 ### Community
-- **GitHub Discussions**: https://github.com/frontal-labs/frontal-orbit/discussions
+- **GitHub Issues**: https://github.com/frontal-labs/frontal-orbit/issues
 - **Issues**: https://github.com/frontal-labs/frontal-orbit/issues
 
 ### Professional Support
