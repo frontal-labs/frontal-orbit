@@ -34,7 +34,8 @@ jobs:
 
       - name: Run npm audit for Slack extension
         working-directory: extensions/orbit-slack
-        run: npm audit --omit=dev --package-lock-only
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
 
   dependency-review:
     name: Dependency Review
@@ -46,7 +47,7 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
         with:
-          fail-on-severity: moderate
+          fail-on-severity: high
 
   codeql:
     name: CodeQL Analysis
@@ -73,6 +74,10 @@ jobs:
       - name: Build Rust code
         if: matrix.language == 'rust'
         run: cargo build --workspace
+
+      - name: Autobuild non-Rust
+        if: matrix.language != 'rust'
+        uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

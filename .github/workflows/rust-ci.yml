@@ -104,6 +104,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
       - name: Install Slack extension dependencies
         run: npm ci
       - name: Check generated contract freshness and Slack build
