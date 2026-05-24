@@ -147,8 +147,8 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "init",
         aliases: &[],
-        summary: "Create a starter AGENTS.md for this repo",
-        argument_hint: Some("[path]"),
+        summary: "Create a starter ORBIT.md for this repo",
+        argument_hint: None,
         resume_supported: true,
     },
     SlashCommandSpec {
@@ -1085,9 +1085,7 @@ pub enum SlashCommand {
         target: Option<String>,
     },
     Memory,
-    Init {
-        path: Option<String>,
-    },
+    Init,
     Diff,
     Version,
     Export {
@@ -1288,7 +1286,10 @@ pub fn validate_slash_command_input(
             validate_no_args(command, &args)?;
             SlashCommand::Memory
         }
-        "init" => SlashCommand::Init { path: remainder },
+        "init" => {
+            validate_no_args(command, &args)?;
+            SlashCommand::Init
+        }
         "diff" => {
             validate_no_args(command, &args)?;
             SlashCommand::Diff
@@ -3923,7 +3924,7 @@ pub fn handle_slash_command(
         | SlashCommand::Telemetry { .. }
         | SlashCommand::Mcp { .. }
         | SlashCommand::Memory
-        | SlashCommand::Init { .. }
+        | SlashCommand::Init
         | SlashCommand::Diff
         | SlashCommand::Version
         | SlashCommand::Export { .. }
@@ -4256,7 +4257,7 @@ mod tests {
             SlashCommand::parse("/memory"),
             Ok(Some(SlashCommand::Memory))
         );
-        assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init { path: None })));
+        assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init)));
         assert_eq!(SlashCommand::parse("/diff"), Ok(Some(SlashCommand::Diff)));
         assert_eq!(
             SlashCommand::parse("/version"),
