@@ -602,7 +602,7 @@ orbit plugin doctor my-plugin
 
 The official plugin registry hosts community plugins:
 
-- **URL**: https://plugins.orbit.ai
+- **URL**: https://github.com/frontal-labs/frontal-orbit
 - **Search**: `orbit plugin search <keyword>`
 - **Categories**: Tools, Commands, Providers, Themes
 

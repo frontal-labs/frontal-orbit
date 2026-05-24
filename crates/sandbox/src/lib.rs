@@ -387,6 +387,11 @@ fn build_macos_sandbox_profile(status: &SandboxStatus, cwd: &Path) -> String {
 }
 
 fn sandbox_profile_literal(path: &str) -> String {
+    // Reject null bytes and other control characters that could
+    // terminate the profile early or inject arbitrary directives.
+    if path.contains('\0') || path.contains('\n') || path.contains('\r') {
+        return String::new();
+    }
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
@@ -412,18 +417,25 @@ fn sandbox_env(cwd: &Path, status: &SandboxStatus) -> Vec<(String, String)> {
 }
 
 fn normalize_mounts(mounts: &[String], cwd: &Path) -> Vec<String> {
-    let cwd = cwd.to_path_buf();
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     mounts
         .iter()
         .map(|mount| {
             let path = PathBuf::from(mount);
-            if path.is_absolute() {
-                path
+            let resolved = if path.is_absolute() {
+                path.canonicalize().unwrap_or(path)
             } else {
-                cwd.join(path)
+                let joined = cwd.join(&path);
+                joined.canonicalize().unwrap_or(joined)
+            };
+            // Reject paths that escape the cwd workspace boundary
+            if !resolved.starts_with(&cwd) {
+                // Skip this mount silently rather than allowing traversal
+                return String::new();
             }
+            resolved.display().to_string()
         })
-        .map(|path| path.display().to_string())
+        .filter(|p| !p.is_empty())
         .collect()
 }
 

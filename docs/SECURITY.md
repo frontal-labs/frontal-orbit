@@ -430,7 +430,7 @@ orbit security report
     },
     "allowed_sources": [
       "https://github.com",
-      "https://plugins.orbit.ai"
+      "https://github.com/frontal-labs/frontal-orbit"
     ],
     "blocked_sources": [
       "*.malicious.com"

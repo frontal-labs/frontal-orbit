@@ -246,11 +246,9 @@ export function getEnvConfig() {
   };
 }
 
-// Validation function for backward compatibility
-export function validateEnvConfig(): void {
-  // The t3-oss/env-core library handles validation automatically
-  // This function is kept for backward compatibility
-  console.log("Environment variables validated successfully");
-}
+// Validation function for backward compatibility.
+// Deprecated: t3-oss/env-core handles validation automatically.
+// Kept as a no-op for any legacy importers; will be removed in a future release.
+export function validateEnvConfig(): void {}
 
 export default env;

@@ -208,9 +208,9 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
     let mut files = Vec::new();
     for dir in directories {
         for candidate in [
-            dir.join("AGENTS.md"),
+            dir.join("ORBIT.md"),
             dir.join("CLAUDE.local.md"),
-            dir.join(".orbit").join("AGENTS.md"),
+            dir.join(".orbit").join("ORBIT.md"),
             dir.join(".orbit").join("instructions.md"),
         ] {
             push_context_file(&mut files, candidate)?;
@@ -533,19 +533,19 @@ mod tests {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
         fs::create_dir_all(nested.join(".orbit")).expect("nested orbit dir");
-        fs::write(root.join("AGENTS.md"), "root instructions").expect("write root instructions");
+        fs::write(root.join("ORBIT.md"), "root instructions").expect("write root instructions");
         fs::write(root.join("CLAUDE.local.md"), "local instructions")
             .expect("write local instructions");
         fs::create_dir_all(root.join("apps")).expect("apps dir");
         fs::create_dir_all(root.join("apps").join(".orbit")).expect("apps orbit dir");
-        fs::write(root.join("apps").join("AGENTS.md"), "apps instructions")
+        fs::write(root.join("apps").join("ORBIT.md"), "apps instructions")
             .expect("write apps instructions");
         fs::write(
             root.join("apps").join(".orbit").join("instructions.md"),
             "apps dot claude instructions",
         )
         .expect("write apps dot claude instructions");
-        fs::write(nested.join(".orbit").join("AGENTS.md"), "nested rules")
+        fs::write(nested.join(".orbit").join("ORBIT.md"), "nested rules")
             .expect("write nested rules");
         fs::write(
             nested.join(".orbit").join("instructions.md"),
@@ -579,8 +579,8 @@ mod tests {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
         fs::create_dir_all(&nested).expect("nested dir");
-        fs::write(root.join("AGENTS.md"), "same rules\n\n").expect("write root");
-        fs::write(nested.join("AGENTS.md"), "same rules\n").expect("write nested");
+        fs::write(root.join("ORBIT.md"), "same rules\n\n").expect("write root");
+        fs::write(nested.join("ORBIT.md"), "same rules\n").expect("write nested");
 
         let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
         assert_eq!(context.instruction_files.len(), 1);
@@ -608,8 +608,8 @@ mod tests {
     #[test]
     fn displays_context_paths_compactly() {
         assert_eq!(
-            display_context_path(Path::new("/tmp/project/.orbit/AGENTS.md")),
-            "AGENTS.md"
+            display_context_path(Path::new("/tmp/project/.orbit/ORBIT.md")),
+            "ORBIT.md"
         );
     }
 
@@ -624,7 +624,7 @@ mod tests {
             .current_dir(&root)
             .status()
             .expect("git init should run");
-        fs::write(root.join("AGENTS.md"), "rules").expect("write instructions");
+        fs::write(root.join("ORBIT.md"), "rules").expect("write instructions");
         fs::write(root.join("tracked.txt"), "hello").expect("write tracked file");
 
         let context =
@@ -632,7 +632,7 @@ mod tests {
 
         let status = context.git_status.expect("git status should be present");
         assert!(status.contains("## No commits yet on") || status.contains("## "));
-        assert!(status.contains("?? AGENTS.md"));
+        assert!(status.contains("?? ORBIT.md"));
         assert!(status.contains("?? tracked.txt"));
         assert!(context.git_diff.is_none());
 
@@ -687,7 +687,7 @@ mod tests {
     fn load_system_prompt_reads_claude_files_and_config() {
         let root = temp_dir();
         fs::create_dir_all(root.join(".orbit")).expect("orbit dir");
-        fs::write(root.join("AGENTS.md"), "Project rules").expect("write instructions");
+        fs::write(root.join("ORBIT.md"), "Project rules").expect("write instructions");
         fs::write(
             root.join(".orbit").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
@@ -730,7 +730,7 @@ mod tests {
     fn renders_claude_code_style_sections_with_project_context() {
         let root = temp_dir();
         fs::create_dir_all(root.join(".orbit")).expect("orbit dir");
-        fs::write(root.join("AGENTS.md"), "Project rules").expect("write AGENTS.md");
+        fs::write(root.join("ORBIT.md"), "Project rules").expect("write ORBIT.md");
         fs::write(
             root.join(".orbit").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn renders_instruction_file_metadata() {
         let rendered = render_instruction_files(&[ContextFile {
-            path: PathBuf::from("/tmp/project/AGENTS.md"),
+            path: PathBuf::from("/tmp/project/ORBIT.md"),
             content: "Project rules".to_string(),
         }]);
         assert!(rendered.contains("# Claude instructions"));

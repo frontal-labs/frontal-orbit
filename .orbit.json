@@ -63,7 +63,7 @@
   "mcp": {
     "servers_dir": "${ORBIT_MCP_SERVERS_DIR:-${HOME}/.orbit/mcp-servers}",
     "timeout": 30,
-    "auto_start": ["filesystem", "context7"],
+    "auto_start": ["filesystem"],
     "enabled": true,
     "servers": {
       "filesystem": {
@@ -83,19 +83,6 @@
         },
         "timeout": 60,
         "auto_start": false
-      },
-      "context7": {
-        "command": "npx",
-        "args": ["-y", "@upstash/context7-mcp@latest"],
-        "env": {
-          "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}",
-          "NODE_ENV": "production"
-        },
-        "timeout": 30,
-        "auto_start": true,
-        "enabled": true,
-        "max_retries": 3,
-        "retry_delay": 1000
       }
     }
   },
@@ -123,13 +110,7 @@
     "sample_rate": 0.1,
     "batch_size": 10,
     "flush_interval": "60s",
-    "events": [
-      "session_start",
-      "session_end",
-      "tool_use",
-      "error",
-      "command_completion"
-    ],
+    "events": ["session_start", "session_end", "tool_use", "error", "command_completion"],
     "path": "${ORBIT_CONFIG_DIR:-${HOME}/.orbit}/telemetry.jsonl"
   },
   "prompts": {

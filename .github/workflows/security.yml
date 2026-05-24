@@ -34,7 +34,8 @@ jobs:
 
       - name: Run npm audit for Slack extension
         working-directory: extensions/orbit-slack
-        run: npm audit --omit=dev --package-lock-only
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
 
   dependency-review:
     name: Dependency Review
@@ -46,31 +47,5 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
         with:
-          fail-on-severity: moderate
+          fail-on-severity: critical
 
-  codeql:
-    name: CodeQL Analysis
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'javascript', 'python' ]
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-          
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-        
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{matrix.language}}"

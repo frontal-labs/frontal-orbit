@@ -41,27 +41,13 @@ pub struct RuntimeConfig {
 }
 
 /// Parsed plugin-related settings extracted from runtime config.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimePluginConfig {
-    pub enabled: bool,
     enabled_plugins: BTreeMap<String, bool>,
     external_directories: Vec<String>,
     install_root: Option<String>,
     registry_path: Option<String>,
     bundled_root: Option<String>,
-}
-
-impl Default for RuntimePluginConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            enabled_plugins: BTreeMap::new(),
-            external_directories: Vec::new(),
-            install_root: None,
-            registry_path: None,
-            bundled_root: None,
-        }
-    }
 }
 
 /// Structured feature configuration consumed by runtime subsystems.
@@ -759,12 +745,7 @@ fn parse_optional_plugin_config(root: &JsonValue) -> Result<RuntimePluginConfig,
     let plugins = expect_object(plugins_value, "merged settings.plugins")?;
 
     if let Some(enabled_value) = plugins.get("enabled") {
-        if let Some(enabled) = enabled_value.as_bool() {
-            config.enabled = enabled;
-        } else {
-            config.enabled_plugins =
-                parse_bool_map(enabled_value, "merged settings.plugins.enabled")?;
-        }
+        config.enabled_plugins = parse_bool_map(enabled_value, "merged settings.plugins.enabled")?;
     }
     config.external_directories =
         optional_string_array(plugins, "externalDirectories", "merged settings.plugins")?

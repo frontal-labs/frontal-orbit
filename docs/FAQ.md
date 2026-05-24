@@ -212,7 +212,7 @@ orbit plugin install plugin-name
 
 ### Where can I find plugins?
 
-- Official plugin registry: https://plugins.orbit.ai
+- Official plugin registry: https://github.com/frontal-labs/frontal-orbit
 - Community plugins on GitHub
 - Built-in plugins included with Orbit
 
@@ -418,7 +418,7 @@ orbit help <command>
 orbit doctor
 
 # Community support
-# GitHub Issues: https://github.com/orbit-org/orbit-cli/issues
+# GitHub Issues: https://github.com/frontal-labs/frontal-orbit/issues
 ```
 
 ### How do I report bugs?
@@ -505,4 +505,4 @@ Orbit is maintained by the Orbit team and community contributors.
 
 ---
 
-Still have questions? Check the [documentation](./README.md) or [open an issue](https://github.com/orbit-org/orbit-cli/issues).
+Still have questions? Check the [documentation](./README.md) or [open an issue](https://github.com/frontal-labs/frontal-orbit/issues).

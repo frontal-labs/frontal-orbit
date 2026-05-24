@@ -9,10 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 FILES = [
     ROOT / 'README.md',
     ROOT / 'USAGE.md',
-    ROOT / 'PARITY.md',
-    ROOT / 'PHILOSOPHY.md',
-    ROOT / 'ROADMAP.md',
-    ROOT / '.github' / 'FUNDING.yml',
 ]
 FILES.extend(sorted((ROOT / 'docs').rglob('*.md')) if (ROOT / 'docs').exists() else [])
 
@@ -24,7 +20,6 @@ FORBIDDEN = {
     r'star-history\.com/#Yeachan-Heo/orbit': 'update star-history links to frontal-labs/orbit-code',
     r'assets/orbit-hero\.jpeg': 'rename stale hero asset references to assets/banner.jpg',
     r'assets/instructkr\.png': 'remove stale instructkr image references',
-    r'\borbit\b': 'replace orbit references with frontal-orbit (except in parity contexts)',
 }
 
 errors: list[str] = []

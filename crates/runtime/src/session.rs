@@ -233,7 +233,7 @@ impl Session {
         let mut object = BTreeMap::new();
         object.insert(
             "version".to_string(),
-            JsonValue::Integer(i64::from(self.version)),
+            JsonValue::Number(i64::from(self.version)),
         );
         object.insert(
             "session_id".to_string(),
@@ -241,11 +241,11 @@ impl Session {
         );
         object.insert(
             "created_at_ms".to_string(),
-            JsonValue::Integer(i64_from_u64(self.created_at_ms, "created_at_ms")?),
+            JsonValue::Number(i64_from_u64(self.created_at_ms, "created_at_ms")?),
         );
         object.insert(
             "updated_at_ms".to_string(),
-            JsonValue::Integer(i64_from_u64(self.updated_at_ms, "updated_at_ms")?),
+            JsonValue::Number(i64_from_u64(self.updated_at_ms, "updated_at_ms")?),
         );
         object.insert(
             "messages".to_string(),
@@ -432,7 +432,7 @@ impl Session {
         );
         object.insert(
             "version".to_string(),
-            JsonValue::Integer(i64::from(self.version)),
+            JsonValue::Number(i64::from(self.version)),
         );
         object.insert(
             "session_id".to_string(),
@@ -440,11 +440,11 @@ impl Session {
         );
         object.insert(
             "created_at_ms".to_string(),
-            JsonValue::Integer(i64_from_u64(self.created_at_ms, "created_at_ms")?),
+            JsonValue::Number(i64_from_u64(self.created_at_ms, "created_at_ms")?),
         );
         object.insert(
             "updated_at_ms".to_string(),
-            JsonValue::Integer(i64_from_u64(self.updated_at_ms, "updated_at_ms")?),
+            JsonValue::Number(i64_from_u64(self.updated_at_ms, "updated_at_ms")?),
         );
         if let Some(fork) = &self.fork {
             object.insert("fork".to_string(), fork.to_json());
@@ -651,11 +651,11 @@ impl SessionCompaction {
         let mut object = BTreeMap::new();
         object.insert(
             "count".to_string(),
-            JsonValue::Integer(i64::from(self.count)),
+            JsonValue::Number(i64::from(self.count)),
         );
         object.insert(
             "removed_message_count".to_string(),
-            JsonValue::Integer(i64_from_usize(
+            JsonValue::Number(i64_from_usize(
                 self.removed_message_count,
                 "removed_message_count",
             )?),
@@ -675,11 +675,11 @@ impl SessionCompaction {
         );
         object.insert(
             "count".to_string(),
-            JsonValue::Integer(i64::from(self.count)),
+            JsonValue::Number(i64::from(self.count)),
         );
         object.insert(
             "removed_message_count".to_string(),
-            JsonValue::Integer(i64_from_usize(
+            JsonValue::Number(i64_from_usize(
                 self.removed_message_count,
                 "removed_message_count",
             )?),
@@ -745,19 +745,19 @@ fn usage_to_json(usage: TokenUsage) -> JsonValue {
     let mut object = BTreeMap::new();
     object.insert(
         "input_tokens".to_string(),
-        JsonValue::Integer(i64::from(usage.input_tokens)),
+        JsonValue::Number(i64::from(usage.input_tokens)),
     );
     object.insert(
         "output_tokens".to_string(),
-        JsonValue::Integer(i64::from(usage.output_tokens)),
+        JsonValue::Number(i64::from(usage.output_tokens)),
     );
     object.insert(
         "cache_creation_input_tokens".to_string(),
-        JsonValue::Integer(i64::from(usage.cache_creation_input_tokens)),
+        JsonValue::Number(i64::from(usage.cache_creation_input_tokens)),
     );
     object.insert(
         "cache_read_input_tokens".to_string(),
-        JsonValue::Integer(i64::from(usage.cache_read_input_tokens)),
+        JsonValue::Number(i64::from(usage.cache_read_input_tokens)),
     );
     JsonValue::Object(object)
 }
@@ -992,7 +992,7 @@ mod tests {
         let path = temp_session_path("legacy");
         let legacy = JsonValue::Object(
             [
-                ("version".to_string(), JsonValue::Integer(1)),
+                ("version".to_string(), JsonValue::Number(1)),
                 (
                     "messages".to_string(),
                     JsonValue::Array(vec![ConversationMessage::user_text("legacy").to_json()]),
@@ -1164,7 +1164,7 @@ mod tests {
     fn rejects_legacy_session_json_without_messages() {
         // given
         let session = JsonValue::Object(
-            [("version".to_string(), JsonValue::Integer(1))]
+            [("version".to_string(), JsonValue::Number(1))]
                 .into_iter()
                 .collect(),
         );

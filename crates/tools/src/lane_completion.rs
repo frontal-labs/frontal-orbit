@@ -19,6 +19,7 @@ use crate::AgentOutput;
 ///
 /// Returns `Some(LaneContext)` with `completed = true` if all conditions met,
 /// `None` if lane should remain active.
+// TODO: Wire this into the lane lifecycle when automatic completion is enabled.
 #[allow(dead_code)]
 pub(crate) fn detect_lane_completion(
     output: &AgentOutput,
@@ -66,6 +67,7 @@ pub(crate) fn detect_lane_completion(
 }
 
 /// Evaluates policy actions for a completed lane.
+// TODO: Wire this into the lane lifecycle when automatic completion is enabled.
 #[allow(dead_code)]
 pub(crate) fn evaluate_completed_lane(context: &LaneContext) -> Vec<PolicyAction> {
     let engine = PolicyEngine::new(vec![

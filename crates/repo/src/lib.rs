@@ -2,8 +2,37 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+const GIT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Spawn a child and wait for it to complete with a timeout, collecting stdout + stderr.
+fn wait_for_output_with_timeout(
+    child: std::process::Child,
+) -> io::Result<Option<std::process::Output>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = child.wait_with_output();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(GIT_TIMEOUT) {
+        Ok(Ok(output)) => Ok(Some(output)),
+        Ok(Err(e)) => Err(e),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("git command timed out after {GIT_TIMEOUT:?}"),
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+            io::ErrorKind::Other,
+            "child process panicked",
+        )),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoSource {
@@ -303,27 +332,39 @@ fn clone_into(source: &RepoSource, checkout_root: &Path) -> Result<(), RepoPrepE
     })?;
     fs::create_dir_all(parent)?;
 
-    let output = Command::new("git")
+    let child = Command::new("git")
         .arg("clone")
         .arg("--")
         .arg(source.as_arg())
         .arg(checkout_root.as_os_str())
-        .output()?;
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
 
-    if output.status.success() {
-        return Ok(());
+    match wait_for_output_with_timeout(child)? {
+        Some(output) if output.status.success() => Ok(()),
+        Some(output) => Err(RepoPrepError::Git {
+            args: vec![
+                "clone".to_string(),
+                "--".to_string(),
+                source.display(),
+                checkout_root.display().to_string(),
+            ],
+            status: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }),
+        None => Err(RepoPrepError::Git {
+            args: vec![
+                "clone".to_string(),
+                "--".to_string(),
+                source.display(),
+                checkout_root.display().to_string(),
+            ],
+            status: None,
+            stderr: format!("git clone timed out after {GIT_TIMEOUT:?}"),
+        }),
     }
-
-    Err(RepoPrepError::Git {
-        args: vec![
-            "clone".to_string(),
-            "--".to_string(),
-            source.display(),
-            checkout_root.display().to_string(),
-        ],
-        status: output.status.code(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
 }
 
 fn checkout_target(
@@ -368,12 +409,30 @@ fn resolve_base_ref(checkout_root: &Path, base_ref: &str) -> Result<String, Repo
 }
 
 fn ref_exists(checkout_root: &Path, reference: &str) -> Result<bool, RepoPrepError> {
-    let output = Command::new("git")
+    let child = Command::new("git")
         .arg("-C")
         .arg(checkout_root)
         .args(["rev-parse", "--verify", "--quiet", reference])
-        .output()?;
-    Ok(output.status.success())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    match wait_for_output_with_timeout(child)? {
+        Some(output) => Ok(output.status.success()),
+        None => Err(RepoPrepError::Git {
+            args: vec![
+                "-C".to_string(),
+                checkout_root.display().to_string(),
+                "rev-parse".to_string(),
+                "--verify".to_string(),
+                "--quiet".to_string(),
+                reference.to_string(),
+            ],
+            status: None,
+            stderr: format!("git command timed out after {GIT_TIMEOUT:?}"),
+        }),
+    }
 }
 
 fn current_ref(checkout_root: &Path) -> Result<String, RepoPrepError> {
@@ -417,18 +476,30 @@ fn git_stdout<const N: usize>(
     checkout_root: &Path,
     args: [&str; N],
 ) -> Result<Option<String>, RepoPrepError> {
-    let output = Command::new("git")
+    let child = Command::new("git")
         .arg("-C")
         .arg(checkout_root)
         .args(args)
-        .output()?;
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
 
-    if !output.status.success() {
-        return Ok(None);
+    match wait_for_output_with_timeout(child)? {
+        Some(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok((!stdout.is_empty()).then_some(stdout))
+        }
+        Some(_) => Ok(None),
+        None => Err(RepoPrepError::Git {
+            args: std::iter::once("-C".to_string())
+                .chain(std::iter::once(checkout_root.display().to_string()))
+                .chain(args.into_iter().map(str::to_string))
+                .collect(),
+            status: None,
+            stderr: format!("git command timed out after {GIT_TIMEOUT:?}"),
+        }),
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok((!stdout.is_empty()).then_some(stdout))
 }
 
 fn git_in<const N: usize>(checkout_root: &Path, args: [&str; N]) -> Result<(), RepoPrepError> {
@@ -445,20 +516,31 @@ fn git_in_with_env<const N: usize>(
     for (key, value) in env_vars {
         command.env(key, value);
     }
-    let output = command.output()?;
+    let child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
 
-    if output.status.success() {
-        return Ok(());
+    match wait_for_output_with_timeout(child)? {
+        Some(output) if output.status.success() => Ok(()),
+        Some(output) => Err(RepoPrepError::Git {
+            args: std::iter::once("-C".to_string())
+                .chain(std::iter::once(checkout_root.display().to_string()))
+                .chain(args.into_iter().map(str::to_string))
+                .collect(),
+            status: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }),
+        None => Err(RepoPrepError::Git {
+            args: std::iter::once("-C".to_string())
+                .chain(std::iter::once(checkout_root.display().to_string()))
+                .chain(args.into_iter().map(str::to_string))
+                .collect(),
+            status: None,
+            stderr: format!("git command timed out after {GIT_TIMEOUT:?}"),
+        }),
     }
-
-    Err(RepoPrepError::Git {
-        args: std::iter::once("-C".to_string())
-            .chain(std::iter::once(checkout_root.display().to_string()))
-            .chain(args.into_iter().map(str::to_string))
-            .collect(),
-        status: output.status.code(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
 }
 
 fn sanitize_checkout_id(checkout_id: &str) -> String {

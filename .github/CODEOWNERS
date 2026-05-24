@@ -22,7 +22,7 @@ docs/ @frontal-labs
 Cargo.toml @frontal-labs
 Cargo.lock @frontal-labs
 Dockerfile* @frontal-labs
-docker-compose.yml @frontal-labs
+infrastructure/compose/docker-compose*.yml @frontal-labs
 
 # Scripts and automation
 scripts/ @frontal-labs

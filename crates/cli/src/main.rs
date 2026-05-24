@@ -188,10 +188,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => LiveCli::new_with_provider(model, provider, true, allowed_tools, permission_mode)?
             .run_turn_with_output(&prompt, output_format)?,
         CliAction::Doctor { output_format } => run_doctor(output_format)?,
-        CliAction::Init {
-            path,
-            output_format,
-        } => run_init(path, output_format)?,
+        CliAction::Init { output_format } => run_init(output_format)?,
         CliAction::Hosted {
             command,
             output_format,
@@ -368,7 +365,6 @@ enum CliAction {
         output_format: CliOutputFormat,
     },
     Init {
-        path: Option<PathBuf>,
         output_format: CliOutputFormat,
     },
     Hosted {
@@ -668,7 +664,6 @@ enum LocalHelpTopic {
     Status,
     Sandbox,
     Doctor,
-    Init,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -887,13 +882,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         }
         "hosted" => parse_hosted_cli_action(&rest[1..], output_format),
         "system-prompt" => parse_system_prompt_args(&rest[1..], output_format),
-        "init" => {
-            let path = rest.get(1).map(PathBuf::from);
-            Ok(CliAction::Init {
-                path,
-                output_format,
-            })
-        }
+        "init" => Ok(CliAction::Init { output_format }),
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {
@@ -936,7 +925,6 @@ fn parse_local_help_action(rest: &[String]) -> Option<Result<CliAction, String>>
         "status" => LocalHelpTopic::Status,
         "sandbox" => LocalHelpTopic::Sandbox,
         "doctor" => LocalHelpTopic::Doctor,
-        "init" => LocalHelpTopic::Init,
         _ => return None,
     };
     Some(Ok(CliAction::HelpTopic(topic)))
@@ -5058,8 +5046,8 @@ fn run_resume_command(
             message: Some(render_memory_report()?),
             json: None,
         }),
-        SlashCommand::Init { path } => {
-            let message = init_claude_md(path.as_ref().map(PathBuf::from))?;
+        SlashCommand::Init => {
+            let message = init_claude_md()?;
             Ok(ResumeCommandOutcome {
                 session: session.clone(),
                 message: Some(message.clone()),
@@ -5978,13 +5966,7 @@ impl LiveCli {
             |path| path.display().to_string(),
         );
         format!(
-            "  \x1b[90m█████╗ ███████╗ ██████╗ ██╗████████╗\x1b[0m\n\
-  \x1b[90m██╔══██╗██╔════╝██╔══██╗██║╚══██╔══╝\x1b[0m\n\
-  \x1b[90m██████╔╝█████╗  ██║  ██║██║   ██║   \x1b[0m\n\
-  \x1b[90m██╔══██╗██╔══╝  ██║  ██║██║   ██║   \x1b[0m\n\
-  \x1b[90m██████╔╝███████╗██████╔╝██║   ██║   \x1b[0m\n\
-  \x1b[90m╚═════╝ ╚══════╝╚═════╝ ╚═╝   ╚═╝   \x1b[0m\n\n\
-\x1b[38;5;208mOrbit\x1b[0m \n\n\
+            "\x1b[38;5;208mCode\x1b[0m \n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
@@ -6235,8 +6217,8 @@ impl LiveCli {
                 Self::print_memory()?;
                 false
             }
-            SlashCommand::Init { path } => {
-                run_init(path.map(PathBuf::from), CliOutputFormat::Text)?;
+            SlashCommand::Init => {
+                run_init(CliOutputFormat::Text)?;
                 false
             }
             SlashCommand::Diff => {
@@ -7282,19 +7264,12 @@ fn format_status_report(
 ) -> String {
     [
         format!(
-            r#"  ██████╗ ██████╗ ██████╗ ██╗████████╗
- ██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝
- ██║   ██║██████╔╝██████╔╝██║   ██║   
- ██║   ██║██╔══██╗██╔══██╗██║   ██║   
- ╚██████╔╝██║  ██║██████╔╝██║   ██║   
-  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝   
-
-Status
+            "Status
   Model            {model}
   Permission mode  {permission_mode}
   Messages         {}
   Turns            {}
-  Estimated tokens {}"#,
+  Estimated tokens {}",
             usage.message_count, usage.turns, usage.estimated_tokens,
         ),
         format!(
@@ -7922,13 +7897,6 @@ fn render_help_topic(topic: LocalHelpTopic) -> String {
   Output           local-only health report; no provider request or session resume required
   Related          /doctor · orbit --resume latest /doctor"
             .to_string(),
-        LocalHelpTopic::Init => "Initialize Repository
-  Usage            orbit init [DIRECTORY]
-  Purpose          bootstrap a new repository for Frontal Orbit
-  Output           creates .orbit directory, .orbit.json, and updates .gitignore
-  Arguments        [DIRECTORY]  Target directory to initialize (defaults to current dir)
-  Related          /status · orbit status"
-            .to_string(),
     }
 }
 
@@ -8038,24 +8006,13 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
     ))
 }
 
-fn init_claude_md(path: Option<PathBuf>) -> Result<String, Box<dyn std::error::Error>> {
-    let target_dir = if let Some(p) = path {
-        if p.is_absolute() {
-            p
-        } else {
-            env::current_dir()?.join(p)
-        }
-    } else {
-        env::current_dir()?
-    };
-    Ok(initialize_repo(&target_dir)?.render())
+fn init_claude_md() -> Result<String, Box<dyn std::error::Error>> {
+    let cwd = env::current_dir()?;
+    Ok(initialize_repo(&cwd)?.render())
 }
 
-fn run_init(
-    path: Option<PathBuf>,
-    output_format: CliOutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let message = init_claude_md(path)?;
+fn run_init(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
+    let message = init_claude_md()?;
     match output_format {
         CliOutputFormat::Text => println!("{message}"),
         CliOutputFormat::Json => println!(
@@ -8385,7 +8342,7 @@ fn render_version_report() -> String {
     let git_sha = GIT_SHA.unwrap_or("unknown");
     let target = BUILD_TARGET.unwrap_or("unknown");
     format!(
-        "```\n  ██████╗ ██████╗ ██████╗ ██╗████████╗\n ██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝\n ██║   ██║██████╔╝██████╔╝██║   ██║   \n ██║   ██║██╔══██╗██╔══██╗██║   ██║   \n ╚██████╔╝██║  ██║██████╔╝██║   ██║   \n  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝   \n```\nOrbit\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}"
+        "Orbit\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}"
     )
 }
 
@@ -10586,14 +10543,6 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
 
 #[allow(clippy::too_many_lines)]
 fn print_help_to(out: &mut impl Write) -> io::Result<()> {
-    writeln!(out, "```")?;
-    writeln!(out, "  ██████╗ ██████╗ ██████╗ ██╗████████╗")?;
-    writeln!(out, " ██╔═══██╗██╔══██╗██╔══██╗██║╚══██╔══╝")?;
-    writeln!(out, " ██║   ██║██████╔╝██████╔╝██║   ██║   ")?;
-    writeln!(out, " ██║   ██║██╔══██╗██╔══██╗██║   ██║   ")?;
-    writeln!(out, " ╚██████╔╝██║  ██║██████╔╝██║   ██║   ")?;
-    writeln!(out, "  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝   ╚═╝   ")?;
-    writeln!(out, "```")?;
     writeln!(out, "orbit v{VERSION}")?;
     writeln!(out)?;
     writeln!(out, "Usage:")?;
@@ -11427,7 +11376,6 @@ mod tests {
         assert_eq!(
             parse_args(&["init".to_string()]).expect("init should parse"),
             CliAction::Init {
-                path: None,
                 output_format: CliOutputFormat::Text,
             }
         );
@@ -13463,10 +13411,7 @@ UU conflicted.rs",
             SlashCommand::parse("/memory"),
             Ok(Some(SlashCommand::Memory))
         );
-        assert_eq!(
-            SlashCommand::parse("/init"),
-            Ok(Some(SlashCommand::Init { path: None }))
-        );
+        assert_eq!(SlashCommand::parse("/init"), Ok(Some(SlashCommand::Init)));
         assert_eq!(
             SlashCommand::parse("/session fork incident-review"),
             Ok(Some(SlashCommand::Session {
@@ -13603,7 +13548,7 @@ UU conflicted.rs",
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let rendered = crate::init::render_init_claude_md(&workspace_root);
-        assert!(rendered.contains("# AGENTS.md"));
+        assert!(rendered.contains("# ORBIT.md"));
         assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
     }
 

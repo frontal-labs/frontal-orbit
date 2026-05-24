@@ -312,9 +312,9 @@ orbit mcp config filesystem --timeout 60 --auto-start
   "plugins": {
     "plugins_dir": "~/.orbit/plugins",
     "auto_load": ["plugin-name"],
-    "registry_url": "https://plugins.orbit.ai",
+    "registry_url": "https://github.com/frontal-labs/frontal-orbit",
     "update_check_interval": "24h",
-    "trusted_sources": ["https://github.com", "https://plugins.orbit.ai"]
+    "trusted_sources": ["https://github.com", "https://github.com/frontal-labs/frontal-orbit"]
   }
 }
 ```

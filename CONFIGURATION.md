@@ -426,4 +426,4 @@ if enabled_providers == 0 {
 6. **Testing**: Test configuration changes in isolation
 7. **Monitoring**: Monitor configuration changes and their effects
 
-For more detailed examples and integration guides, see [`./CORE_CONFIG_INTEGRATION.md`](./CORE_CONFIG_INTEGRATION.md).
+For more detailed examples and integration guides, see the [Configuration guide](./CONFIGURATION.md).

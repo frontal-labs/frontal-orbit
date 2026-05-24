@@ -9,7 +9,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY bunfig.toml ./
 
-RUN bun install --frozen-lockfile
+# Generate lockfile if not present (bun.lockb is gitignored)
+RUN if [ -f bun.lockb ]; then bun install --frozen-lockfile; else bun install && echo "Note: bun.lockb regenerated; consider committing it for reproducible builds"; fi
 
 # Copy source code
 COPY . .

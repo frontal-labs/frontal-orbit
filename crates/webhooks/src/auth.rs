@@ -35,11 +35,11 @@ impl HmacAuthenticator {
 
         // Decode hex signature
         let expected_bytes =
-            hex::decode(hex_sig).map_err(|e| format!("Failed to decode signature: {}", e))?;
+            hex::decode(hex_sig).map_err(|e| format!("Failed to decode signature: {e}"))?;
 
         // Compute HMAC
         let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())
-            .map_err(|e| format!("Failed to create HMAC: {}", e))?;
+            .map_err(|e| format!("Failed to create HMAC: {e}"))?;
         mac.update(payload);
 
         // Verify in constant time.
@@ -53,7 +53,7 @@ impl HmacAuthenticator {
         mac.update(payload);
         let result = mac.finalize();
         let bytes = result.into_bytes();
-        format!("sha256={}", hex::encode(bytes))
+        format!("sha256={encoded}", encoded = hex::encode(bytes))
     }
 }
 

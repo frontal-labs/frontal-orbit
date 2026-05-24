@@ -218,13 +218,13 @@ orbit prompt "Use filesystem to watch /tmp for changes"
 orbit prompt "Use GitHub to list my repositories"
 
 # Get repository information
-orbit prompt "Use GitHub to get information about orbit-org/orbit-cli"
+orbit prompt "Use GitHub to get information about frontal-labs/frontal-orbit"
 
 # List issues
-orbit prompt "Use GitHub to list open issues in orbit-org/orbit-cli"
+orbit prompt "Use GitHub to list open issues in frontal-labs/frontal-orbit"
 
 # Create issue
-orbit prompt "Use GitHub to create an issue in orbit-org/orbit-cli with title 'Bug found'"
+orbit prompt "Use GitHub to create an issue in frontal-labs/frontal-orbit with title 'Bug found'"
 ```
 
 ### Database Operations

@@ -9,7 +9,7 @@
     "providers": {
       "anthropic": {
         "enabled": true,
-        "default_model": "claude-3-5-sonnet-20241022"
+        "default_model": "claude-opus-4-6"
       },
       "openai": {
         "enabled": true,
@@ -28,7 +28,6 @@
   "paths": {
     "config_home": "~/.orbit",
     "home": "~/.orbit",
-    "codex_home": "~/.codex",
     "sandbox_home": "/workspace/.sandbox-home",
     "cache_dir": "~/.orbit/cache",
     "logs_dir": "~/.orbit/logs"
