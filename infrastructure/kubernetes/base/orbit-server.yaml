@@ -35,9 +35,9 @@ spec:
           workingDir: /workspace
           envFrom:
             - configMapRef:
-                name: orbit-config
+                name: orbit-server-config
             - secretRef:
-                name: orbit-secrets
+                name: orbit-server-secrets
           volumeMounts:
             - name: workspace
               mountPath: /workspace

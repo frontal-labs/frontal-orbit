@@ -4,8 +4,7 @@ FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef
 RUN rm /etc/nginx/conf.d/default.conf
 
 # Copy custom nginx config
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY web /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/tools.conf
 
 # Create SSL directory
 RUN mkdir -p /etc/ssl/certs /etc/ssl/private
