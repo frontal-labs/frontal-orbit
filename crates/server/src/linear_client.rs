@@ -28,7 +28,7 @@ struct LinearTokenResponse {
     access_token: String,
     refresh_token: Option<String>,
     expires_in: Option<u64>,
-    scope: Option<Vec<String>>,
+    scope: Option<String>,
 }
 
 fn now_unix_timestamp() -> u64 {
@@ -136,7 +136,15 @@ impl LinearClient {
                 .refresh_token
                 .or(Some(refresh_token.to_string())),
             expires_at,
-            scopes: token_response.scope.unwrap_or_default(),
+            scopes: token_response
+                .scope
+                .map(|s| {
+                    s.split_whitespace()
+                        .map(str::trim)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }))
     }
 

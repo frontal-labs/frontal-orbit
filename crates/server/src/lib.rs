@@ -1789,7 +1789,12 @@ async fn linear_oauth_callback(
         expires_at: raw.expires_in.map(|secs| now + secs),
         scopes: raw
             .scope
-            .map(|s| s.split(',').map(str::trim).map(String::from).collect())
+            .map(|s| {
+                s.split_whitespace()
+                    .map(str::trim)
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default(),
     };
 
