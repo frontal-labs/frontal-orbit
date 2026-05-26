@@ -1,0 +1,32 @@
+app = "frontal-orbit"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  ORBIT_SERVER_HOST = "0.0.0.0"
+  ORBIT_SERVER_PORT = "8788"
+  ORBIT_SERVER_LANE_TRANSPORT = "in-memory"
+  ORBIT_SERVER_STATE_FILE = "/var/lib/orbit/server/state.json"
+  ORBIT_SERVER_WORKSPACE_ROOT = "/workspace/workspaces"
+  RUST_LOG = "info"
+
+[http_service]
+  internal_port = 8788
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[mounts]
+  source = "orbit_state"
+  destination = "/var/lib/orbit/server"
+
