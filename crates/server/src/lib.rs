@@ -1625,6 +1625,7 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .route("/v1/webhooks/github", post(github_webhook))
         .route("/v1/webhooks/linear", post(linear_webhook))
         .route("/v1/webhooks/graphite", post(graphite_webhook))
+        .route("/v1/oauth/github/authorize", get(github_oauth_authorize))
         .route("/v1/oauth/github/callback", get(github_oauth_callback))
         .route("/v1/oauth/linear/authorize", get(linear_oauth_authorize))
         .route("/v1/oauth/linear/callback", get(linear_oauth_callback))
@@ -1672,17 +1673,127 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
+async fn github_oauth_authorize(
+    State(state): State<Arc<ServerState>>,
+) -> Result<axum::response::Redirect, AppError> {
+    let client_id = std::env::var("ORBIT_GITHUB_CLIENT_ID")
+        .map_err(|_| AppError::internal("ORBIT_GITHUB_CLIENT_ID not set"))?;
+    let redirect_uri = std::env::var("ORBIT_GITHUB_OAUTH_REDIRECT_URI")
+        .unwrap_or_else(|_| "https://frontal-orbit.fly.dev/v1/oauth/github/callback".to_string());
+
+    let csrf_state = generate_state()
+        .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
+
+    let mut states = state.pending_oauth_states.lock().unwrap();
+    states.insert(
+        csrf_state.clone(),
+        LinearOAuthPendingState {
+            state: csrf_state.clone(),
+            code_verifier: String::new(),
+            redirect_uri: redirect_uri.clone(),
+            created_at: Instant::now(),
+        },
+    );
+    states.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(600));
+
+    let authorize_url = format!(
+        "https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&scope=repo,read:org,workflow&state={csrf_state}"
+    );
+
+    Ok(axum::response::Redirect::to(&authorize_url))
+}
+
 async fn github_oauth_callback(
+    State(state): State<Arc<ServerState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Json<serde_json::Value> {
-    let code = params.get("code").map(String::as_str).unwrap_or("missing");
-    let state = params.get("state").map(String::as_str).unwrap_or("missing");
-    Json(json!({
+) -> Result<Json<serde_json::Value>, AppError> {
+    let code = params
+        .get("code")
+        .ok_or_else(|| AppError::bad_request("missing code parameter"))?;
+    let state_param = params
+        .get("state")
+        .ok_or_else(|| AppError::bad_request("missing state parameter"))?;
+
+    let pending = {
+        let mut states = state.pending_oauth_states.lock().unwrap();
+        states.remove(state_param)
+    }
+    .ok_or_else(|| AppError::bad_request("unknown or expired OAuth state"))?;
+
+    if pending.state != *state_param {
+        return Err(AppError::bad_request("OAuth state mismatch"));
+    }
+
+    let client_id = std::env::var("ORBIT_GITHUB_CLIENT_ID")
+        .map_err(|_| AppError::internal("ORBIT_GITHUB_CLIENT_ID not set"))?;
+    let client_secret = std::env::var("ORBIT_GITHUB_CLIENT_SECRET")
+        .map_err(|_| AppError::internal("ORBIT_GITHUB_CLIENT_SECRET not set"))?;
+
+    let params_map = [
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
+        ("code", code.as_str()),
+        ("redirect_uri", pending.redirect_uri.as_str()),
+    ];
+
+    let http = reqwest::Client::new();
+    let response = http
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&params_map)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("token exchange failed: {e}")))?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!("token exchange failed: {body}")));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GitHubTokenResponse {
+        access_token: Option<String>,
+        scope: Option<String>,
+        token_type: Option<String>,
+        error: Option<String>,
+        error_description: Option<String>,
+    }
+
+    let raw: GitHubTokenResponse = response
+        .json()
+        .await
+        .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
+
+    if let Some(error) = raw.error {
+        return Err(AppError::internal(format!(
+            "GitHub OAuth failed: {}",
+            raw.error_description.unwrap_or(error)
+        )));
+    }
+
+    let access_token = raw
+        .access_token
+        .ok_or_else(|| AppError::internal("GitHub returned no access token"))?;
+
+    let token_set = OAuthTokenSet {
+        access_token: access_token.clone(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: raw
+            .scope
+            .map(|s| s.split(',').map(str::trim).map(String::from).collect())
+            .unwrap_or_default(),
+    };
+
+    save_oauth_credentials_for(&token_set, "github")
+        .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
+
+    Ok(Json(json!({
         "ok": true,
-        "message": "GitHub OAuth callback received",
-        "code": code,
-        "state": state
-    }))
+        "provider": "github",
+        "token_type": raw.token_type,
+        "scopes": token_set.scopes,
+    })))
 }
 
 async fn linear_oauth_authorize(
