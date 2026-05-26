@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let server = MockAnthropicService::spawn_on(&bind_addr).await?;
-    println!("MOCK_ANTHROPIC_BASE_URL={}", server.base_url());
+    println!("MOCK_ORBIT_BASE_URL={}", server.base_url());
     tokio::signal::ctrl_c().await?;
     drop(server);
     Ok(())

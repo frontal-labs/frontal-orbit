@@ -61,7 +61,7 @@ orbit --model claude-sonnet-4-6 prompt "Explain this codebase"
 
 ```bash
 # Set API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 
 # Configure default model
 orbit config set runtime.default_model "claude-sonnet-4-6"

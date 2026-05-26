@@ -201,7 +201,7 @@ services:
       - orbit-data:/home/orbit/.orbit
     environment:
       - ORBIT_LOG_LEVEL=debug
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ORBIT_API_KEY=${ORBIT_API_KEY}
       - ORBIT_DEFAULT_MODEL=claude-sonnet-4-6
     working_dir: /app
     command: repl
@@ -239,7 +239,7 @@ services:
         max_attempts: 3
     environment:
       - ORBIT_LOG_LEVEL=info
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ORBIT_API_KEY=${ORBIT_API_KEY}
       - ORBIT_PERMISSION_MODE=safe-mode
     volumes:
       - orbit-config:/home/orbit/.orbit
@@ -416,7 +416,7 @@ spec:
         env:
         - name: ORBIT_LOG_LEVEL
           value: "info"
-        - name: ANTHROPIC_API_KEY
+        - name: ORBIT_API_KEY
           valueFrom:
             secretKeyRef:
               name: orbit-secrets

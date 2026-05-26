@@ -232,8 +232,8 @@ export ORBIT_LOGS_DIR="/custom/logs"
 ### API Provider Variables
 ```bash
 # Anthropic
-export ANTHROPIC_API_KEY="sk-ant-..."
-export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+export ORBIT_API_KEY="sk-ant-..."
+export ORBIT_BASE_URL="https://api.anthropic.com"
 
 # OpenAI
 export OPENAI_API_KEY="sk-..."

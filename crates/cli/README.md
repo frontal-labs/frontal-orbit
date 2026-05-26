@@ -126,7 +126,7 @@ The CLI supports multiple configuration methods:
 
 ### Environment Variables
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export XAI_API_KEY="xai-..."
 export FRONTAL_API_KEY="frontal-..."

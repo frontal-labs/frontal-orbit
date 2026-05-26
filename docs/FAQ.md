@@ -64,7 +64,7 @@ cargo build --workspace
 
 ```bash
 # Environment variables (recommended)
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export XAI_API_KEY="xai-..."
 
@@ -281,7 +281,7 @@ Check your API key configuration:
 
 ```bash
 # Verify environment variable
-echo $ANTHROPIC_API_KEY
+echo $ORBIT_API_KEY
 
 # Test API connectivity
 orbit auth test anthropic

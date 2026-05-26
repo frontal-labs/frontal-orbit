@@ -20,7 +20,7 @@ permissions:
 jobs:
   check-links:
     name: Check Documentation Links
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
           
   build-docs:
     name: Build Documentation
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     
     steps:
       - uses: actions/checkout@v4

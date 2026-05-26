@@ -27,7 +27,7 @@ This guide covers how to set up a development environment, contribute to the pro
    cp .env.example .env
    
    # Edit .env with your API keys
-   export ANTHROPIC_API_KEY="sk-ant-..."
+   export ORBIT_API_KEY="sk-ant-..."
    ```
 
 ## Development Workflow

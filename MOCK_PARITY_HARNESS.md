@@ -43,4 +43,4 @@ Scenario-to-PARITY mappings live in `mock_parity_scenarios.json`.
 cargo run -p mock-anthropic-service -- --bind 127.0.0.1:0
 ```
 
-The server prints `MOCK_ANTHROPIC_BASE_URL=...`; point `ANTHROPIC_BASE_URL` at that URL and use any non-empty `ANTHROPIC_API_KEY`.
+The server prints `MOCK_ORBIT_BASE_URL=...`; point `ORBIT_BASE_URL` at that URL and use any non-empty `ORBIT_API_KEY`.

@@ -44,7 +44,7 @@ Create a `.env` file for local development:
 
 ```bash
 # AI Provider
-ANTHROPIC_API_KEY=sk-ant-...
+ORBIT_API_KEY=sk-ant-...
 
 # Database (for local development)
 DATABASE_URL=sqlite:///tmp/orbit_dev.db

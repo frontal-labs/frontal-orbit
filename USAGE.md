@@ -19,14 +19,14 @@ orbit
 
 - Homebrew for CLI installation, or a Rust toolchain with `cargo` for source builds
 - One of:
-  - `ANTHROPIC_API_KEY` for direct API access
+  - `ORBIT_API_KEY` for direct API access
   - `OPENAI_API_KEY` for OpenAI
   - `XAI_API_KEY` for xAI
   - `FRONTAL_API_KEY` for Frontal's OpenAI-compatible gateway
   - `BEDROCK_API_KEY` for Bedrock-compatible gateways
   - `AZURE_OPENAI_API_KEY` for Azure OpenAI-compatible gateways
   - or local `OLLAMA_BASE_URL` (defaults to `http://localhost:11434`)
-- Optional: `ANTHROPIC_BASE_URL` when targeting a proxy or local service
+- Optional: `ORBIT_BASE_URL` when targeting a proxy or local service
 - Optional: `FRONTAL_BASE_URL` when targeting a custom Frontal gateway URL
 
 ## Configuration
@@ -204,7 +204,7 @@ Supported providers:
 ### API key
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 # or
 export FRONTAL_API_KEY="frontal-..."
 ```

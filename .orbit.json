@@ -2,8 +2,8 @@
   "version": "1.0",
   "providers": {
     "anthropic": {
-      "api_key": "${ANTHROPIC_API_KEY}",
-      "base_url": "${ANTHROPIC_BASE_URL:-https://api.anthropic.com}",
+      "api_key": "${ORBIT_API_KEY}",
+      "base_url": "${ORBIT_BASE_URL:-https://api.anthropic.com}",
       "default_model": "claude-opus-4-6"
     },
     "openai": {

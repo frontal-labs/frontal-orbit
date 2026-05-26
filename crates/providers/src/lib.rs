@@ -32,5 +32,5 @@ pub use types::{
 pub use orbit_telemetry::{
     AnalyticsEvent, AnthropicRequestProfile, ClientIdentity, JsonlTelemetrySink,
     MemoryTelemetrySink, SessionTraceRecord, SessionTracer, TelemetryEvent, TelemetrySink,
-    DEFAULT_ANTHROPIC_VERSION,
+    DEFAULT_ORBIT_VERSION,
 };

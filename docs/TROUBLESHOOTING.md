@@ -110,16 +110,16 @@ ls -la ~/.orbit
 
 **Symptoms:**
 ```
-Error: ANTHROPIC_API_KEY not found
+Error: ORBIT_API_KEY not found
 ```
 
 **Solutions:**
 ```bash
 # Set environment variable
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 
 # Add to shell profile
-echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> ~/.zshrc
+echo 'export ORBIT_API_KEY="sk-ant-..."' >> ~/.zshrc
 
 # Use config file
 orbit config set providers.anthropic.api_key "sk-ant-..."
@@ -138,7 +138,7 @@ Error: Invalid API key
 **Solutions:**
 ```bash
 # Verify API key format
-echo $ANTHROPIC_API_KEY | grep -E "^sk-ant-"
+echo $ORBIT_API_KEY | grep -E "^sk-ant-"
 
 # Test API connectivity
 orbit auth test anthropic

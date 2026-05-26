@@ -2199,8 +2199,8 @@ fn run_doctor(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 #[allow(clippy::too_many_lines)]
 fn check_auth_health() -> DiagnosticCheck {
     let providers = [
-        ("anthropic_api_key", "ANTHROPIC_API_KEY"),
-        ("anthropic_auth_token", "ANTHROPIC_AUTH_TOKEN"),
+        ("anthropic_api_key", "ORBIT_API_KEY"),
+        ("anthropic_auth_token", "ORBIT_AUTH_TOKEN"),
         ("openai_api_key", "OPENAI_API_KEY"),
         ("xai_api_key", "XAI_API_KEY"),
         ("frontal_api_key", "FRONTAL_API_KEY"),
@@ -12455,7 +12455,7 @@ mod tests {
     fn startup_banner_mentions_workflow_completions() {
         let _guard = env_lock();
         // Inject dummy credentials so LiveCli can construct without real Anthropic key
-        std::env::set_var("ANTHROPIC_API_KEY", "test-dummy-key-for-banner-test");
+        std::env::set_var("ORBIT_API_KEY", "test-dummy-key-for-banner-test");
         let root = temp_dir();
         fs::create_dir_all(&root).expect("root dir");
 
@@ -12474,7 +12474,7 @@ mod tests {
         assert!(banner.contains("workflow completions"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ORBIT_API_KEY");
     }
 
     #[test]
@@ -14121,7 +14121,7 @@ UU conflicted.rs",
         let config_home = temp_dir();
         // Inject a dummy API key so runtime construction succeeds without real credentials.
         // This test only exercises plugin lifecycle (init/shutdown), never calls the API.
-        std::env::set_var("ANTHROPIC_API_KEY", "test-dummy-key-for-plugin-lifecycle");
+        std::env::set_var("ORBIT_API_KEY", "test-dummy-key-for-plugin-lifecycle");
         let workspace = temp_dir();
         let source_root = temp_dir();
         fs::create_dir_all(&config_home).expect("config home");
@@ -14170,7 +14170,7 @@ UU conflicted.rs",
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(workspace);
         let _ = fs::remove_dir_all(source_root);
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ORBIT_API_KEY");
     }
 }
 

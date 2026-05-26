@@ -15,7 +15,7 @@ permissions:
 jobs:
   security-audit:
     name: Security Audit
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       
@@ -39,7 +39,7 @@ jobs:
 
   dependency-review:
     name: Dependency Review
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4

@@ -72,12 +72,12 @@ cargo run -p orbit-server
 After installation, configure your API credentials:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 # Or use Frontal's OpenAI-compatible API gateway
 export FRONTAL_API_KEY="frontal-..."
 export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
 # Or use an Anthropic proxy
-export ANTHROPIC_BASE_URL="https://your-proxy.com"
+export ORBIT_BASE_URL="https://your-proxy.com"
 ```
 
 ## Verification

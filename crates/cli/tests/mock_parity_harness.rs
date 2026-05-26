@@ -14,7 +14,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 #[allow(clippy::too_many_lines)]
-#[ignore = "mock service connection not routing: ANTHROPIC_BASE_URL being bypassed"]
+#[ignore = "mock service connection not routing: ORBIT_BASE_URL being bypassed"]
 fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios() {
     let manifest_entries = load_scenario_manifest();
     let manifest = manifest_entries
@@ -295,8 +295,8 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
     command
         .current_dir(&workspace.root)
         .env_clear()
-        .env("ANTHROPIC_API_KEY", "test-parity-key")
-        .env("ANTHROPIC_BASE_URL", base_url)
+        .env("ORBIT_API_KEY", "test-parity-key")
+        .env("ORBIT_BASE_URL", base_url)
         .env("ORBIT_CONFIG_HOME", &workspace.config_home)
         .env("HOME", &workspace.home)
         .env("NO_COLOR", "1")
