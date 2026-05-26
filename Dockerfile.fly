@@ -33,7 +33,7 @@ WORKDIR /workspace
 
 COPY --from=builder /src/target/release/orbit-server /usr/local/bin/orbit-server
 
-RUN mkdir -p /workspace/workspaces /var/lib/orbit/server \
+RUN mkdir -p /workspace/workspaces /var/lib/orbit/server /var/lib/orbit/agents \
     && chown -R orbit:orbit /workspace /var/lib/orbit
 
 USER orbit
