@@ -1613,6 +1613,7 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .route("/v1/webhooks/github", post(github_webhook))
         .route("/v1/webhooks/linear", post(linear_webhook))
         .route("/v1/webhooks/graphite", post(graphite_webhook))
+        .route("/v1/oauth/github/callback", get(github_oauth_callback))
         .merge(protected)
         .with_state(state)
 }
@@ -1653,6 +1654,19 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
+}
+
+async fn github_oauth_callback(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let code = params.get("code").map(String::as_str).unwrap_or("missing");
+    let state = params.get("state").map(String::as_str).unwrap_or("missing");
+    Json(json!({
+        "ok": true,
+        "message": "GitHub OAuth callback received",
+        "code": code,
+        "state": state
+    }))
 }
 
 async fn status(State(state): State<Arc<ServerState>>) -> Json<StatusResponse> {
