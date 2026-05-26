@@ -1766,10 +1766,32 @@ async fn linear_oauth_callback(
         return Err(AppError::internal(format!("token exchange failed: {body}")));
     }
 
-    let token_set: OAuthTokenSet = response
+    #[derive(serde::Deserialize)]
+    struct LinearTokenResponse {
+        access_token: String,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        scope: Option<String>,
+    }
+
+    let raw: LinearTokenResponse = response
         .json()
         .await
         .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let token_set = OAuthTokenSet {
+        access_token: raw.access_token,
+        refresh_token: raw.refresh_token,
+        expires_at: raw.expires_in.map(|secs| now + secs),
+        scopes: raw
+            .scope
+            .map(|s| s.split(',').map(str::trim).map(String::from).collect())
+            .unwrap_or_default(),
+    };
 
     save_oauth_credentials_for(&token_set, "linear")
         .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
