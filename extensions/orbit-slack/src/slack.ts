@@ -673,8 +673,17 @@ export class SlackInterface {
         return this.formatLaneFailedEvent(taskLabel, event, summary);
       case "lane.blocked":
         return this.formatLaneBlockedEvent(taskLabel, event);
-      case "lane.green":
-        return { text: `${taskLabel} reported a green lane.` };
+      case "lane.green": {
+        const resultText = payload.result || task.result || "";
+        const truncated =
+          resultText.length > 2800
+            ? resultText.substring(0, 2800) + "\n\n... (truncated)"
+            : resultText;
+        const text = truncated
+          ? `${taskLabel} completed:\n\n${truncated}`
+          : `${taskLabel} reported a green lane.`;
+        return { text };
+      }
       case "approval.requested":
         return this.formatApprovalRequestedEvent(event, task);
       case "approval.resolved":
