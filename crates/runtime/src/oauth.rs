@@ -267,24 +267,32 @@ pub fn credentials_path() -> io::Result<PathBuf> {
 }
 
 pub fn load_oauth_credentials() -> io::Result<Option<OAuthTokenSet>> {
+    load_oauth_credentials_for("oauth")
+}
+
+pub fn load_oauth_credentials_for(provider: &str) -> io::Result<Option<OAuthTokenSet>> {
     let path = credentials_path()?;
     let root = read_credentials_root(&path)?;
-    let Some(oauth) = root.get("oauth") else {
+    let Some(entry) = root.get(provider) else {
         return Ok(None);
     };
-    if oauth.is_null() {
+    if entry.is_null() {
         return Ok(None);
     }
-    let stored = serde_json::from_value::<StoredOAuthCredentials>(oauth.clone())
+    let stored = serde_json::from_value::<StoredOAuthCredentials>(entry.clone())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     Ok(Some(stored.into()))
 }
 
 pub fn save_oauth_credentials(token_set: &OAuthTokenSet) -> io::Result<()> {
+    save_oauth_credentials_for(token_set, "oauth")
+}
+
+pub fn save_oauth_credentials_for(token_set: &OAuthTokenSet, provider: &str) -> io::Result<()> {
     let path = credentials_path()?;
     let mut root = read_credentials_root(&path)?;
     root.insert(
-        "oauth".to_string(),
+        provider.to_string(),
         serde_json::to_value(StoredOAuthCredentials::from(token_set.clone()))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
     );
@@ -292,9 +300,13 @@ pub fn save_oauth_credentials(token_set: &OAuthTokenSet) -> io::Result<()> {
 }
 
 pub fn clear_oauth_credentials() -> io::Result<()> {
+    clear_oauth_credentials_for("oauth")
+}
+
+pub fn clear_oauth_credentials_for(provider: &str) -> io::Result<()> {
     let path = credentials_path()?;
     let mut root = read_credentials_root(&path)?;
-    root.remove("oauth");
+    root.remove(provider);
     write_credentials_root(&path, &root)
 }
 

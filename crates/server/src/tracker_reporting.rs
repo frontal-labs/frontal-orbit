@@ -14,30 +14,25 @@ pub fn maybe_spawn_tracker_report(
     context: HostedTaskContext,
     event: TrackerEvent<'_>,
 ) {
-    let linear_client = LinearClient::from_env();
     let graphite_client = GraphiteClient::from_env();
-    if linear_client.is_none() && graphite_client.is_none() {
-        return;
-    }
-
+    let linear_issue_id = context.linear_issue_id.clone();
+    let graphite_stack_id = context.graphite_stack_id.clone();
     let message = render_message(&task_id, &event);
 
-    // Linear
-    if let (Some(client), Some(issue_id)) = (linear_client.clone(), context.linear_issue_id.clone())
-    {
+    if linear_issue_id.is_some() {
         let body = message.clone();
         tokio::spawn(async move {
-            let req = LinearIssueCommentRequest { issue_id, body };
-            if let Err(err) = client.create_issue_comment(req).await {
-                eprintln!("linear status post failed: {err}");
+            let client = LinearClient::from_oauth_or_env().await;
+            if let (Some(client), Some(issue_id)) = (client, linear_issue_id) {
+                let req = LinearIssueCommentRequest { issue_id, body };
+                if let Err(err) = client.create_issue_comment(req).await {
+                    eprintln!("linear status post failed: {err}");
+                }
             }
         });
     }
 
-    // Graphite
-    if let (Some(client), Some(stack_id)) =
-        (graphite_client.clone(), context.graphite_stack_id.clone())
-    {
+    if let (Some(client), Some(stack_id)) = (graphite_client, graphite_stack_id) {
         let body = message.clone();
         tokio::spawn(async move {
             let req = GraphiteStackCommentRequest { stack_id, body };

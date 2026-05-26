@@ -39,6 +39,9 @@ use orbit_runtime::task_registry::{Task, TaskRegistry, TaskRegistrySnapshot, Tas
 use orbit_runtime::worker_boot::{
     WorkerEventKind, WorkerEventPayload, WorkerRegistry, WorkerStatus,
 };
+use orbit_runtime::{
+    generate_pkce_pair, generate_state, save_oauth_credentials_for, OAuthTokenSet,
+};
 use orbit_tools::{
     cancel_hosted_agent_with_locator, hosted_agent_status_with_locator, launch_hosted_agent,
     HostedAgentCancellationSource, HostedAgentLaunchRequest, HostedAgentLocator,
@@ -259,6 +262,13 @@ impl ServerConfig {
 }
 
 #[derive(Debug, Clone)]
+struct LinearOAuthPendingState {
+    state: String,
+    code_verifier: String,
+    redirect_uri: String,
+    created_at: Instant,
+}
+
 pub struct ServerState {
     started_at: Instant,
     tasks: TaskRegistry,
@@ -274,6 +284,7 @@ pub struct ServerState {
     orphan_auto_retry_after: Option<Duration>,
     orphan_auto_cancel_after: Option<Duration>,
     orphan_policy_rules: Vec<OrphanPolicyRule>,
+    pending_oauth_states: Arc<Mutex<HashMap<String, LinearOAuthPendingState>>>,
 }
 
 impl Default for ServerState {
@@ -404,6 +415,7 @@ impl ServerState {
             orphan_auto_retry_after,
             orphan_auto_cancel_after,
             orphan_policy_rules,
+            pending_oauth_states: Arc::new(Mutex::new(HashMap::new())),
         };
         state.recover_loaded_state();
         state
@@ -1614,6 +1626,8 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .route("/v1/webhooks/linear", post(linear_webhook))
         .route("/v1/webhooks/graphite", post(graphite_webhook))
         .route("/v1/oauth/github/callback", get(github_oauth_callback))
+        .route("/v1/oauth/linear/authorize", get(linear_oauth_authorize))
+        .route("/v1/oauth/linear/callback", get(linear_oauth_callback))
         .merge(protected)
         .with_state(state)
 }
@@ -1667,6 +1681,104 @@ async fn github_oauth_callback(
         "code": code,
         "state": state
     }))
+}
+
+async fn linear_oauth_authorize(
+    State(state): State<Arc<ServerState>>,
+) -> Result<axum::response::Redirect, AppError> {
+    let client_id = std::env::var("ORBIT_LINEAR_CLIENT_ID")
+        .map_err(|_| AppError::internal("ORBIT_LINEAR_CLIENT_ID not set"))?;
+    let redirect_uri = std::env::var("ORBIT_LINEAR_OAUTH_REDIRECT_URI")
+        .unwrap_or_else(|_| "https://frontal-orbit.fly.dev/v1/oauth/linear/callback".to_string());
+
+    let pkce = generate_pkce_pair()
+        .map_err(|e| AppError::internal(format!("pkce generation failed: {e}")))?;
+    let csrf_state = generate_state()
+        .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
+
+    let mut states = state.pending_oauth_states.lock().unwrap();
+    states.insert(
+        csrf_state.clone(),
+        LinearOAuthPendingState {
+            state: csrf_state.clone(),
+            code_verifier: pkce.verifier,
+            redirect_uri: redirect_uri.clone(),
+            created_at: Instant::now(),
+        },
+    );
+    // Purge states older than 10 minutes
+    states.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(600));
+
+    let authorize_url = format!(
+        "https://linear.app/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&state={csrf_state}&code_challenge={challenge}&code_challenge_method=S256&scope=read,write,issues:create,comments:create",
+        challenge = pkce.challenge,
+    );
+
+    Ok(axum::response::Redirect::to(&authorize_url))
+}
+
+async fn linear_oauth_callback(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let code = params
+        .get("code")
+        .ok_or_else(|| AppError::bad_request("missing code parameter"))?;
+    let state_param = params
+        .get("state")
+        .ok_or_else(|| AppError::bad_request("missing state parameter"))?;
+
+    let pending = {
+        let mut states = state.pending_oauth_states.lock().unwrap();
+        states.remove(state_param)
+    }
+    .ok_or_else(|| AppError::bad_request("unknown or expired OAuth state"))?;
+
+    if pending.state != *state_param {
+        return Err(AppError::bad_request("OAuth state mismatch"));
+    }
+
+    let client_id = std::env::var("ORBIT_LINEAR_CLIENT_ID")
+        .map_err(|_| AppError::internal("ORBIT_LINEAR_CLIENT_ID not set"))?;
+    let client_secret = std::env::var("ORBIT_LINEAR_CLIENT_SECRET").ok();
+
+    let mut params_map = std::collections::HashMap::from([
+        ("grant_type".to_string(), "authorization_code".to_string()),
+        ("code".to_string(), code.clone()),
+        ("redirect_uri".to_string(), pending.redirect_uri.clone()),
+        ("client_id".to_string(), client_id.clone()),
+        ("code_verifier".to_string(), pending.code_verifier.clone()),
+    ]);
+    if let Some(ref secret) = client_secret {
+        params_map.insert("client_secret".to_string(), secret.clone());
+    }
+
+    let http = reqwest::Client::new();
+    let response = http
+        .post("https://api.linear.app/oauth/token")
+        .form(&params_map)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("token exchange failed: {e}")))?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!("token exchange failed: {body}")));
+    }
+
+    let token_set: OAuthTokenSet = response
+        .json()
+        .await
+        .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
+
+    save_oauth_credentials_for(&token_set, "linear")
+        .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "provider": "linear",
+        "scopes": token_set.scopes,
+    })))
 }
 
 async fn status(State(state): State<Arc<ServerState>>) -> Json<StatusResponse> {
