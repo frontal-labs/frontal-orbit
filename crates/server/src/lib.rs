@@ -4751,6 +4751,7 @@ mod tests {
     }
 
     static GITHUB_WEBHOOK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static CONNECTOR_WEBHOOK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: Option<&str>) -> Self {
@@ -8290,6 +8291,7 @@ mod tests {
 
     #[tokio::test]
     async fn linear_webhook_rejects_invalid_signature_when_secret_set() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", Some("secret"));
         let state = Arc::new(
             ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
@@ -8330,6 +8332,7 @@ mod tests {
 
     #[tokio::test]
     async fn graphite_webhook_rejects_invalid_signature_when_secret_set() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", Some("secret"));
         let state = Arc::new(
             ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
@@ -8366,6 +8369,210 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_matches_task_and_updates_context() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Fix a Linear bug",
+                            "repository": "acme/payments",
+                            "source": "linear",
+                            "linear_issue_id": "iss_test_42",
+                            "linear_issue_identifier": "LIN-42"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created: serde_json::Value = serde_json::from_slice(
+            &to_bytes(create_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let webhook_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/linear")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "type": "issue.updated",
+                            "issue": {
+                                "id": "iss_test_42",
+                                "identifier": "LIN-42",
+                                "url": "https://linear.app/acme/issue/LIN-42",
+                                "state": "in_progress"
+                            },
+                            "actor": { "id": "user-1" }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+        let task_response = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/tasks/{task_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(task_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn linear_webhook_no_match_returns_accepted() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/linear")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "type": "issue.updated",
+                            "issue": { "id": "iss_nonexistent", "identifier": "LIN-99" }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn graphite_webhook_matches_task_and_updates_context() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let create_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "prompt": "Review a Graphite stack",
+                            "repository": "acme/payments",
+                            "source": "graphite",
+                            "graphite_stack_id": "stack_test_7"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created: serde_json::Value = serde_json::from_slice(
+            &to_bytes(create_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let task_id = created["task_id"].as_str().unwrap().to_string();
+
+        let webhook_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/graphite")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "type": "stack.updated",
+                            "stack_id": "stack_test_7",
+                            "head_branch": "feature/graphite-test",
+                            "base_branch": "main",
+                            "actor": "user-1"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
+
+        let task_response = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/tasks/{task_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(task_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn graphite_webhook_no_match_returns_accepted() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
+        let state = Arc::new(ServerState::default());
+        let router = app(state.clone());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks/graphite")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "type": "stack.updated",
+                            "stack_id": "stack_nonexistent"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]

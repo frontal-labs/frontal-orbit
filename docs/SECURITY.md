@@ -168,7 +168,7 @@ orbit --sandbox container --image orbit-sandbox:v0.1.0
 
 ```bash
 # Set API keys in environment
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ORBIT_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export XAI_API_KEY="xai-..."
 
@@ -182,7 +182,7 @@ orbit prompt "analyze this code"
 {
   "providers": {
     "anthropic": {
-      "api_key": "${ANTHROPIC_API_KEY}",
+      "api_key": "${ORBIT_API_KEY}",
       "base_url": "https://api.anthropic.com"
     }
   }

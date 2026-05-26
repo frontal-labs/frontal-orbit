@@ -195,9 +195,9 @@ fn doctor_command_runs_as_a_local_shell_entrypoint() {
     // when
     let output = command_in(&temp_dir)
         .env("ORBIT_CONFIG_HOME", &config_home)
-        .env_remove("ANTHROPIC_API_KEY")
-        .env_remove("ANTHROPIC_AUTH_TOKEN")
-        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+        .env_remove("ORBIT_API_KEY")
+        .env_remove("ORBIT_AUTH_TOKEN")
+        .env("ORBIT_BASE_URL", "http://127.0.0.1:9")
         .arg("doctor")
         .output()
         .expect("orbit doctor should launch");
@@ -223,17 +223,17 @@ fn local_subcommand_help_does_not_fall_through_to_runtime_or_provider_calls() {
 
     let doctor_help = command_in(&temp_dir)
         .env("ORBIT_CONFIG_HOME", &config_home)
-        .env_remove("ANTHROPIC_API_KEY")
-        .env_remove("ANTHROPIC_AUTH_TOKEN")
-        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+        .env_remove("ORBIT_API_KEY")
+        .env_remove("ORBIT_AUTH_TOKEN")
+        .env("ORBIT_BASE_URL", "http://127.0.0.1:9")
         .args(["doctor", "--help"])
         .output()
         .expect("doctor help should launch");
     let status_help = command_in(&temp_dir)
         .env("ORBIT_CONFIG_HOME", &config_home)
-        .env_remove("ANTHROPIC_API_KEY")
-        .env_remove("ANTHROPIC_AUTH_TOKEN")
-        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+        .env_remove("ORBIT_API_KEY")
+        .env_remove("ORBIT_AUTH_TOKEN")
+        .env("ORBIT_BASE_URL", "http://127.0.0.1:9")
         .args(["status", "--help"])
         .output()
         .expect("status help should launch");

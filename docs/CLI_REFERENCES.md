@@ -664,7 +664,7 @@ orbit prompt --stream "Generate a long story"
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-...` |
+| `ORBIT_API_KEY` | Anthropic API key | `sk-ant-...` |
 | `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
 | `XAI_API_KEY` | xAI API key | `xai-...` |
 

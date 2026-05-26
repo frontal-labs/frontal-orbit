@@ -698,7 +698,7 @@ async fn live_stream_smoke_test() {
     };
     let mut stream = client
         .stream_message(&MessageRequest {
-            model: std::env::var("ANTHROPIC_MODEL")
+            model: std::env::var("ORBIT_MODEL")
                 .unwrap_or_else(|_| "claude-3-7-sonnet-latest".to_string()),
             max_tokens: 32,
             messages: vec![InputMessage::user_text(

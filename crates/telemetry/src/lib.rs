@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+pub const DEFAULT_ORBIT_VERSION: &str = "2023-06-01";
 pub const DEFAULT_APP_NAME: &str = "claude-code";
 pub const DEFAULT_RUNTIME: &str = "rust";
 pub const DEFAULT_AGENTIC_BETA: &str = "claude-code-20250219";
@@ -64,7 +64,7 @@ impl AnthropicRequestProfile {
     #[must_use]
     pub fn new(client_identity: ClientIdentity) -> Self {
         Self {
-            anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
+            anthropic_version: DEFAULT_ORBIT_VERSION.to_string(),
             client_identity,
             betas: vec![
                 DEFAULT_AGENTIC_BETA.to_string(),
@@ -444,7 +444,7 @@ mod tests {
             vec![
                 (
                     "anthropic-version".to_string(),
-                    DEFAULT_ANTHROPIC_VERSION.to_string()
+                    DEFAULT_ORBIT_VERSION.to_string()
                 ),
                 ("user-agent".to_string(), "claude-code/1.2.3".to_string()),
                 (
