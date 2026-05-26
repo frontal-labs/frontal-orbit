@@ -674,17 +674,13 @@ export class SlackInterface {
       case "lane.blocked":
         return this.formatLaneBlockedEvent(taskLabel, event);
       case "lane.green": {
+        const payload = event.payload as Record<string, unknown> | undefined;
         const resultText =
-          (event.payload as Record<string, unknown>)?.result ||
-          task.result ||
-          summary.result ||
-          "";
+          (payload?.result as string) || task.result || "";
         const truncated =
-          typeof resultText === "string" && resultText.length > 2800
+          resultText && resultText.length > 2800
             ? resultText.substring(0, 2800) + "\n\n... (truncated)"
-            : typeof resultText === "string"
-              ? resultText
-              : "";
+            : resultText || "";
         const text = truncated
           ? `${taskLabel} completed:\n\n${truncated}`
           : `${taskLabel} reported a green lane.`;
@@ -1025,11 +1021,14 @@ export class SlackInterface {
     const nextChannelId = summary.channel_id || task.channelId;
     const nextThreadTs = summary.thread_ts || task.threadTs;
     const nextUserId = summary.user_id || task.userId;
+    const payload = event.payload as Record<string, unknown> | undefined;
+    const eventResult = (payload?.result as string) || task.result || undefined;
 
     if (
       nextChannelId === task.channelId &&
       nextThreadTs === task.threadTs &&
-      nextUserId === task.userId
+      nextUserId === task.userId &&
+      eventResult === task.result
     ) {
       return task;
     }
@@ -1039,6 +1038,7 @@ export class SlackInterface {
       channelId: nextChannelId,
       threadTs: nextThreadTs,
       userId: nextUserId,
+      result: eventResult,
     };
   }
 
@@ -1352,6 +1352,7 @@ export class SlackInterface {
       channelId: task.channel_id,
       threadTs: task.thread_ts,
       userId: task.user_id,
+      result: task.result,
     };
   }
 

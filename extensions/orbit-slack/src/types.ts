@@ -357,6 +357,7 @@ export interface OrbitTrackedTask {
   channelId: string;
   threadTs?: string;
   userId?: string;
+  result?: string;
 }
 
 export interface OrbitStatusResponse {
