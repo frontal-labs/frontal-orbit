@@ -1,0 +1,24 @@
+FROM oven/bun:1-alpine
+
+RUN apk add --no-cache dumb-init
+
+RUN addgroup -g 1001 -S orbit \
+    && adduser -S orbit -u 1001 -G orbit
+
+WORKDIR /app
+
+COPY extensions/orbit-slack/package*.json ./
+COPY extensions/orbit-slack/bun.lock ./
+COPY extensions/orbit-slack/bunfig.toml ./
+COPY extensions/orbit-slack/tsconfig.json ./
+
+RUN bun install --production
+
+COPY extensions/orbit-slack/src ./src
+
+RUN mkdir -p /tmp && chown -R orbit:orbit /app /tmp
+
+USER orbit
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["bun", "run", "src/index.ts"]

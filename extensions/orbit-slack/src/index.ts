@@ -1,15 +1,26 @@
 import { config } from "./config";
 import { logger } from "./log";
 import { SlackInterface } from "./slack";
+import * as http from "node:http";
 
 async function main(): Promise<void> {
   const slackInterface = new SlackInterface();
+
+  // Start health check HTTP server (Fly.io requires it)
+  const healthServer = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  healthServer.listen(config.app.port, () => {
+    logger.info(`Health server listening on port ${config.app.port}`);
+  });
 
   // Graceful shutdown handling
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
 
     try {
+      healthServer.close();
       await slackInterface.disconnect();
       logger.info("Slack interface disconnected successfully");
       process.exit(0);

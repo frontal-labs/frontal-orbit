@@ -6,7 +6,8 @@ target/
 assets/
 docs/
 examples/
-extensions/
+extensions/*
+!extensions/orbit-slack
 homebrew/
 infrastructure/
 scripts/

@@ -24,3 +24,5 @@ bun.lockb
 # OS
 .DS_Store
 Thumbs.db
+extensions/orbit-slack/.bun-cache/
+extensions/orbit-slack/node_modules/
