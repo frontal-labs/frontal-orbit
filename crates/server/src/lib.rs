@@ -1628,6 +1628,8 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .route("/v1/oauth/github/callback", get(github_oauth_callback))
         .route("/v1/oauth/linear/authorize", get(linear_oauth_authorize))
         .route("/v1/oauth/linear/callback", get(linear_oauth_callback))
+        .route("/v1/oauth/slack/authorize", get(slack_oauth_authorize))
+        .route("/v1/oauth/slack/callback", get(slack_oauth_callback))
         .merge(protected)
         .with_state(state)
 }
@@ -1804,6 +1806,138 @@ async fn linear_oauth_callback(
     Ok(Json(json!({
         "ok": true,
         "provider": "linear",
+        "scopes": token_set.scopes,
+    })))
+}
+
+async fn slack_oauth_authorize(
+    State(state): State<Arc<ServerState>>,
+) -> Result<axum::response::Redirect, AppError> {
+    let client_id = std::env::var("ORBIT_SLACK_CLIENT_ID")
+        .map_err(|_| AppError::internal("ORBIT_SLACK_CLIENT_ID not set"))?;
+    let redirect_uri = std::env::var("ORBIT_SLACK_OAUTH_REDIRECT_URI")
+        .unwrap_or_else(|_| "https://frontal-orbit.fly.dev/v1/oauth/slack/callback".to_string());
+
+    let csrf_state = generate_state()
+        .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
+
+    let mut states = state.pending_oauth_states.lock().unwrap();
+    states.insert(
+        csrf_state.clone(),
+        LinearOAuthPendingState {
+            state: csrf_state.clone(),
+            code_verifier: String::new(), // Slack doesn't use PKCE
+            redirect_uri: redirect_uri.clone(),
+            created_at: Instant::now(),
+        },
+    );
+    states.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(600));
+
+    let scopes = "chat:write,commands,channels:history,im:history,app_mentions:read,reactions:write,team:read";
+    let authorize_url = format!(
+        "https://slack.com/oauth/v2/authorize?client_id={client_id}&scope={scopes}&redirect_uri={redirect_uri}&state={csrf_state}"
+    );
+
+    Ok(axum::response::Redirect::to(&authorize_url))
+}
+
+async fn slack_oauth_callback(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let code = params
+        .get("code")
+        .ok_or_else(|| AppError::bad_request("missing code parameter"))?;
+    let state_param = params
+        .get("state")
+        .ok_or_else(|| AppError::bad_request("missing state parameter"))?;
+
+    let pending = {
+        let mut states = state.pending_oauth_states.lock().unwrap();
+        states.remove(state_param)
+    }
+    .ok_or_else(|| AppError::bad_request("unknown or expired OAuth state"))?;
+
+    if pending.state != *state_param {
+        return Err(AppError::bad_request("OAuth state mismatch"));
+    }
+
+    let client_id = std::env::var("ORBIT_SLACK_CLIENT_ID")
+        .map_err(|_| AppError::internal("ORBIT_SLACK_CLIENT_ID not set"))?;
+    let client_secret = std::env::var("ORBIT_SLACK_CLIENT_SECRET")
+        .map_err(|_| AppError::internal("ORBIT_SLACK_CLIENT_SECRET not set"))?;
+
+    let params_map = [
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
+        ("code", code.as_str()),
+        ("redirect_uri", pending.redirect_uri.as_str()),
+    ];
+
+    let http = reqwest::Client::new();
+    let response = http
+        .post("https://slack.com/api/oauth.v2.access")
+        .form(&params_map)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("token exchange failed: {e}")))?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!("token exchange failed: {body}")));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SlackTeamInfo {
+        id: Option<String>,
+        name: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SlackTokenResponse {
+        ok: bool,
+        access_token: Option<String>,
+        error: Option<String>,
+        team: Option<SlackTeamInfo>,
+        bot_user_id: Option<String>,
+        scope: Option<String>,
+    }
+
+    let raw: SlackTokenResponse = response
+        .json()
+        .await
+        .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
+
+    if !raw.ok {
+        return Err(AppError::internal(format!(
+            "Slack OAuth failed: {}",
+            raw.error.unwrap_or_else(|| "unknown error".to_string())
+        )));
+    }
+
+    let access_token = raw
+        .access_token
+        .ok_or_else(|| AppError::internal("Slack returned no access token"))?;
+
+    let token_set = OAuthTokenSet {
+        access_token: access_token.clone(),
+        refresh_token: None, // Slack bot tokens don't expire
+        expires_at: None,
+        scopes: raw
+            .scope
+            .map(|s| s.split(',').map(str::trim).map(String::from).collect())
+            .unwrap_or_default(),
+    };
+
+    save_oauth_credentials_for(&token_set, "slack")
+        .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "provider": "slack",
+        "bot_token": access_token,
+        "team": raw.team.map(|t| json!({"id": t.id, "name": t.name})),
+        "bot_user_id": raw.bot_user_id,
         "scopes": token_set.scopes,
     })))
 }
