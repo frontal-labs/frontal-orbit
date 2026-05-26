@@ -10,6 +10,7 @@ primary_region = "iad"
   ORBIT_SERVER_LANE_TRANSPORT = "in-memory"
   ORBIT_SERVER_STATE_FILE = "/var/lib/orbit/server/state.json"
   ORBIT_SERVER_WORKSPACE_ROOT = "/workspace/workspaces"
+  ORBIT_SERVER_RECONCILE_INTERVAL_SECS = "15"
   RUST_LOG = "info"
 
 [http_service]
