@@ -36,10 +36,13 @@ impl ProviderClient {
         match crate::providers::detect_provider_kind(&resolved_model) {
             crate::providers::ProviderKind::Anthropic => {
                 Ok(Self::Anthropic(match anthropic_auth {
-                    Some(auth) => AnthropicClient::from_auth(auth),
+                    Some(auth) => {
+                        AnthropicClient::from_auth(auth).with_base_url(read_base_url())
+                    }
                     None => AnthropicClient::from_auth(
                         crate::providers::anthropic::AuthSource::from_env()?,
-                    ),
+                    )
+                    .with_base_url(read_base_url()),
                 }))
             }
             crate::providers::ProviderKind::OpenAi => Ok(Self::OpenAi(
