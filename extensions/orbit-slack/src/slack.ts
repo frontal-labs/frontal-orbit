@@ -674,11 +674,17 @@ export class SlackInterface {
       case "lane.blocked":
         return this.formatLaneBlockedEvent(taskLabel, event);
       case "lane.green": {
-        const resultText = payload.result || task.result || "";
+        const resultText =
+          (event.payload as Record<string, unknown>)?.result ||
+          task.result ||
+          summary.result ||
+          "";
         const truncated =
-          resultText.length > 2800
+          typeof resultText === "string" && resultText.length > 2800
             ? resultText.substring(0, 2800) + "\n\n... (truncated)"
-            : resultText;
+            : typeof resultText === "string"
+              ? resultText
+              : "";
         const text = truncated
           ? `${taskLabel} completed:\n\n${truncated}`
           : `${taskLabel} reported a green lane.`;
