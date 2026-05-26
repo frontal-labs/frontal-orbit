@@ -4751,6 +4751,7 @@ mod tests {
     }
 
     static GITHUB_WEBHOOK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static CONNECTOR_WEBHOOK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: Option<&str>) -> Self {
@@ -8290,6 +8291,7 @@ mod tests {
 
     #[tokio::test]
     async fn linear_webhook_rejects_invalid_signature_when_secret_set() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", Some("secret"));
         let state = Arc::new(
             ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
@@ -8330,6 +8332,7 @@ mod tests {
 
     #[tokio::test]
     async fn graphite_webhook_rejects_invalid_signature_when_secret_set() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", Some("secret"));
         let state = Arc::new(
             ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
@@ -8370,6 +8373,7 @@ mod tests {
 
     #[tokio::test]
     async fn linear_webhook_matches_task_and_updates_context() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
@@ -8446,6 +8450,7 @@ mod tests {
 
     #[tokio::test]
     async fn linear_webhook_no_match_returns_accepted() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
@@ -8472,6 +8477,7 @@ mod tests {
 
     #[tokio::test]
     async fn graphite_webhook_matches_task_and_updates_context() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
@@ -8544,6 +8550,7 @@ mod tests {
 
     #[tokio::test]
     async fn graphite_webhook_no_match_returns_accepted() {
+        let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
