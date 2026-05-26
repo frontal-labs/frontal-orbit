@@ -727,7 +727,6 @@ fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
     }
 }
 
-
 #[cfg(test)]
 fn read_api_key() -> Result<String, ApiError> {
     let auth = AuthSource::from_env_or_saved()?;

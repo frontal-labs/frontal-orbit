@@ -8396,9 +8396,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(create_response.status(), StatusCode::OK);
-        let created: serde_json::Value =
-            serde_json::from_slice(&to_bytes(create_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(
+            &to_bytes(create_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
         let webhook_response = router
@@ -8494,9 +8497,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(create_response.status(), StatusCode::OK);
-        let created: serde_json::Value =
-            serde_json::from_slice(&to_bytes(create_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(
+            &to_bytes(create_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
         let webhook_response = router
