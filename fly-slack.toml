@@ -2,7 +2,7 @@ app = "frontal-orbit-slack"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile.slack"
+  dockerfile = "infrastructure/docker/orbit-slack-app.Dockerfile"
 
 [env]
   NODE_ENV = "production"

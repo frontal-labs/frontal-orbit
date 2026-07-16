@@ -2,7 +2,7 @@ app = "frontal-orbit"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile.fly"
+  dockerfile = "infrastructure/docker/orbit-fly.Dockerfile"
 
 [env]
   ORBIT_SERVER_HOST = "0.0.0.0"
