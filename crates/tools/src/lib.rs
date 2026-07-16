@@ -2100,7 +2100,7 @@ fn run_memory_inspect(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 fn run_knowledge_graph(
     services: &ToolServices,
     scope: &ToolExecutionScope,
@@ -2360,19 +2360,19 @@ fn run_style_train(
         }
         "score" => {
             let candidate = required_string(input.candidate_code, "candidate_code")?;
-            let score = services
+            let candidate_score = services
                 .style_training
                 .score(&style_scope, &candidate)
                 .map_err(|error| error.to_string())?;
             let mut properties = telemetry_scope_properties(scope);
-            properties.insert("score".to_string(), Value::from(score));
+            properties.insert("score".to_string(), Value::from(candidate_score));
             services
                 .telemetry
                 .record_analytics(scope, "style", "score", properties);
             to_pretty_json(json!({
                 "status": "ok",
                 "action": "score",
-                "score": score
+                "score": candidate_score
             }))
         }
         action => Err(format!("unsupported StyleTrain action: {action}")),
@@ -4087,10 +4087,10 @@ fn manifest_from_locator(locator: &HostedAgentLocator) -> Result<Option<AgentOut
         };
         manifest.manifest_file = manifest_file.to_string();
         if let Some(output_file) = locator.output_file.as_ref() {
-            manifest.output_file = output_file.clone();
+            manifest.output_file.clone_from(output_file);
         }
         if let Some(agent_id) = locator.agent_id.as_ref() {
-            manifest.agent_id = agent_id.clone();
+            manifest.agent_id.clone_from(agent_id);
         }
         if let Some(hosted_task_id) = locator.hosted_task_id.as_ref() {
             manifest.hosted_task_id = Some(hosted_task_id.clone());
@@ -4105,7 +4105,7 @@ fn manifest_from_locator(locator: &HostedAgentLocator) -> Result<Option<AgentOut
     Ok(read_agent_manifest_from_path(&manifest_path))
 }
 
-#[must_use] 
+#[must_use]
 pub fn cancel_hosted_agent_with_locator(
     locator: &HostedAgentLocator,
 ) -> HostedAgentCancellationResult {
@@ -4178,7 +4178,7 @@ pub fn cancel_hosted_agent_with_locator(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn cancel_hosted_agent(agent_id: &str) -> HostedAgentCancellationResult {
     cancel_hosted_agent_with_locator(&HostedAgentLocator {
         agent_id: Some(agent_id.to_string()),
@@ -4186,7 +4186,7 @@ pub fn cancel_hosted_agent(agent_id: &str) -> HostedAgentCancellationResult {
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn hosted_agent_status_with_locator(locator: &HostedAgentLocator) -> HostedAgentStatusSnapshot {
     if let Some(snapshot) = locator.agent_id.as_deref().and_then(|agent_id| {
         hosted_agent_controls()
@@ -4269,7 +4269,7 @@ pub fn hosted_agent_status_with_locator(locator: &HostedAgentLocator) -> HostedA
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn hosted_agent_status(agent_id: &str) -> HostedAgentStatusSnapshot {
     hosted_agent_status_with_locator(&HostedAgentLocator {
         agent_id: Some(agent_id.to_string()),
@@ -10123,6 +10123,7 @@ printf 'pwsh:%s' "$1"
 
     #[test]
     #[ignore = "pre-existing: fails in CI environment"]
+    #[allow(clippy::too_many_lines)]
     fn env_backed_memory_tools_route_requests_to_pinecone_and_neo4j() {
         if !loopback_bind_available() {
             return;
