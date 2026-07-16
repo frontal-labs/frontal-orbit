@@ -49,7 +49,7 @@ resource "terraform_data" "build_orbit_slack_image" {
       echo "Building orbit-slack image: ${var.orbit_slack_image}"
       
       # Build the image
-      docker build -f extensions/orbit-slack/Dockerfile -t ${var.orbit_slack_image} extensions/orbit-slack/
+      docker build -f infrastructure/docker/orbit-slack-app.Dockerfile -t ${var.orbit_slack_image} .
       
       # Tag for ECR if needed
       if [[ "${var.orbit_slack_image}" == *"amazonaws.com"* ]]; then

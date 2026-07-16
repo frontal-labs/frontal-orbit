@@ -28,6 +28,11 @@ The configuration is split into:
 - `docker/orbit-server.Dockerfile`: builds the `orbit-server` image
 - `docker/orbit-worker.Dockerfile`: builds the worker image used by server-side `local-docker` lanes
 - `docker/orbit-slack.Dockerfile`: builds the Slack connector image
+- `docker/orbit-cli.Dockerfile`: builds the combined `orbit` + `orbit-server` CLI image (published as `orbit`/`orbit-dev` to GHCR)
+- `docker/orbit-dev.Dockerfile`: development image with hot reload (`cargo watch`)
+- `docker/orbit-fly.Dockerfile`: Fly.io deployment image for `orbit-server`
+- `docker/orbit-slack-app.Dockerfile`: Fly.io deployment image for the Slack connector
+- `docker/.dockerignore`: shared Docker ignore rules for all images
 - `kubernetes/base/`: namespace, config, secrets template, PVCs, Deployments, Services, and Ingress
 
 ## Docker Compose
