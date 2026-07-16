@@ -1,22 +1,38 @@
 {
-    "name": "@frontal-labs/orbit",
-    "version": "0.0.0-dev",
-    "description": "Orbit CLI is a coding agent from Frontal that runs locally on your computer.",
-    "license": "Apache-2.0",
-    "bin": {
-      "codex": "bin/orbit.js"
-    },
-    "type": "module",
-    "engines": {
-      "node": ">=16"
-    },
-    "files": [
-      "bin/orbit.js"
-    ],
-    "repository": {
-      "type": "git",
-      "url": "git+https://github.com/frontal-labs/orbit.git",
-      "directory": "orbit-cli"
-    },
-    "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
-  }
+  "name": "@frontal-labs/orbit",
+  "version": "0.0.0-dev",
+  "description": "Orbit CLI is a coding agent from Frontal that runs locally on your computer.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/frontal-labs/orbit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frontal-labs/orbit.git",
+    "directory": "orbit-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/frontal-labs/orbit/issues"
+  },
+  "bin": {
+    "orbit": "bin/orbit.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/orbit.js",
+    "lib/**/*.mjs",
+    "scripts/postinstall.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.mjs",
+    "build": "./scripts/build.sh",
+    "download": "./scripts/download.sh",
+    "test": "./scripts/test.sh",
+    "pack:dry": "./scripts/pack.sh",
+    "clean": "./scripts/clean.sh",
+    "prepublishOnly": "./scripts/prepublish.sh"
+  },
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+}

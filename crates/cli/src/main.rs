@@ -38,12 +38,8 @@ use orbit_commands::{
     resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
     SkillSlashDispatch, SlashCommand, CONFIG_SECTION_ARGUMENT_HINT, SUPPORTED_CONFIG_SECTIONS,
 };
-use orbit_harness::{extract_manifest, UpstreamPaths};
 use orbit_events::{EventEnvelope, HostedEventName, HostedEventStatus, HostedEventTopic};
-use orbit_github::{
-    parse_github_repo_url, GitHubCheckRunDraft, GitHubCheckRunOutput, GitHubClient,
-    GitHubClientConfig, GitHubIssueCommentDraft, GitHubPullRequestDraft, GitHubRepoRef,
-};
+use orbit_harness::{extract_manifest, UpstreamPaths};
 use orbit_integrations::ide::{
     collect_status as collect_ide_status, install_extension as install_ide_extension,
     install_packaged_extension as install_packaged_ide_extension,
@@ -52,6 +48,9 @@ use orbit_integrations::ide::{
     setup_editor_integration as setup_ide_editor_integration, IdeStatus, IdeTarget,
 };
 use orbit_integrations::mcp::config as integrations_mcp_config;
+use orbit_integrations::mcp::integration::{
+    global_integration_registry, CheckRunOutput, IntegrationConfig, IntegrationTools,
+};
 use orbit_plugins::{PluginHooks, PluginManager, PluginManagerConfig, PluginRegistry};
 use orbit_repo::{push_branch, repo_status, stage_and_commit, RepoCommitRequest};
 use orbit_runtime::{
@@ -651,6 +650,34 @@ struct HostedTaskGithubResponse {
     pr_head_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pr_base_ref: Option<String>,
+}
+
+impl HostedTaskGithubResponse {
+    fn from_integration_metadata(value: &serde_json::Value) -> Self {
+        let get = |key: &str| -> Option<String> {
+            value
+                .get("metadata")
+                .and_then(|m| m.get(format!("github_{key}")))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let pr_number = value
+            .get("metadata")
+            .and_then(|m| m.get("github_pr_number"))
+            .and_then(Value::as_u64);
+        Self {
+            owner: get("owner"),
+            repo: get("repo"),
+            published_remote: get("published_remote"),
+            published_branch: get("published_branch"),
+            published_commit_sha: get("published_commit_sha"),
+            pr_number,
+            pr_url: get("pr_url"),
+            pr_api_url: get("pr_api_url"),
+            pr_head_ref: get("pr_head_ref"),
+            pr_base_ref: get("pr_base_ref"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3095,11 +3122,51 @@ fn get_hosted_task_github(
     server_url: &str,
     task_id: &str,
 ) -> Result<HostedTaskGithubResponse, Box<dyn std::error::Error>> {
-    let response =
-        authorize_hosted_request(client.get(format!("{server_url}/v1/tasks/{task_id}/github")))
-            .send()?
-            .error_for_status()?;
-    Ok(response.json()?)
+    let response = authorize_hosted_request(client.get(format!(
+        "{server_url}/v1/tasks/{task_id}/integration/github"
+    )))
+    .send()?
+    .error_for_status()?;
+    let value: serde_json::Value = response.json()?;
+    Ok(HostedTaskGithubResponse::from_integration_metadata(&value))
+}
+
+fn hosted_task_github_metadata(github: &HostedTaskGithubResponse) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    let set =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, value: Option<String>| {
+            if let Some(value) = value {
+                map.insert(key.to_string(), serde_json::Value::String(value));
+            }
+        };
+    set(&mut map, "owner", github.owner.clone());
+    set(&mut map, "repo", github.repo.clone());
+    set(
+        &mut map,
+        "published_remote",
+        github.published_remote.clone(),
+    );
+    set(
+        &mut map,
+        "published_branch",
+        github.published_branch.clone(),
+    );
+    set(
+        &mut map,
+        "published_commit_sha",
+        github.published_commit_sha.clone(),
+    );
+    if let Some(pr_number) = github.pr_number {
+        map.insert(
+            "pr_number".to_string(),
+            serde_json::Value::Number(pr_number.into()),
+        );
+    }
+    set(&mut map, "pr_url", github.pr_url.clone());
+    set(&mut map, "pr_api_url", github.pr_api_url.clone());
+    set(&mut map, "pr_head_ref", github.pr_head_ref.clone());
+    set(&mut map, "pr_base_ref", github.pr_base_ref.clone());
+    serde_json::Value::Object(map)
 }
 
 fn reconcile_hosted_task(
@@ -3176,11 +3243,12 @@ fn update_hosted_task_github(
     task_id: &str,
     github: &HostedTaskGithubResponse,
 ) -> Result<HostedTaskGithubResponse, Box<dyn std::error::Error>> {
-    let response =
-        authorize_hosted_request(client.post(format!("{server_url}/v1/tasks/{task_id}/github")))
-            .json(github)
-            .send()?
-            .error_for_status()?;
+    let response = authorize_hosted_request(client.post(format!(
+        "{server_url}/v1/tasks/{task_id}/integration/github"
+    )))
+    .json(&hosted_task_github_metadata(github))
+    .send()?
+    .error_for_status()?;
     Ok(response.json()?)
 }
 
@@ -3200,12 +3268,35 @@ fn hosted_git_author_email() -> String {
         .unwrap_or_else(|| "orbit@localhost".to_string())
 }
 
-fn hosted_github_api_base() -> String {
-    env::var("ORBIT_GITHUB_API_BASE")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "https://api.github.com".to_string())
+#[derive(Debug, Clone)]
+struct GitHubRepoRef {
+    owner: String,
+    repo: String,
+}
+
+fn parse_github_repo_url(url: &str) -> Result<GitHubRepoRef, String> {
+    let trimmed = url.trim().trim_end_matches(".git").trim_end_matches('/');
+    let path = trimmed
+        .strip_prefix("https://github.com/")
+        .or_else(|| trimmed.strip_prefix("http://github.com/"))
+        .or_else(|| trimmed.strip_prefix("git@github.com:"))
+        .ok_or_else(|| format!("unsupported GitHub repository URL: {url}"))?;
+    let mut segments = path.split('/');
+    let owner = segments
+        .next()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("unsupported GitHub repository URL: {url}"))?;
+    let repo = segments
+        .next()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("unsupported GitHub repository URL: {url}"))?;
+    if segments.next().is_some() {
+        return Err(format!("unsupported GitHub repository URL: {url}"));
+    }
+    Ok(GitHubRepoRef {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
 }
 
 fn summarize_hosted_prompt(prompt: &str) -> String {
@@ -3234,15 +3325,15 @@ fn default_hosted_pr_draft(
     payload: &HostedTaskWorkerPayload,
     published_branch: &str,
     commit_sha: &str,
-) -> Option<GitHubPullRequestDraft> {
+) -> Option<PrDraft> {
     let repo_url = payload.repo_url.as_deref()?;
-    parse_github_repo_url(repo_url).ok()?;
+    let repo = parse_github_repo_url(repo_url).ok()?;
     let base = payload.base_ref.as_deref()?.trim();
     if base.is_empty() || base == published_branch {
         return None;
     }
 
-    Some(GitHubPullRequestDraft {
+    Some(PrDraft {
         title: summarize_hosted_prompt(&payload.prompt),
         body: format!(
             "Automated by Orbit hosted task `{}`.\n\nRepository: {}\nBranch: {}\nCommit: {}\n\nPrompt:\n{}\n",
@@ -3259,7 +3350,18 @@ fn default_hosted_pr_draft(
         head: published_branch.to_string(),
         base: base.to_string(),
         draft: true,
+        repo,
     })
+}
+
+#[derive(Debug, Clone)]
+struct PrDraft {
+    title: String,
+    body: String,
+    head: String,
+    base: String,
+    draft: bool,
+    repo: GitHubRepoRef,
 }
 
 fn publish_hosted_repo_changes(
@@ -3307,27 +3409,47 @@ fn publish_hosted_repo_changes(
         ..HostedTaskGithubResponse::default()
     };
 
-    if let (Some(repo_url), Some(token), Some(draft)) = (
+    if let (Some(repo_url), Some(draft)) = (
         payload.repo_url.as_deref(),
-        env::var("GITHUB_TOKEN")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
         default_hosted_pr_draft(payload, &published_branch, &commit.commit_sha),
     ) {
-        let repo = parse_github_repo_url(repo_url)?;
-        let client = GitHubClient::new(GitHubClientConfig {
-            api_base: hosted_github_api_base(),
-            token,
-        });
-        let pr = client.create_pull_request(&repo, &draft)?;
-        github.owner = Some(repo.owner);
-        github.repo = Some(repo.repo);
-        github.pr_number = Some(pr.number);
-        github.pr_url = Some(pr.html_url);
-        github.pr_api_url = Some(pr.api_url);
-        github.pr_head_ref = Some(pr.head_ref);
-        github.pr_base_ref = Some(pr.base_ref);
+        let repo = &draft.repo;
+        let result = global_integration_registry().call_github_create_pr(
+            &repo.owner,
+            &repo.repo,
+            &draft.title,
+            &draft.body,
+            &draft.head,
+            &draft.base,
+            draft.draft,
+        );
+        if let Ok(pr_result) = result {
+            github.owner = Some(repo.owner.clone());
+            github.repo = Some(repo.repo.clone());
+            if let Some(number) = pr_result.get("number").and_then(|v| v.as_u64()) {
+                github.pr_number = Some(number);
+            }
+            if let Some(url) = pr_result.get("html_url").and_then(|v| v.as_str()) {
+                github.pr_url = Some(url.to_string());
+            }
+            if let Some(url) = pr_result.get("url").and_then(|v| v.as_str()) {
+                github.pr_api_url = Some(url.to_string());
+            }
+            if let Some(head) = pr_result
+                .get("head")
+                .and_then(|v| v.get("ref"))
+                .and_then(|v| v.as_str())
+            {
+                github.pr_head_ref = Some(head.to_string());
+            }
+            if let Some(base) = pr_result
+                .get("base")
+                .and_then(|v| v.get("ref"))
+                .and_then(|v| v.as_str())
+            {
+                github.pr_base_ref = Some(base.to_string());
+            }
+        }
     }
 
     Ok(Some(github))
@@ -3373,25 +3495,9 @@ fn report_hosted_task_to_github(
     result: Option<&str>,
     error: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (Some(owner), Some(repo), Some(token)) = (
-        github.owner.as_deref(),
-        github.repo.as_deref(),
-        env::var("GITHUB_TOKEN")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-    ) else {
+    let (Some(owner), Some(repo)) = (github.owner.as_deref(), github.repo.as_deref()) else {
         return Ok(());
     };
-
-    let repo_ref = GitHubRepoRef {
-        owner: owner.to_string(),
-        repo: repo.to_string(),
-    };
-    let client = GitHubClient::new(GitHubClientConfig {
-        api_base: hosted_github_api_base(),
-        token,
-    });
     let details_url = format!("{server_url}/v1/tasks/{task_id}");
 
     if let Some(head_sha) = github.published_commit_sha.as_deref() {
@@ -3406,28 +3512,23 @@ fn report_hosted_task_to_github(
             .filter(|value| !value.is_empty())
             .or(error.map(str::trim).filter(|value| !value.is_empty()))
             .map(str::to_string);
-        let _ = client.create_check_run(
-            &repo_ref,
-            &GitHubCheckRunDraft {
-                name: "orbit/hosted-task".to_string(),
-                head_sha: head_sha.to_string(),
-                status: "completed".to_string(),
-                conclusion: Some(if success {
-                    "success".to_string()
+        let _ = global_integration_registry().call_github_create_check_run(
+            owner,
+            repo,
+            "orbit/hosted-task",
+            head_sha,
+            "completed",
+            Some(if success { "success" } else { "failure" }),
+            Some(&details_url),
+            Some(&CheckRunOutput {
+                title: if success {
+                    format!("Orbit task {task_id} completed")
                 } else {
-                    "failure".to_string()
-                }),
-                details_url: Some(details_url.clone()),
-                output: Some(GitHubCheckRunOutput {
-                    title: if success {
-                        format!("Orbit task {task_id} completed")
-                    } else {
-                        format!("Orbit task {task_id} failed")
-                    },
-                    summary,
-                    text,
-                }),
-            },
+                    format!("Orbit task {task_id} failed")
+                },
+                summary,
+                text,
+            }),
         );
     }
 
@@ -3442,8 +3543,8 @@ fn report_hosted_task_to_github(
                 summarize_hosted_result(result, "Hosted task completed successfully.")
             )
         };
-        let _ =
-            client.create_issue_comment(&repo_ref, pr_number, &GitHubIssueCommentDraft { body });
+        let _ = global_integration_registry()
+            .call_github_create_issue_comment(owner, repo, pr_number, &body);
     }
 
     Ok(())
@@ -5877,31 +5978,7 @@ impl LiveCli {
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let system_prompt = build_system_prompt()?;
-        let session_state = Session::new();
-        let session = create_managed_session_handle(&session_state.session_id)?;
-        let runtime = build_runtime(
-            session_state.with_persistence_path(session.path.clone()),
-            &session.id,
-            model.clone(),
-            system_prompt.clone(),
-            enable_tools,
-            true,
-            allowed_tools.clone(),
-            permission_mode,
-            None,
-        )?;
-        let cli = Self {
-            model,
-            provider: None,
-            allowed_tools,
-            permission_mode,
-            system_prompt,
-            runtime,
-            session,
-        };
-        cli.persist_session()?;
-        Ok(cli)
+        Self::new_with_provider(model, None, enable_tools, allowed_tools, permission_mode)
     }
 
     fn new_with_provider(
@@ -5913,13 +5990,23 @@ impl LiveCli {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let system_prompt = build_system_prompt()?;
         let mut effective_model = model;
-        if provider
-            .as_deref()
-            .is_some_and(|name| name.eq_ignore_ascii_case("ollama"))
-            && effective_model == DEFAULT_MODEL
-        {
-            effective_model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama2".to_string());
+        let effective_provider = if let Some(provider_name) = provider.as_deref() {
+            Some(provider_name.to_string())
+        } else {
+            // No explicit provider: honor the configured default provider so that
+            // `runtime.default_provider` is authoritative for the no-flag path.
+            match ConfigurationManager::load() {
+                Ok(config_manager) => Some(config_manager.default_provider().to_string()),
+                Err(_) => None,
+            }
+        };
+
+        if let Some(provider_name) = effective_provider.as_deref() {
+            if provider_name.eq_ignore_ascii_case("ollama") && effective_model == DEFAULT_MODEL {
+                effective_model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama2".to_string());
+            }
         }
+
         let session_state = Session::new();
         let session = create_managed_session_handle(&session_state.session_id)?;
         let runtime = build_runtime_with_provider(
@@ -5931,12 +6018,12 @@ impl LiveCli {
             true,
             allowed_tools.clone(),
             permission_mode,
-            provider.clone(),
+            effective_provider.clone(),
             None,
         )?;
         let cli = Self {
             model: effective_model,
-            provider,
+            provider: effective_provider,
             allowed_tools,
             permission_mode,
             system_prompt,

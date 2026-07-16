@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use orbit_mock_anthropic_service::{MockAnthropicService, SCENARIO_PREFIX};
+use orbit_mock_gateway::{MockGateway, SCENARIO_PREFIX};
 use serde_json::{json, Value};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -15,7 +15,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[test]
 #[allow(clippy::too_many_lines)]
 #[ignore = "mock service connection not routing: ORBIT_BASE_URL being bypassed"]
-fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios() {
+fn clean_env_cli_reaches_mock_gateway_across_scripted_parity_scenarios() {
     let manifest_entries = load_scenario_manifest();
     let manifest = manifest_entries
         .iter()
@@ -23,7 +23,7 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
         .map(|entry| (entry.name.clone(), entry))
         .collect::<BTreeMap<_, _>>();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-    let server = match runtime.block_on(MockAnthropicService::spawn()) {
+    let server = match runtime.block_on(MockGateway::spawn()) {
         Ok(server) => server,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
         Err(error) => panic!("mock service should start: {error}"),
@@ -188,16 +188,13 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
     let captured = runtime.block_on(server.captured_requests());
     assert_eq!(
         captured.len(),
-        42,
-        "twelve scenarios should produce forty-two requests (count_tokens + messages)"
+        21,
+        "twelve scenarios should produce twenty-one requests (messages only; no count_tokens endpoint in the OpenAI-compatible gateway)"
     );
-    assert!(captured.iter().all(|request| {
-        request.path == "/v1/messages" || request.path == "/v1/messages/count_tokens"
-    }));
     assert!(captured
         .iter()
-        .filter(|request| request.path == "/v1/messages")
-        .all(|request| request.stream));
+        .all(|request| request.path == "/v1/chat/completions"));
+    assert!(captured.iter().all(|request| request.stream));
 
     let mut request_counts = BTreeMap::new();
     for request in &captured {
@@ -206,18 +203,18 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
             .or_insert(0_usize) += 1;
     }
     let expected_counts = BTreeMap::from([
-        ("streaming_text", 2_usize),
-        ("read_file_roundtrip", 4),
-        ("grep_chunk_assembly", 4),
-        ("write_file_allowed", 4),
-        ("write_file_denied", 4),
-        ("multi_tool_turn_roundtrip", 4),
-        ("bash_stdout_roundtrip", 4),
-        ("bash_permission_prompt_approved", 4),
-        ("bash_permission_prompt_denied", 4),
-        ("plugin_tool_roundtrip", 4),
-        ("auto_compact_triggered", 2),
-        ("token_cost_reporting", 2),
+        ("streaming_text", 1_usize),
+        ("read_file_roundtrip", 2),
+        ("grep_chunk_assembly", 2),
+        ("write_file_allowed", 2),
+        ("write_file_denied", 2),
+        ("multi_tool_turn_roundtrip", 2),
+        ("bash_stdout_roundtrip", 2),
+        ("bash_permission_prompt_approved", 2),
+        ("bash_permission_prompt_denied", 2),
+        ("plugin_tool_roundtrip", 2),
+        ("auto_compact_triggered", 1),
+        ("token_cost_reporting", 1),
     ]);
     assert_eq!(request_counts, expected_counts);
     for report in &mut scenario_reports {
@@ -295,15 +292,17 @@ fn run_case(case: ScenarioCase, workspace: &HarnessWorkspace, base_url: &str) ->
     command
         .current_dir(&workspace.root)
         .env_clear()
-        .env("ORBIT_API_KEY", "test-parity-key")
-        .env("ORBIT_BASE_URL", base_url)
+        .env("FRONTAL_API_KEY", "test-parity-key")
+        .env("FRONTAL_BASE_URL", base_url)
         .env("ORBIT_CONFIG_HOME", &workspace.config_home)
         .env("HOME", &workspace.home)
         .env("NO_COLOR", "1")
         .env("PATH", "/usr/bin:/bin")
         .args([
+            "--provider",
+            "frontal",
             "--model",
-            "sonnet",
+            "claude-4-8",
             "--permission-mode",
             case.permission_mode,
             "--output-format=json",
