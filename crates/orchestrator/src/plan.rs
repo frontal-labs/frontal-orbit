@@ -36,23 +36,19 @@ impl WorkItem {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkItemContext {
     #[serde(default)]
     pub metadata: HashMap<String, String>,
 }
 
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum WorkItemPriority {
     Low,
     #[default]
     Medium,
     High,
 }
-
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WorkItemSource {
@@ -91,7 +87,7 @@ pub enum LaneRole {
     Maintenance,
 }
 
-#[must_use] 
+#[must_use]
 pub fn plan_work_item(work_item: WorkItem) -> ExecutionPlan {
     let primary_role = match work_item.source {
         WorkItemSource::Cron => LaneRole::Maintenance,
