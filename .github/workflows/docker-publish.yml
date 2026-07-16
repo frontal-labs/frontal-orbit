@@ -10,8 +10,8 @@ on:
     branches:
       - main
     paths:
-      - Dockerfile
-      - Dockerfile.dev
+      - infrastructure/docker/orbit-cli.Dockerfile
+      - infrastructure/docker/orbit-dev.Dockerfile
       - .github/workflows/docker-publish.yml
 
 permissions:
@@ -29,9 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - dockerfile: Dockerfile
+          - dockerfile: infrastructure/docker/orbit-cli.Dockerfile
             image: orbit
-          - dockerfile: Dockerfile.dev
+          - dockerfile: infrastructure/docker/orbit-dev.Dockerfile
             image: orbit-dev
 
     steps:
@@ -61,7 +61,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
-        if: ${{ github.event_name != 'pull_request' || matrix.dockerfile != 'Dockerfile' }}
+        if: ${{ github.event_name != 'pull_request' || matrix.dockerfile != 'infrastructure/docker/orbit-cli.Dockerfile' }}
         uses: docker/build-push-action@v6
         with:
           context: .
