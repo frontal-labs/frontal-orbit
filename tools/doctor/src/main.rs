@@ -11,7 +11,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Parser)]
-#[command(name = "orbit-doctor", about = "Check the frontal-orbit dev environment")]
+#[command(
+    name = "orbit-doctor",
+    about = "Check the frontal-orbit dev environment"
+)]
 struct Cli {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Text)]
@@ -50,15 +53,26 @@ fn run_version(bin: &str, args: &[&str]) -> Option<String> {
 
 fn check(name: &str, detail: Option<String>) -> Check {
     match detail {
-        Some(d) => Check { name: name.into(), ok: true, detail: d },
-        None => Check { name: name.into(), ok: false, detail: "not found".into() },
+        Some(d) => Check {
+            name: name.into(),
+            ok: true,
+            detail: d,
+        },
+        None => Check {
+            name: name.into(),
+            ok: false,
+            detail: "not found".into(),
+        },
     }
 }
 
 fn first_line_of(path: &std::path::Path) -> Option<String> {
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
+#[allow(clippy::too_many_lines)]
 fn collect_checks(root: &std::path::Path, check_network: bool) -> Vec<Check> {
     let mut checks: Vec<Check> = Vec::new();
 
@@ -67,13 +81,21 @@ fn collect_checks(root: &std::path::Path, check_network: bool) -> Vec<Check> {
     let bazel_detail = match (&bazel, &pinned) {
         (Some(have), Some(want)) => {
             let ok = have.contains(want.trim());
-            Some((ok, format!("{have} (pinned {want})"), format!("installed {have} but .bazelversion pins {want}")))
+            Some((
+                ok,
+                format!("{have} (pinned {want})"),
+                format!("installed {have} but .bazelversion pins {want}"),
+            ))
         }
         (Some(have), None) => Some((true, have.clone(), String::new())),
         _ => None,
     };
     match bazel_detail {
-        Some((ok, ok_d, bad_d)) => checks.push(Check { name: "bazel".into(), ok, detail: if ok { ok_d } else { bad_d } }),
+        Some((ok, ok_d, bad_d)) => checks.push(Check {
+            name: "bazel".into(),
+            ok,
+            detail: if ok { ok_d } else { bad_d },
+        }),
         None => checks.push(check("bazel", None)),
     }
 
@@ -82,28 +104,47 @@ fn collect_checks(root: &std::path::Path, check_network: bool) -> Vec<Check> {
     checks.push(check("node", run_version("node", &["--version"])));
     checks.push(check("docker", run_version("docker", &["--version"])));
     checks.push(check("git", run_version("git", &["--version"])));
-    checks.push(check("pre-commit", run_version("pre-commit", &["--version"])));
+    checks.push(check(
+        "pre-commit",
+        run_version("pre-commit", &["--version"]),
+    ));
 
     let orbit_json = root.join(".orbit.json");
     let orbit_ok = if orbit_json.exists() {
         match std::fs::read_to_string(&orbit_json) {
             Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
                 Ok(_) => {
-                    checks.push(Check { name: ".orbit.json".into(), ok: true, detail: "valid JSON".into() });
+                    checks.push(Check {
+                        name: ".orbit.json".into(),
+                        ok: true,
+                        detail: "valid JSON".into(),
+                    });
                     true
                 }
                 Err(e) => {
-                    checks.push(Check { name: ".orbit.json".into(), ok: false, detail: format!("invalid JSON: {e}") });
+                    checks.push(Check {
+                        name: ".orbit.json".into(),
+                        ok: false,
+                        detail: format!("invalid JSON: {e}"),
+                    });
                     false
                 }
             },
             Err(e) => {
-                checks.push(Check { name: ".orbit.json".into(), ok: false, detail: e.to_string() });
+                checks.push(Check {
+                    name: ".orbit.json".into(),
+                    ok: false,
+                    detail: e.to_string(),
+                });
                 false
             }
         }
     } else {
-        checks.push(Check { name: ".orbit.json".into(), ok: false, detail: "missing".into() });
+        checks.push(Check {
+            name: ".orbit.json".into(),
+            ok: false,
+            detail: "missing".into(),
+        });
         false
     };
     let _ = orbit_ok;
@@ -112,18 +153,33 @@ fn collect_checks(root: &std::path::Path, check_network: bool) -> Vec<Check> {
     checks.push(Check {
         name: "Cargo.lock".into(),
         ok: lock.exists(),
-        detail: if lock.exists() { "present".into() } else { "missing".into() },
+        detail: if lock.exists() {
+            "present".into()
+        } else {
+            "missing".into()
+        },
     });
 
     if check_network {
         let net = Command::new("curl")
-            .args(["-sS", "--max-time", "5", "-o", "/dev/null", "https://static.crates.io"])
+            .args([
+                "-sS",
+                "--max-time",
+                "5",
+                "-o",
+                "/dev/null",
+                "https://static.crates.io",
+            ])
             .status()
             .is_ok_and(|s| s.success());
         checks.push(Check {
             name: "network egress".into(),
             ok: net,
-            detail: if net { "reachable".into() } else { "unreachable".into() },
+            detail: if net {
+                "reachable".into()
+            } else {
+                "unreachable".into()
+            },
         });
     }
 

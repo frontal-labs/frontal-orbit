@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use semver::Version;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "orbit-version", about = "Bump the monorepo version")]
@@ -131,7 +130,9 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Cmd::Bump { part } => bump(&cur, *part),
-        Cmd::Set { version } => Version::parse(version).with_context(|| format!("parsing {version}"))?,
+        Cmd::Set { version } => {
+            Version::parse(version).with_context(|| format!("parsing {version}"))?
+        }
         Cmd::Changeset => todo!(),
     };
 
@@ -154,7 +155,8 @@ fn main() -> Result<()> {
     if !cli.dry_run && Path::new(changelog).exists() {
         let body = read(changelog)?;
         if !body.contains(&format!("## [{next}]")) {
-            let stamped = format!("## [{next}] - unreleased\n\n- Version bump via orbit-version.\n\n{body}");
+            let stamped =
+                format!("## [{next}] - unreleased\n\n- Version bump via orbit-version.\n\n{body}");
             write(changelog, &stamped, cli.dry_run)?;
         }
     }

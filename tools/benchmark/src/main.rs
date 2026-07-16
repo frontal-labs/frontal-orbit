@@ -73,7 +73,11 @@ fn main() -> Result<()> {
             if !status.success() {
                 anyhow::bail!("cargo build exited with {status}");
             }
-            BenchResult { kind: "build".into(), elapsed_ms: ms, detail: "cargo build --workspace".into() }
+            BenchResult {
+                kind: "build".into(),
+                elapsed_ms: ms,
+                detail: "cargo build --workspace".into(),
+            }
         }
         Cmd::Sizes => {
             let start = Instant::now();
@@ -84,7 +88,10 @@ fn main() -> Result<()> {
                     let p = e.path();
                     if p.is_file() {
                         if let Ok(m) = e.metadata() {
-                            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            let name = p
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default();
                             entries.push((name, m.len()));
                         }
                     }
@@ -118,7 +125,10 @@ fn main() -> Result<()> {
 
     match cli.format {
         Out::Json => println!("{}", serde_json::to_string_pretty(&result)?),
-        Out::Text => println!("{:<8} {}  ({})", result.kind, result.elapsed_ms, result.detail),
+        Out::Text => println!(
+            "{:<8} {}  ({})",
+            result.kind, result.elapsed_ms, result.detail
+        ),
     }
     Ok(())
 }

@@ -63,7 +63,9 @@ fn dir_size(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(p) = stack.pop() {
-        let Ok(read) = std::fs::read_dir(&p) else { continue };
+        let Ok(read) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for entry in read.flatten() {
             let p = entry.path();
             if p.is_dir() {
@@ -102,17 +104,19 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Status => {
             let base = bazel_info("output_base");
-            let bazel_bytes = base.as_ref().map_or(0, |b| dir_size(std::path::Path::new(b)));
+            let bazel_bytes = base
+                .as_ref()
+                .map_or(0, |b| dir_size(std::path::Path::new(b)));
             let target = PathBuf::from("target");
             let target_bytes = dir_size(&target);
             println!("Bazel output base : {base:?}");
             println!("Bazel cache size  : {}", human(bazel_bytes));
-            println!("Cargo target      : {:?}", target.to_string_lossy().into_owned());
-            println!("Cargo target size : {}", human(target_bytes));
             println!(
-                "Total            : {}",
-                human(bazel_bytes + target_bytes)
+                "Cargo target      : {:?}",
+                target.to_string_lossy().into_owned()
             );
+            println!("Cargo target size : {}", human(target_bytes));
+            println!("Total            : {}", human(bazel_bytes + target_bytes));
         }
         Cmd::Clean { expunge } => {
             let mut cmd = Command::new("bazel");
@@ -160,7 +164,13 @@ fn main() -> Result<()> {
                 println!("Bazel cache cleared.");
             }
             BazelOp::Info => {
-                for key in ["output_base", "execution_root", "bazel-bin", "bazel-testlogs", "workspace"] {
+                for key in [
+                    "output_base",
+                    "execution_root",
+                    "bazel-bin",
+                    "bazel-testlogs",
+                    "workspace",
+                ] {
                     match bazel_info(key) {
                         Some(v) => println!("{key:<16} {v}"),
                         None => println!("{key:<16} (unavailable)"),

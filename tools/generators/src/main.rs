@@ -78,7 +78,11 @@ fn main() -> Result<()> {
             };
             std::fs::write(out_dir.join(entry), lib).context("write source")?;
 
-            println!("Generated {} crate at {}", kind_as_str(kind), out_dir.display());
+            println!(
+                "Generated {} crate at {}",
+                kind_as_str(kind),
+                out_dir.display()
+            );
             println!("  - Cargo.toml");
             println!("  - {entry}");
             println!("Remember to run `cargo build` and add it to the workspace if needed.");

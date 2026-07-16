@@ -50,7 +50,11 @@ pub fn render<S: BuildHasher>(template: &str, vars: &HashMap<&str, String, S>) -
 }
 
 /// Load `name` from `dir` and render it with `vars`.
-pub fn render_file<S: BuildHasher>(dir: &Path, name: &str, vars: &HashMap<&str, String, S>) -> std::io::Result<String> {
+pub fn render_file<S: BuildHasher>(
+    dir: &Path,
+    name: &str,
+    vars: &HashMap<&str, String, S>,
+) -> std::io::Result<String> {
     let content = std::fs::read_to_string(dir.join(name))?;
     Ok(render(&content, vars))
 }

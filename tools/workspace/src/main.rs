@@ -12,7 +12,10 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "orbit-workspace", about = "Maintain the Cargo workspace member list")]
+#[command(
+    name = "orbit-workspace",
+    about = "Maintain the Cargo workspace member list"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -29,7 +32,8 @@ enum Cmd {
 }
 
 fn load_manifest(path: &std::path::Path) -> Result<toml::Value> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     text.parse::<toml::Value>().context("parsing Cargo.toml")
 }
 
@@ -74,7 +78,9 @@ fn main() -> Result<()> {
     let manifest = &cli.manifest;
     let value = load_manifest(manifest)?;
     let members = members(&value);
-    let root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let root = manifest
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
 
     match cli.cmd {
         Cmd::List => {
@@ -105,7 +111,10 @@ fn main() -> Result<()> {
                             .and_then(|p| p.get("name"))
                             .and_then(|n| n.as_str())
                         {
-                            names.entry(name.to_string()).or_default().push(m.display().to_string());
+                            names
+                                .entry(name.to_string())
+                                .or_default()
+                                .push(m.display().to_string());
                         }
                     }
                 }

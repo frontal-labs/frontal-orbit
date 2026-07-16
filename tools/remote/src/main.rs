@@ -8,7 +8,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "orbit-remote", about = "Manage Bazel remote cache / RBE config")]
+#[command(
+    name = "orbit-remote",
+    about = "Manage Bazel remote cache / RBE config"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

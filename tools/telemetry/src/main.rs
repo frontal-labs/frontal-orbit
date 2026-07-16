@@ -14,7 +14,10 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
-#[command(name = "orbit-telemetry", about = "Wrap a command and emit a telemetry event")]
+#[command(
+    name = "orbit-telemetry",
+    about = "Wrap a command and emit a telemetry event"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -61,11 +64,16 @@ fn telemetry_path(config: &str) -> Option<String> {
     let text = std::fs::read_to_string(config).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     let tel = v.get("telemetry")?;
-    let enabled = tel.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let enabled = tel
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     if !enabled {
         return None;
     }
-    tel.get("path").and_then(serde_json::Value::as_str).map(str::to_string)
+    tel.get("path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 fn emit(path: Option<&String>, event: &Event) -> Result<()> {
@@ -73,7 +81,10 @@ fn emit(path: Option<&String>, event: &Event) -> Result<()> {
     match path {
         Some(p) => {
             use std::io::Write;
-            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(p)?;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)?;
             writeln!(f, "{line}")?;
             eprintln!("telemetry: wrote event to {p}");
         }
@@ -87,7 +98,11 @@ fn main() -> Result<()> {
     let path = telemetry_path(&cli.config);
 
     match &cli.cmd {
-        Cmd::Wrap { name, command, args } => {
+        Cmd::Wrap {
+            name,
+            command,
+            args,
+        } => {
             let start = std::time::Instant::now();
             let status = Command::new(command).args(args).status();
             let ms = start.elapsed().as_millis();
@@ -110,7 +125,11 @@ fn main() -> Result<()> {
                 anyhow::bail!("wrapped command failed");
             }
         }
-        Cmd::Event { name, level, message } => {
+        Cmd::Event {
+            name,
+            level,
+            message,
+        } => {
             emit(
                 path.as_ref(),
                 &Event {
