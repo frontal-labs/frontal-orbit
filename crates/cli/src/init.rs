@@ -98,11 +98,11 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
         status: ensure_gitignore_entries(&gitignore)?,
     });
 
-    let claude_md = cwd.join("ORBIT.md");
-    let content = render_init_claude_md(cwd);
+    let agents_md = cwd.join("AGENTS.md");
+    let content = render_init_agents_md(cwd);
     artifacts.push(InitArtifact {
-        name: "ORBIT.md",
-        status: write_file_if_missing(&claude_md, &content)?,
+        name: "AGENTS.md",
+        status: write_file_if_missing(&agents_md, &content)?,
     });
 
     Ok(InitReport {
@@ -159,10 +159,10 @@ fn ensure_gitignore_entries(path: &Path) -> Result<InitStatus, std::io::Error> {
     Ok(InitStatus::Updated)
 }
 
-pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
+pub(crate) fn render_init_agents_md(cwd: &Path) -> String {
     let detection = detect_repo(cwd);
     let mut lines = vec![
-        "# ORBIT.md".to_string(),
+        "# AGENTS.md".to_string(),
         String::new(),
         "This file provides guidance to Orbit (orbitcode.dev) when working with code in this repository.".to_string(),
         String::new(),
@@ -210,7 +210,7 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
     lines.push("## Working agreement".to_string());
     lines.push("- Prefer small, reviewable changes and keep generated bootstrap files aligned with actual repo workflows.".to_string());
     lines.push("- Keep shared defaults in `.orbit.json`; reserve `.orbit/settings.local.json` for machine-local overrides.".to_string());
-    lines.push("- Do not overwrite existing `ORBIT.md` content automatically; update it intentionally when repo workflows change.".to_string());
+    lines.push("- Do not overwrite existing `AGENTS.md` content automatically; update it intentionally when repo workflows change.".to_string());
     lines.push(String::new());
 
     lines.join("\n")
@@ -332,7 +332,7 @@ fn framework_notes(detection: &RepoDetection) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{initialize_repo, render_init_claude_md};
+    use super::{initialize_repo, render_init_agents_md};
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -362,10 +362,10 @@ mod tests {
         assert!(rendered.contains(".orbit.json"));
         assert!(rendered.contains("created"));
         assert!(rendered.contains(".gitignore"));
-        assert!(rendered.contains("ORBIT.md"));
+        assert!(rendered.contains("AGENTS.md"));
         assert!(root.join(".orbit").is_dir());
         assert!(root.join(".orbit.json").is_file());
-        assert!(root.join("ORBIT.md").is_file());
+        assert!(root.join("AGENTS.md").is_file());
         assert_eq!(
             fs::read_to_string(root.join(".orbit.json")).expect("read orbit json"),
             concat!(
@@ -379,8 +379,8 @@ mod tests {
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
         assert!(gitignore.contains(".orbit/settings.local.json"));
         assert!(gitignore.contains(".orbit/sessions/"));
-        let orbit_md = fs::read_to_string(root.join("ORBIT.md")).expect("read orbit md");
-        assert!(orbit_md.contains("## Working agreement"));
+        let agents_md = fs::read_to_string(root.join("AGENTS.md")).expect("read agents md");
+        assert!(agents_md.contains("## Working agreement"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -389,12 +389,12 @@ mod tests {
     fn initialize_repo_is_idempotent_and_preserves_existing_files() {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("create root");
-        fs::write(root.join("ORBIT.md"), "custom guidance\n").expect("write existing claude md");
+        fs::write(root.join("AGENTS.md"), "custom guidance\n").expect("write existing agents md");
         fs::write(root.join(".gitignore"), ".orbit/settings.local.json\n")
             .expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
-        assert!(first.render().contains("ORBIT.md"));
+        assert!(first.render().contains("AGENTS.md"));
         assert!(first.render().contains("skipped (already exists)"));
         let second = initialize_repo(&root).expect("second init should succeed");
         let second_rendered = second.render();
@@ -402,9 +402,9 @@ mod tests {
         assert!(second_rendered.contains(".orbit.json"));
         assert!(second_rendered.contains("skipped (already exists)"));
         assert!(second_rendered.contains(".gitignore       skipped (already exists)"));
-        assert!(second_rendered.contains("ORBIT.md"));
+        assert!(second_rendered.contains("AGENTS.md"));
         assert_eq!(
-            fs::read_to_string(root.join("ORBIT.md")).expect("read existing orbit md"),
+            fs::read_to_string(root.join("AGENTS.md")).expect("read existing agents md"),
             "custom guidance\n"
         );
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
@@ -426,7 +426,7 @@ mod tests {
         )
         .expect("write package json");
 
-        let rendered = render_init_claude_md(Path::new(&root));
+        let rendered = render_init_agents_md(Path::new(&root));
         assert!(rendered.contains("Languages: Python, TypeScript."));
         assert!(rendered.contains("Frameworks/tooling markers: Next.js, React."));
         assert!(rendered.contains("pyproject.toml"));

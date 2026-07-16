@@ -5047,7 +5047,7 @@ fn run_resume_command(
             json: None,
         }),
         SlashCommand::Init => {
-            let message = init_claude_md()?;
+            let message = init_agents_md()?;
             Ok(ResumeCommandOutcome {
                 session: session.clone(),
                 message: Some(message.clone()),
@@ -8006,13 +8006,13 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
     ))
 }
 
-fn init_claude_md() -> Result<String, Box<dyn std::error::Error>> {
+fn init_agents_md() -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     Ok(initialize_repo(&cwd)?.render())
 }
 
 fn run_init(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
-    let message = init_claude_md()?;
+    let message = init_agents_md()?;
     match output_format {
         CliOutputFormat::Text => println!("{message}"),
         CliOutputFormat::Json => println!(
@@ -13547,8 +13547,8 @@ UU conflicted.rs",
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let rendered = crate::init::render_init_claude_md(&workspace_root);
-        assert!(rendered.contains("# ORBIT.md"));
+        let rendered = crate::init::render_init_agents_md(&workspace_root);
+        assert!(rendered.contains("# AGENTS.md"));
         assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
     }
 
