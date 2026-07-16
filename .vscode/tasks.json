@@ -46,7 +46,7 @@
       "args": [
         "build",
         "-p",
-        "mock-anthropic-service"
+        "mock-gateway"
       ],
       "group": "build",
       "problemMatcher": "$rustc",
