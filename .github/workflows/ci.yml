@@ -1,0 +1,55 @@
+name: Bazel CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ci.yml'
+      - 'MODULE.bazel'
+      - '.bazelversion'
+      - '.bazelrc'
+      - 'bazel/**'
+      - 'third_party/**'
+      - 'tools/**'
+      - 'scripts/**'
+      - 'sdk/**'
+      - 'biome.json'
+      - 'ultracite.json'
+      - 'bunfig.toml'
+      - 'package.json'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bazel:
+    name: bazel build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bazelisk
+        uses: bazel-contrib/setup-bazel@0.14.0
+        with:
+          bazelisk-version: "1.19.0"
+          bazelisk-cache: true
+          bazel-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Third-party check
+        run: bash scripts/third_party_check.sh
+
+      - name: Bazel build //...
+        run: bazel build //...
+
+      - name: Bazel test //...
+        run: bazel test //...
+
+      - name: Makefile CI (build + test + lint)
+        run: make ci

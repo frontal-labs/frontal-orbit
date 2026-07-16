@@ -1,0 +1,151 @@
+name: SDK CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+    paths:
+      - '.github/workflows/sdk.yml'
+      - 'biome.json'
+      - 'ultracite.json'
+      - 'bunfig.toml'
+      - 'package.json'
+      - 'tools/**'
+      - 'sdk/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/sdk.yml'
+      - 'biome.json'
+      - 'ultracite.json'
+      - 'bunfig.toml'
+      - 'package.json'
+      - 'tools/**'
+      - 'sdk/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+jobs:
+  # ── TypeScript SDK: Biome + Bun (Vitest) ───────────────────────────────
+  typescript:
+    name: typescript sdk (biome + bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: "1.1.38"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install workspace dependencies
+        run: bun install
+
+      - name: Biome check
+        run: bunx @biomejs/biome check .
+
+      - name: Build SDK
+        run: bun run --filter @frontal-labs/orbit-sdk build
+
+      - name: Test SDK
+        run: bun run --filter @frontal-labs/orbit-sdk test
+
+  # ── Rust SDK: rustfmt + clippy + cargo test ─────────────────────────────
+  rust:
+    name: rust sdk (fmt + clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Check formatting
+        run: cargo fmt -p orbit-sdk -- --check
+
+      - name: Clippy
+        run: cargo clippy -p orbit-sdk --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p orbit-sdk
+
+  # ── Publish SDK artifacts (npm, crates.io, ghcr) ───────────────────────
+  publish:
+    name: publish sdks
+    needs: [typescript, rust]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: "1.1.38"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install and build TypeScript SDK
+        run: |
+          bun install
+          bun run --filter @frontal-labs/orbit-sdk build
+
+      - name: Publish TypeScript SDK to npm
+        working-directory: sdk/typescript
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish Rust SDK to crates.io
+        working-directory: sdk/rust
+        run: cargo publish --token "${CARGO_REGISTRY_TOKEN}"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push SDK image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sdk/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/orbit-sdk:latest
+            ghcr.io/${{ github.repository }}/orbit-sdk:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

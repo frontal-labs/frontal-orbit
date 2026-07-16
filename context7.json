@@ -1,0 +1,40 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Frontal Orbit",
+  "description": "A Rust workspace providing the Orbit CLI/runtime and a repo-level developer tooling suite (doctor, coverage, benchmark, cache, codegen, fuzz, generators, remote, telemetry, templates, version, workspace).",
+  "folders": [
+    "crates",
+    "tools",
+    "orbit-cli",
+    "sdk",
+    "extensions",
+    "docs"
+  ],
+  "excludeFolders": [
+    "target",
+    "bazel",
+    "bazel-bin",
+    "bazel-out",
+    "bazel-testlogs",
+    "bazel-frontal-orbit",
+    "node_modules",
+    "dist",
+    "third_party",
+    ".orbit",
+    ".opencode",
+    ".devcontainer"
+  ],
+  "excludeFiles": [
+    "CHANGELOG.md",
+    "Cargo.lock",
+    "package-lock.json",
+    "libtest_ts.rlib"
+  ],
+  "rules": [
+    "Follow the AGENTS.md guidance: run 'cargo fmt', 'cargo clippy --workspace --all-targets -- -D warnings', and 'cargo test --workspace' before considering changes complete.",
+    "Prefer small, reviewable changes and keep generated bootstrap files aligned with actual repo workflows.",
+    "Keep shared defaults in .orbit.json; reserve .orbit/settings.local.json for machine-local overrides.",
+    "Do not overwrite existing ORBIT.md content automatically; update it intentionally when repo workflows change.",
+    "Each new Rust tool is a cargo workspace member created under tools/<name>/ with a Cargo.toml (name = \"tools-<name>\"), src/main.rs, and a BUILD.bazel sh_binary wrapping //tools:cargo_run.sh."
+  ]
+}

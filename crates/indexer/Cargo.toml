@@ -1,0 +1,42 @@
+[package]
+name = "orbit-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+orbit-core = { path = "../core" }
+orbit-memory = { path = "../memory" }
+orbit-telemetry = { path = "../telemetry" }
+syn = { version = "2.0", features = ["full", "extra-traits", "visit", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+tree-sitter = "0.24"
+tree-sitter-c = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+walkdir = "2"
+notify = { version = "6", features = ["mio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["fs", "sync", "time", "macros"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+regex = "1"
+streaming-iterator = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
