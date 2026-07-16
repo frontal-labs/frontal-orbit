@@ -50,12 +50,12 @@ impl MessageStream {
         self.request_id.as_deref()
     }
 
-    pub async fn next_event(&mut self) -> Result<Option<StreamEvent>, ApiError> {
+    pub fn next_event(&mut self) -> Option<StreamEvent> {
         if self.finished {
-            return Ok(None);
+            return None;
         }
         self.finished = true;
-        Ok(Some(StreamEvent::MessageStop(MessageStopEvent {})))
+        Some(StreamEvent::MessageStop(MessageStopEvent {}))
     }
 }
 
@@ -69,11 +69,11 @@ impl OllamaClient {
         }
     }
 
-    pub fn from_env() -> Result<Self, ApiError> {
+    pub fn from_env() -> Self {
         let base_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
         let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama2".to_string());
-        Ok(Self::new(base_url, model))
+        Self::new(base_url, model)
     }
 }
 

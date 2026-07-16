@@ -179,9 +179,11 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::Frontal | ProviderKind::Bedrock | ProviderKind::Azure => trimmed,
-                ProviderKind::OpenAi => trimmed,
-                ProviderKind::Ollama => trimmed,
+                ProviderKind::Frontal
+                | ProviderKind::Bedrock
+                | ProviderKind::Azure
+                | ProviderKind::OpenAi
+                | ProviderKind::Ollama => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -260,7 +262,7 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     ProviderKind::Ollama
 }
 
-#[must_use]
+#[must_use = "the constructed provider client must be used to send requests"]
 pub fn create_provider_client(
     provider: &str,
     model: String,

@@ -107,7 +107,7 @@ export XAI_BASE_URL="https://api.x.ai/v1"
 
 # Frontal
 export FRONTAL_API_KEY="frontal-..."
-export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
+export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
 
 # AWS Bedrock
 export AWS_ACCESS_KEY_ID="..."

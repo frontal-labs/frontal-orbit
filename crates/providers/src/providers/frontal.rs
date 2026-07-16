@@ -1,6 +1,6 @@
 use super::openai::{AuthScheme, OpenAiCompatConfig};
 
-pub const DEFAULT_BASE_URL: &str = "https://api.frontal.ai/v1";
+pub const DEFAULT_BASE_URL: &str = "https://ai.frontal.dev/v1";
 const FRONTAL_ENV_VARS: &[&str] = &["FRONTAL_API_KEY"];
 
 #[must_use]

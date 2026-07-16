@@ -182,7 +182,7 @@ impl MessageStream {
         match self {
             Self::Anthropic(stream) => stream.next_event().await,
             Self::OpenAiCompat(stream) => stream.next_event().await,
-            Self::Ollama(stream) => stream.next_event().await,
+            Self::Ollama(stream) => Ok(stream.next_event()),
         }
     }
 }
