@@ -13,7 +13,7 @@ path = "src/main.rs"
 axum = { version = "0.7", features = ["ws"] }
 futures-util = "0.3"
 orbit-events = { path = "../events" }
-orbit-github = { path = "../github" }
+orbit-integrations = { path = "../integrations" }
 orbit-orchestrator = { path = "../orchestrator" }
 orbit-repo = { path = "../repo" }
 orbit-runtime = { path = "../runtime" }

@@ -1370,10 +1370,9 @@ dependencies = [
  "orbit-commands",
  "orbit-core",
  "orbit-events",
- "orbit-github",
  "orbit-harness",
  "orbit-integrations",
- "orbit-mock-anthropic-service",
+ "orbit-mock-gateway",
  "orbit-plugins",
  "orbit-repo",
  "orbit-runtime",
@@ -1417,15 +1416,6 @@ name = "orbit-events"
 version = "0.1.1"
 dependencies = [
  "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "orbit-github"
-version = "0.1.1"
-dependencies = [
- "reqwest",
  "serde",
  "serde_json",
 ]
@@ -1498,10 +1488,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbit-mock-anthropic-service"
+name = "orbit-mock-gateway"
 version = "0.1.1"
 dependencies = [
- "orbit-api",
  "serde_json",
  "tokio",
 ]
@@ -1596,7 +1585,7 @@ dependencies = [
  "hex",
  "hmac",
  "orbit-events",
- "orbit-github",
+ "orbit-integrations",
  "orbit-orchestrator",
  "orbit-repo",
  "orbit-runtime",
