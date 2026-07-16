@@ -762,7 +762,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| "missing value for --provider".to_string())?;
-                provider = Some(value.to_string());
+                provider = Some(value.clone());
                 index += 2;
             }
             flag if flag.starts_with("--output-format=") => {
@@ -866,7 +866,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         &model,
         permission_mode_override,
         output_format,
-        provider.clone(),
+        provider: provider.as_ref(),
     ) {
         return action;
     }
@@ -917,9 +917,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             Ok(CliAction::Prompt {
                 prompt,
-                model,
-                provider: provider.clone(),
-                output_format,
+                    model,
+                    provider: provider.cloned(),
+                    output_format,
                 allowed_tools,
                 permission_mode,
             })
@@ -930,7 +930,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             output_format,
             allowed_tools,
             permission_mode,
-            provider,
+            provider.as_ref(),
         ),
         _other => Ok(CliAction::Prompt {
             prompt: rest.join(" "),
@@ -1187,6 +1187,7 @@ fn parse_hosted_policy_cli_action(
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_hosted_task_cli_action(
     args: &[String],
     output_format: CliOutputFormat,
@@ -1308,7 +1309,7 @@ fn parse_hosted_task_cli_action(
                                 "hosted task approval requires a value after --kind".to_string()
                             );
                         };
-                        approval_kind = value.clone();
+                        approval_kind.clone_from(value);
                         index += 2;
                     }
                     other => {
@@ -1359,7 +1360,7 @@ fn parse_single_word_command_alias(
     model: &str,
     permission_mode_override: Option<PermissionMode>,
     output_format: CliOutputFormat,
-    provider: Option<String>,
+    provider: Option<&String>,
 ) -> Option<Result<CliAction, String>> {
     if rest.len() != 1 {
         return None;
@@ -1370,7 +1371,7 @@ fn parse_single_word_command_alias(
         "version" => Some(Ok(CliAction::Version { output_format })),
         "status" => Some(Ok(CliAction::Status {
             model: model.to_string(),
-            provider: provider.clone(),
+            provider: provider.cloned(),
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
             output_format,
         })),
@@ -1587,7 +1588,7 @@ fn parse_direct_slash_cli_action(
     output_format: CliOutputFormat,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
-    provider: Option<String>,
+    provider: Option<&String>,
 ) -> Result<CliAction, String> {
     let raw = rest.join(" ");
     match SlashCommand::parse(&raw) {
