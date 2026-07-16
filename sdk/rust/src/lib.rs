@@ -21,8 +21,8 @@ mod thread;
 pub use config::{config_to_args, flatten_config, merge_config, to_toml_literal};
 pub use orbit::Orbit;
 pub use protocol::{
-    InputEntry, OrbitEvent, OrbitOptions, ThreadInput, ThreadItem, ThreadOptions, ThreadRunOptions,
-    TurnResult, Usage,
+  InputEntry, OrbitEvent, OrbitOptions, ThreadInput, ThreadItem, ThreadOptions, ThreadRunOptions,
+  TurnResult, Usage,
 };
 pub use spawn::{OrbitError, StreamedTurn};
 pub use thread::Thread;
