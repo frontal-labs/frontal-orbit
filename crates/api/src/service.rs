@@ -245,7 +245,7 @@ pub async fn serve(
     config: ApiServiceConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     config.validate()?;
-    let cli_bin = resolve_cli_bin(config.cli_bin)?;
+    let cli_bin = resolve_cli_bin(config.cli_bin);
     let display_cli_bin = cli_bin.display().to_string();
     let state = Arc::new(AppState {
         cli_bin,
@@ -442,24 +442,22 @@ fn with_json_output(mut args: Vec<String>) -> Vec<String> {
     output
 }
 
-fn resolve_cli_bin(
-    configured: Option<PathBuf>,
-) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+fn resolve_cli_bin(configured: Option<PathBuf>) -> PathBuf {
     if let Some(path) = configured {
-        return Ok(path);
+        return path;
     }
 
     if let Ok(path) = env::var("ORBIT_CLI_BIN") {
         if !path.trim().is_empty() {
-            return Ok(PathBuf::from(path));
+            return PathBuf::from(path);
         }
     }
 
     if let Some(path) = find_workspace_binary(Path::new("target/debug/orbit")) {
-        return Ok(path);
+        return path;
     }
 
-    Ok(PathBuf::from("orbit"))
+    PathBuf::from("orbit")
 }
 
 fn find_workspace_binary(relative: &Path) -> Option<PathBuf> {
@@ -478,6 +476,7 @@ fn find_workspace_binary(relative: &Path) -> Option<PathBuf> {
     None
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn internal_error(
     error: Box<dyn std::error::Error + Send + Sync>,
 ) -> (StatusCode, Json<ErrorResponse>) {

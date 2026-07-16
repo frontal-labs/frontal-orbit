@@ -4,6 +4,7 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -364,7 +365,6 @@ esac
 
     fs::write(&script_path, script).expect("should write mock cli");
 
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(&script_path)
         .expect("should stat mock cli")
         .permissions();

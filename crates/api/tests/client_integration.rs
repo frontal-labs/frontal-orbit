@@ -409,6 +409,16 @@ async fn stream_message_parses_sse_events_with_tool_use() {
         other => panic!("expected tool_use block, got {other:?}"),
     }
 
+    assert_stream_cache_and_request(&events, &state, &client, &temp_root).await;
+}
+
+#[allow(clippy::await_holding_lock)]
+async fn assert_stream_cache_and_request(
+    events: &[StreamEvent],
+    state: &Arc<Mutex<Vec<CapturedRequest>>>,
+    client: &ApiClient,
+    temp_root: &std::path::Path,
+) {
     let captured = state.lock().await;
     let request = captured.first().expect("server should capture request");
     assert!(request.body.contains("\"stream\":true"));

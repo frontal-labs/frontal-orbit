@@ -130,6 +130,14 @@ fn bedrock_and_azure_base_urls_prefer_env_overrides() {
 }
 
 #[test]
+fn frontal_base_url_defaults_to_gateway() {
+    let _lock = env_lock();
+    let _frontal_base_url = EnvVarGuard::set("FRONTAL_BASE_URL", None);
+
+    assert_eq!(read_frontal_base_url(), "https://ai.frontal.dev/v1");
+}
+
+#[test]
 fn frontal_base_url_prefers_env_override() {
     let _lock = env_lock();
     let _frontal_base_url =
