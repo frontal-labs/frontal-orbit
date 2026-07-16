@@ -83,6 +83,89 @@
         },
         "timeout": 60,
         "auto_start": false
+      },
+      "linear": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-linear"],
+        "env": {
+          "LINEAR_API_KEY": "${LINEAR_API_KEY}"
+        },
+        "timeout": 60,
+        "auto_start": false
+      },
+      "graphite": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-graphite"],
+        "env": {
+          "GRAPHITE_API_KEY": "${GRAPHITE_API_KEY}"
+        },
+        "timeout": 60,
+        "auto_start": false
+      },
+      "slack": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-slack"],
+        "env": {
+          "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}"
+        },
+        "timeout": 60,
+        "auto_start": false
+      }
+    },
+    "integrations": {
+      "github": {
+        "server": "github",
+        "tools": {
+          "create_pr": "create_pull_request",
+          "create_issue_comment": "create_issue_comment",
+          "create_check_run": "create_check_run"
+        },
+        "oauth": {
+          "auth_url": "https://github.com/login/oauth/authorize",
+          "token_url": "https://github.com/login/oauth/access_token",
+          "scopes": ["repo", "read:org", "workflow"],
+          "client_id_env": "ORBIT_GITHUB_CLIENT_ID",
+          "client_secret_env": "ORBIT_GITHUB_CLIENT_SECRET"
+        }
+      },
+      "linear": {
+        "server": "linear",
+        "tools": {
+          "create_issue_comment": "create_issue_comment"
+        },
+        "oauth": {
+          "auth_url": "https://linear.app/oauth/authorize",
+          "token_url": "https://api.linear.app/oauth/token",
+          "scopes": ["read", "write", "issues:create", "comments:create"],
+          "client_id_env": "ORBIT_LINEAR_CLIENT_ID",
+          "client_secret_env": "ORBIT_LINEAR_CLIENT_SECRET"
+        }
+      },
+      "graphite": {
+        "server": "graphite",
+        "tools": {
+          "create_stack_comment": "create_stack_comment"
+        },
+        "oauth": {
+          "auth_url": "https://graphite.dev/oauth/authorize",
+          "token_url": "https://graphite.dev/oauth/token",
+          "scopes": ["stacks:write", "comments:write"],
+          "client_id_env": "ORBIT_GRAPHITE_CLIENT_ID",
+          "client_secret_env": "ORBIT_GRAPHITE_CLIENT_SECRET"
+        }
+      },
+      "slack": {
+        "server": "slack",
+        "tools": {
+          "post_message": "post_message"
+        },
+        "oauth": {
+          "auth_url": "https://slack.com/oauth/v2/authorize",
+          "token_url": "https://slack.com/api/oauth.v2.access",
+          "scopes": ["chat:write", "channels:read"],
+          "client_id_env": "ORBIT_SLACK_CLIENT_ID",
+          "client_secret_env": "ORBIT_SLACK_CLIENT_SECRET"
+        }
       }
     }
   },
