@@ -26,7 +26,7 @@ pub struct ToolSpec {
 }
 
 /// Global MCP tool registry instance
-fn global_mcp_registry() -> &'static McpToolRegistry {
+pub fn global_mcp_registry() -> &'static McpToolRegistry {
     static REGISTRY: OnceLock<McpToolRegistry> = OnceLock::new();
     REGISTRY.get_or_init(McpToolRegistry::new)
 }
