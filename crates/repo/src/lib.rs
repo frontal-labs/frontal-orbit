@@ -27,9 +27,9 @@ fn wait_for_output_with_timeout(
             io::ErrorKind::TimedOut,
             format!("git command timed out after {GIT_TIMEOUT:?}"),
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(
-            "child process panicked",
-        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(io::Error::other("child process panicked"))
+        }
     }
 }
 
