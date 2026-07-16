@@ -329,6 +329,7 @@ impl ServerState {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     fn new_with_transport_kind_state_file_policy_and_workspace_root(
         event_replay_limit: usize,
         lane_transport_kind: LaneTransportKind,
@@ -366,6 +367,7 @@ impl ServerState {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     fn build(
         event_replay_limit: usize,
         lane_transport_kind: LaneTransportKind,
@@ -864,7 +866,7 @@ fn build_event_payload(
     context: &HostedTaskContext,
     task_status: Option<&str>,
     payload: Option<Value>,
-) -> Option<Value> {
+) -> Value {
     let mut object = match payload {
         Some(Value::Object(object)) => object,
         Some(value) => Map::from_iter([("value".to_string(), value)]),
@@ -910,16 +912,16 @@ fn build_event_payload(
         orphan_policy: context.applied_orphan_policy.clone(),
     };
     let summary_object =
-        match serde_json::to_value(summary).expect("task event summary should serialize") {
-            Value::Object(object) => object,
-            _ => unreachable!("task event summary serializes to an object"),
-        };
+        serde_json::to_value(summary).expect("task event summary should serialize");
+    let Value::Object(summary_object) = summary_object else {
+        unreachable!("task event summary serializes to an object")
+    };
 
     for (key, value) in summary_object {
         object.entry(key).or_insert(value);
     }
 
-    Some(Value::Object(object))
+    Value::Object(object)
 }
 
 fn serialize_event_extra<T: Serialize>(payload: T) -> Value {
@@ -928,9 +930,10 @@ fn serialize_event_extra<T: Serialize>(payload: T) -> Value {
 
 fn inferred_task_status_from_event(event: &EventEnvelope) -> Option<&'static str> {
     match event.event {
-        HostedEventName::TaskCreated => Some("pending"),
+        HostedEventName::TaskCreated
+        | HostedEventName::LaneBlocked
+        | HostedEventName::ApprovalRequested => Some("pending"),
         HostedEventName::TaskRouted | HostedEventName::LaneStarted => Some("running"),
-        HostedEventName::LaneBlocked | HostedEventName::ApprovalRequested => Some("pending"),
         HostedEventName::ApprovalResolved => match event.status {
             HostedEventStatus::Pending
             | HostedEventStatus::Running
@@ -1631,8 +1634,10 @@ async fn generic_oauth_authorize(
     let client_id = std::env::var(&oauth.client_id_env)
         .map_err(|_| AppError::internal(format!("{} not set", oauth.client_id_env)))?;
     let redirect_uri = std::env::var("ORBIT_OAUTH_REDIRECT_BASE")
-        .map(|base| format!("{base}/v1/oauth/{provider}/callback"))
-        .unwrap_or_else(|_| format!("https://frontal-orbit.fly.dev/v1/oauth/{provider}/callback"));
+        .map_or_else(
+            |_| format!("https://frontal-orbit.fly.dev/v1/oauth/{provider}/callback"),
+            |base| format!("{base}/v1/oauth/{provider}/callback"),
+        );
 
     let csrf_state = generate_state()
         .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
@@ -1655,6 +1660,14 @@ async fn generic_oauth_authorize(
     );
 
     Ok(axum::response::Redirect::to(&authorize_url))
+}
+
+#[derive(serde::Deserialize)]
+struct GenericTokenResponse {
+    access_token: Option<String>,
+    scope: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
 }
 
 async fn generic_oauth_callback(
@@ -1709,14 +1722,6 @@ async fn generic_oauth_callback(
     if !response.status().is_success() {
         let body = response.text().await.unwrap_or_default();
         return Err(AppError::internal(format!("token exchange failed: {body}")));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct GenericTokenResponse {
-        access_token: Option<String>,
-        scope: Option<String>,
-        error: Option<String>,
-        error_description: Option<String>,
     }
 
     let raw: GenericTokenResponse = response
@@ -1851,7 +1856,7 @@ async fn list_tasks(
         .map(|task| state.task_snapshot(task))
         .filter(|task| task_matches_query(task, &query))
         .collect::<Vec<_>>();
-    tasks.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    tasks.sort_by_key(|right| std::cmp::Reverse(right.updated_at));
     if let Some(limit) = query.limit {
         tasks.truncate(limit);
     }

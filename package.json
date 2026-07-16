@@ -11,6 +11,7 @@
     "changeset:publish": "changeset publish"
   },
   "packages": [
-    "sdk/typescript"
+    "sdk/typescript",
+    "orbit-cli"
   ]
 }
