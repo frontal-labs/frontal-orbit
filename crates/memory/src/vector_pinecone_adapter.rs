@@ -386,7 +386,11 @@ mod tests {
         let hits = store.similarity_search(&scope, &[0.1, 0.2]);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "memory-1");
-        assert!((hits[0].score - 0.93).abs() < 1e-3, "score was {}", hits[0].score);
+        assert!(
+            (hits[0].score - 0.93).abs() < 1e-3,
+            "score was {}",
+            hits[0].score
+        );
     }
 
     #[test]

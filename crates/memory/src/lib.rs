@@ -505,8 +505,7 @@ pub struct MemoryService {
     backend_config: MemoryBackendConfig,
 }
 
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SemanticMemoryEngine {
     service: MemoryService,
     default_scope: MemoryScope,
@@ -650,7 +649,7 @@ impl MemoryService {
         self.vector_store.upsert_embedding(scope, &id, embedding);
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_memory(&self, scope: &MemoryScope, id: &str) -> bool {
         let removed_metadata = self.metadata_store.delete_item(scope, id);
         let removed_vector = self.vector_store.delete_embedding(scope, id);
@@ -796,12 +795,12 @@ impl MemoryService {
         self.graph_store.neighbors(scope, entity_id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_entity(&self, scope: &MemoryScope, entity_id: &str) -> bool {
         self.graph_store.delete_entity(scope, entity_id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_relation(&self, scope: &MemoryScope, relation: &KgRelation) -> bool {
         self.graph_store.delete_relation(scope, relation)
     }
@@ -827,7 +826,6 @@ impl Default for MemoryService {
         Self::from_env()
     }
 }
-
 
 impl SemanticMemoryEngine {
     #[must_use]
@@ -876,7 +874,7 @@ impl SemanticMemoryEngine {
         self.service.upsert_memory(scope, id, source, text, tags);
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_memory_scoped(&self, scope: &MemoryScope, id: &str) -> bool {
         self.service.delete_memory(scope, id)
     }
@@ -924,12 +922,12 @@ impl SemanticMemoryEngine {
         self.service.neighbors(scope, entity_id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_entity_scoped(&self, scope: &MemoryScope, entity_id: &str) -> bool {
         self.service.delete_entity(scope, entity_id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_relation_scoped(&self, scope: &MemoryScope, relation: &KgRelation) -> bool {
         self.service.delete_relation(scope, relation)
     }
@@ -944,7 +942,7 @@ impl SemanticMemoryEngine {
         self.upsert_memory_scoped(&self.default_scope, id, source, text, tags);
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_memory(&self, id: &str) -> bool {
         self.delete_memory_scoped(&self.default_scope, id)
     }
@@ -987,12 +985,12 @@ impl SemanticMemoryEngine {
         self.neighbors_scoped(&self.default_scope, entity_id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_entity(&self, entity_id: &str) -> bool {
         self.delete_entity_scoped(&self.default_scope, entity_id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn delete_relation(&self, relation: &KgRelation) -> bool {
         self.delete_relation_scoped(&self.default_scope, relation)
     }
