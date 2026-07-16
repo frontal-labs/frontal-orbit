@@ -293,7 +293,7 @@ pub fn create_provider_client(
                 model,
             ),
         )),
-        _ => Err(ApiError::Auth(format!("Unknown provider: {}", provider))),
+        _ => Err(ApiError::Auth(format!("Unknown provider: {provider}"))),
     }
 }
 

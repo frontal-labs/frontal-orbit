@@ -8,7 +8,7 @@ mod tests {
         let project_root = std::env::current_dir().unwrap();
         let config_path = project_root.join("config").join("project.json");
 
-        println!("Looking for config at: {:?}", config_path);
+        println!("Looking for config at: {config_path:?}");
 
         if config_path.exists() {
             match ProjectConfig::load_from_path(&config_path) {
@@ -32,11 +32,11 @@ mod tests {
                     );
                 }
                 Err(e) => {
-                    println!("Failed to load config file: {}", e);
+                    println!("Failed to load config file: {e}");
                 }
             }
         } else {
-            println!("Config file does not exist at: {:?}", config_path);
+            println!("Config file does not exist at: {config_path:?}");
         }
     }
 }

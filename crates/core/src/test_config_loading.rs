@@ -23,7 +23,7 @@ mod tests {
                 println!("UI theme: {}", config.ui.theme);
             }
             Err(e) => {
-                println!("Could not load config file (this is expected in CI): {}", e);
+                println!("Could not load config file (this is expected in CI): {e}");
                 // This is fine - the config file might not exist in the test environment
             }
         }

@@ -32,6 +32,7 @@ fn global_mcp_registry() -> &'static McpToolRegistry {
 }
 
 /// MCP tool specifications
+#[must_use]
 pub fn mcp_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -99,18 +100,18 @@ pub fn mcp_tool_specs() -> Vec<ToolSpec> {
 pub fn execute_mcp_tool(name: &str, input: &JsonValue) -> Result<String, String> {
     match name {
         "ListMcpResources" => from_value::<McpResourceInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_list_mcp_resources),
         "ReadMcpResource" => from_value::<McpResourceInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_read_mcp_resource),
         "McpAuth" => from_value::<McpAuthInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_mcp_auth),
         "MCP" => from_value::<McpToolInput>(input.clone())
-            .map_err(|e| format!("Invalid input: {}", e))
+            .map_err(|e| format!("Invalid input: {e}"))
             .and_then(run_mcp_tool),
-        _ => Err(format!("Unknown MCP tool: {}", name)),
+        _ => Err(format!("Unknown MCP tool: {name}")),
     }
 }
 
@@ -128,7 +129,7 @@ fn run_list_mcp_resources(input: McpResourceInput) -> Result<String, String> {
         }
         Err(error) => to_pretty_json(json!({
             "server": server,
-            "error": error.to_string()
+            "error": error.clone()
         })),
     }
 }
@@ -150,7 +151,7 @@ fn run_read_mcp_resource(input: McpResourceInput) -> Result<String, String> {
         Err(error) => to_pretty_json(json!({
             "server": server,
             "uri": uri,
-            "error": error.to_string()
+            "error": error.clone()
         })),
     }
 }
@@ -187,7 +188,7 @@ fn run_mcp_tool(input: McpToolInput) -> Result<String, String> {
         Err(error) => to_pretty_json(json!({
             "server": input.server,
             "tool": input.tool,
-            "error": error.to_string()
+            "error": error.clone()
         })),
     }
 }
@@ -215,8 +216,9 @@ struct McpToolInput {
 }
 
 // Helper function for pretty JSON output
+#[allow(clippy::needless_pass_by_value)]
 fn to_pretty_json(value: JsonValue) -> Result<String, String> {
-    serde_json::to_string_pretty(&value).map_err(|e| format!("Failed to serialize JSON: {}", e))
+    serde_json::to_string_pretty(&value).map_err(|e| format!("Failed to serialize JSON: {e}"))
 }
 
 // Re-export for external use

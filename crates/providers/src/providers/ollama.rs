@@ -97,7 +97,7 @@ impl Provider for OllamaClient {
                             .iter()
                             .map(|block| match block {
                                 InputContentBlock::Text { text } => text.clone(),
-                                _ => format!("{:?}", block),
+                                _ => format!("{block:?}"),
                             })
                             .collect(),
                     })
@@ -111,7 +111,7 @@ impl Provider for OllamaClient {
                 .json(&ollama_request)
                 .send()
                 .await
-                .map_err(|e| ApiError::Http(e))?;
+                .map_err(ApiError::Http)?;
             let status = response.status();
             let body = response.text().await.map_err(ApiError::Http)?;
             if !status.is_success() {
@@ -176,7 +176,7 @@ impl Provider for OllamaClient {
                             .iter()
                             .map(|block| match block {
                                 InputContentBlock::Text { text } => text.clone(),
-                                _ => format!("{:?}", block),
+                                _ => format!("{block:?}"),
                             })
                             .collect(),
                     })
@@ -190,7 +190,7 @@ impl Provider for OllamaClient {
                 .json(&stream_request)
                 .send()
                 .await
-                .map_err(|e| ApiError::Http(e))?;
+                .map_err(ApiError::Http)?;
 
             Ok(MessageStream {
                 request_id: Some("default".to_string()),

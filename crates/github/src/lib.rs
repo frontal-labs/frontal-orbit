@@ -515,8 +515,8 @@ mod tests {
     #[test]
     fn validates_pull_request_draft() {
         let error = validate_pull_request_draft(&GitHubPullRequestDraft {
-            title: "".to_string(),
-            body: "".to_string(),
+            title: String::new(),
+            body: String::new(),
             head: "feature".to_string(),
             base: "main".to_string(),
             draft: false,
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn validates_issue_comment_and_check_run_drafts() {
         let comment_error = validate_issue_comment_draft(&GitHubIssueCommentDraft {
-            body: "".to_string(),
+            body: String::new(),
         })
         .expect_err("empty comment body should fail");
         assert!(comment_error.to_string().contains("comment body"));

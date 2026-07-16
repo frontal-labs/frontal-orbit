@@ -50,7 +50,6 @@ use orbit_tools::{
 mod graphite_client;
 mod linear_client;
 mod tracker_reporting;
-use hex;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -385,19 +384,17 @@ impl ServerState {
         let persistence = state_file.map(|path| Arc::new(ServerStatePersistence { path }));
         let (tasks, contexts, event_history) = persistence
             .as_ref()
-            .and_then(|persistence| persistence.load().ok())
-            .map(|snapshot| {
-                (
-                    TaskRegistry::from_snapshot(snapshot.tasks),
-                    snapshot.contexts,
-                    trim_event_history(snapshot.event_history, event_replay_limit.max(1)),
-                )
-            })
-            .unwrap_or_else(|| {
+            .and_then(|persistence| persistence.load().ok()).map_or_else(|| {
                 (
                     TaskRegistry::new(),
                     HashMap::new(),
                     VecDeque::with_capacity(event_replay_limit.max(1)),
+                )
+            }, |snapshot| {
+                (
+                    TaskRegistry::from_snapshot(snapshot.tasks),
+                    snapshot.contexts,
+                    trim_event_history(snapshot.event_history, event_replay_limit.max(1)),
                 )
             });
         let state = Self {
@@ -674,9 +671,7 @@ fn default_server_state_file() -> Option<PathBuf> {
 }
 
 fn default_server_workspace_root() -> PathBuf {
-    env::current_dir()
-        .map(|cwd| cwd.join(".orbit-server").join("workspaces"))
-        .unwrap_or_else(|_| env::temp_dir().join("orbit-server-workspaces"))
+    env::current_dir().map_or_else(|_| env::temp_dir().join("orbit-server-workspaces"), |cwd| cwd.join(".orbit-server").join("workspaces"))
 }
 
 fn default_server_docker_image() -> String {
@@ -1574,8 +1569,7 @@ fn is_control_plane_authorized(state: &ServerState, headers: &HeaderMap) -> bool
     };
 
     extract_api_key(headers)
-        .map(|provided| constant_time_equals(expected, provided))
-        .unwrap_or(false)
+        .is_some_and(|provided| constant_time_equals(expected, provided))
 }
 
 async fn require_control_plane_auth(
@@ -1694,7 +1688,7 @@ async fn github_oauth_authorize(
             created_at: Instant::now(),
         },
     );
-    states.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(600));
+    states.retain(|_, v| v.created_at.elapsed() < Duration::from_mins(10));
 
     let authorize_url = format!(
         "https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&scope=repo,read:org,workflow&state={csrf_state}"
@@ -1820,7 +1814,7 @@ async fn linear_oauth_authorize(
         },
     );
     // Purge states older than 10 minutes
-    states.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(600));
+    states.retain(|_, v| v.created_at.elapsed() < Duration::from_mins(10));
 
     let authorize_url = format!(
         "https://linear.app/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&state={csrf_state}&code_challenge={challenge}&code_challenge_method=S256&scope=read,write,issues:create,comments:create",
@@ -1894,8 +1888,7 @@ async fn linear_oauth_callback(
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let token_set = OAuthTokenSet {
         access_token: raw.access_token,
         refresh_token: raw.refresh_token,
@@ -1942,7 +1935,7 @@ async fn slack_oauth_authorize(
             created_at: Instant::now(),
         },
     );
-    states.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(600));
+    states.retain(|_, v| v.created_at.elapsed() < Duration::from_mins(10));
 
     let scopes = "chat:write,commands,channels:history,im:history,app_mentions:read,reactions:write,team:read";
     let authorize_url = format!(
@@ -2602,8 +2595,7 @@ fn reconcile_task_from_artifacts(state: &ServerState, task_id: &str) -> Result<b
                         state,
                         task_id,
                         Some(format!(
-                            "task auto-cancelled after orphan timeout ({}s)",
-                            orphaned_for_secs
+                            "task auto-cancelled after orphan timeout ({orphaned_for_secs}s)"
                         )),
                     )?;
                     return Ok(true);
@@ -3467,8 +3459,7 @@ fn matches_github_webhook_to_context(
     };
     let repository_matches = context.repository.as_deref() == Some(repository)
         || github_repo_ref_for_context(context)
-            .map(|repo| format!("{}/{}", repo.owner, repo.repo) == repository)
-            .unwrap_or(false);
+            .is_some_and(|repo| format!("{}/{}", repo.owner, repo.repo) == repository);
     if !repository_matches {
         return false;
     }
@@ -3654,9 +3645,7 @@ fn summarize_linear_webhook(payload: &Value) -> LinearWebhookSummary {
     LinearWebhookSummary {
         event_type: payload
             .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| "linear.event".to_string()),
+            .and_then(Value::as_str).map_or_else(|| "linear.event".to_string(), str::to_string),
         issue_id: payload
             .get("issue")
             .and_then(|v| v.get("id"))
@@ -3745,13 +3734,11 @@ fn matches_linear_webhook_to_context(
         return context
             .work_item_id
             .as_deref()
-            .map(|id| id == task_id)
-            .unwrap_or(false)
+            .is_some_and(|id| id == task_id)
             || context
                 .lane_id
                 .as_deref()
-                .map(|id| id == task_id)
-                .unwrap_or(false);
+                .is_some_and(|id| id == task_id);
     }
 
     if let Some(issue_id) = webhook.issue_id.as_deref() {
@@ -3862,9 +3849,7 @@ fn summarize_graphite_webhook(payload: &Value) -> GraphiteWebhookSummary {
     GraphiteWebhookSummary {
         event_type: payload
             .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| "graphite.event".to_string()),
+            .and_then(Value::as_str).map_or_else(|| "graphite.event".to_string(), str::to_string),
         stack_id: payload
             .get("stack_id")
             .and_then(Value::as_str)
@@ -3945,13 +3930,11 @@ fn matches_graphite_webhook_to_context(
         return context
             .work_item_id
             .as_deref()
-            .map(|id| id == task_id)
-            .unwrap_or(false)
+            .is_some_and(|id| id == task_id)
             || context
                 .lane_id
                 .as_deref()
-                .map(|id| id == task_id)
-                .unwrap_or(false);
+                .is_some_and(|id| id == task_id);
     }
     if let Some(stack_id) = webhook.stack_id.as_deref() {
         return context.graphite_stack_id.as_deref() == Some(stack_id);
@@ -5078,7 +5061,7 @@ fn lane_role_from_plan_kind(plan_kind: Option<&str>) -> Option<LaneRole> {
 fn hosted_subagent_type(role: Option<LaneRole>) -> &'static str {
     match role {
         Some(LaneRole::Planner) => "Plan",
-        Some(LaneRole::Reviewer) | Some(LaneRole::Verifier) | Some(LaneRole::Triager) => {
+        Some(LaneRole::Reviewer | LaneRole::Verifier | LaneRole::Triager) => {
             "Verification"
         }
         _ => "general-purpose",
@@ -6384,9 +6367,9 @@ mod tests {
         let state = Arc::new(ServerState::with_lane_transport_and_policy_rules(
             DEFAULT_EVENT_REPLAY_LIMIT,
             Arc::new(InMemoryLaneWorkerTransport::default()),
-            Duration::from_secs(120),
-            Some(Duration::from_secs(60)),
-            Some(Duration::from_secs(600)),
+            Duration::from_mins(2),
+            Some(Duration::from_mins(1)),
+            Some(Duration::from_mins(10)),
             vec![OrphanPolicyRule {
                 repository: Some("repo-ops".to_string()),
                 source: Some("slack".to_string()),
@@ -6427,7 +6410,7 @@ mod tests {
         let state = Arc::new(ServerState::with_lane_transport_and_policy_rules(
             DEFAULT_EVENT_REPLAY_LIMIT,
             Arc::new(InMemoryLaneWorkerTransport::default()),
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             None,
             None,
             vec![OrphanPolicyRule {
@@ -7021,7 +7004,7 @@ mod tests {
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("reconciled"))
-                .and_then(|value| value.as_bool()),
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
 
@@ -7114,7 +7097,7 @@ mod tests {
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("reconciled"))
-                .and_then(|value| value.as_bool()),
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
 
@@ -7201,7 +7184,7 @@ mod tests {
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("reconciled"))
-                .and_then(|value| value.as_bool()),
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
         assert_eq!(
@@ -7209,7 +7192,7 @@ mod tests {
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("orphaned"))
-                .and_then(|value| value.as_bool()),
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
         assert_eq!(
@@ -7246,7 +7229,7 @@ mod tests {
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("orphaned"))
-                .and_then(|value| value.as_bool()),
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
         assert_eq!(
@@ -7255,7 +7238,7 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload.get("orphan_policy"))
                 .and_then(|value| value.get("approval_delay_secs"))
-                .and_then(|value| value.as_u64()),
+                .and_then(serde_json::Value::as_u64),
             Some(0)
         );
 
@@ -7274,7 +7257,7 @@ mod tests {
                 manifest_file: manifest_file.display().to_string(),
                 output_file: output_file.display().to_string(),
             }),
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             None,
             None,
         ));
@@ -7391,9 +7374,9 @@ mod tests {
                 manifest_file: manifest_file.display().to_string(),
                 output_file: output_file.display().to_string(),
             }),
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             None,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
         ));
         let router = app(state.clone());
 
@@ -7488,8 +7471,8 @@ mod tests {
                 manifest_file: manifest_file.display().to_string(),
                 output_file: output_file.display().to_string(),
             }),
-            Duration::from_secs(300),
-            Some(Duration::from_secs(60)),
+            Duration::from_mins(5),
+            Some(Duration::from_mins(1)),
             None,
         ));
         let router = app(state.clone());
@@ -7585,8 +7568,8 @@ mod tests {
                 manifest_file: manifest_file.display().to_string(),
                 output_file: output_file.display().to_string(),
             }),
-            Duration::from_secs(120),
-            Some(Duration::from_secs(60)),
+            Duration::from_mins(2),
+            Some(Duration::from_mins(1)),
             None,
         ));
         let router = app(state.clone());
@@ -7669,7 +7652,7 @@ mod tests {
                 manifest_file: manifest_file.display().to_string(),
                 output_file: output_file.display().to_string(),
             }),
-            Duration::from_secs(300),
+            Duration::from_mins(5),
             None,
             None,
             vec![OrphanPolicyRule {
@@ -7779,7 +7762,7 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload.get("orphan_policy"))
                 .and_then(|value| value.get("auto_retry_after_secs"))
-                .and_then(|value| value.as_u64()),
+                .and_then(serde_json::Value::as_u64),
             Some(30)
         );
 
@@ -9775,7 +9758,7 @@ mod tests {
                         .payload
                         .as_ref()
                         .and_then(|payload| payload.get("reconciled"))
-                        .and_then(|value| value.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         == Some(true)
             })
             .expect("startup reconcile lane green event should be replayable");

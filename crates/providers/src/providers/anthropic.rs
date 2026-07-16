@@ -829,8 +829,8 @@ impl MessageStream {
             StreamEvent::MessageDelta(MessageDeltaEvent { usage, .. }) => {
                 self.latest_usage = Some(usage.clone());
             }
-            StreamEvent::MessageStop(_) => {
-                if !self.usage_recorded {
+            StreamEvent::MessageStop(_)
+                if !self.usage_recorded => {
                     if let (Some(prompt_cache), Some(usage)) =
                         (&self.prompt_cache, self.latest_usage.as_ref())
                     {
@@ -842,7 +842,6 @@ impl MessageStream {
                     }
                     self.usage_recorded = true;
                 }
-            }
             _ => {}
         }
     }

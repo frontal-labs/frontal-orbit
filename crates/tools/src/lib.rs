@@ -2481,8 +2481,7 @@ fn git_ref_exists(reference: &str) -> bool {
     Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", reference])
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn git_stdout(args: &[&str]) -> Option<String> {
@@ -4106,6 +4105,7 @@ fn manifest_from_locator(locator: &HostedAgentLocator) -> Result<Option<AgentOut
     Ok(read_agent_manifest_from_path(&manifest_path))
 }
 
+#[must_use] 
 pub fn cancel_hosted_agent_with_locator(
     locator: &HostedAgentLocator,
 ) -> HostedAgentCancellationResult {
@@ -4178,6 +4178,7 @@ pub fn cancel_hosted_agent_with_locator(
     }
 }
 
+#[must_use] 
 pub fn cancel_hosted_agent(agent_id: &str) -> HostedAgentCancellationResult {
     cancel_hosted_agent_with_locator(&HostedAgentLocator {
         agent_id: Some(agent_id.to_string()),
@@ -4185,6 +4186,7 @@ pub fn cancel_hosted_agent(agent_id: &str) -> HostedAgentCancellationResult {
     })
 }
 
+#[must_use] 
 pub fn hosted_agent_status_with_locator(locator: &HostedAgentLocator) -> HostedAgentStatusSnapshot {
     if let Some(snapshot) = locator.agent_id.as_deref().and_then(|agent_id| {
         hosted_agent_controls()
@@ -4267,6 +4269,7 @@ pub fn hosted_agent_status_with_locator(locator: &HostedAgentLocator) -> HostedA
     }
 }
 
+#[must_use] 
 pub fn hosted_agent_status(agent_id: &str) -> HostedAgentStatusSnapshot {
     hosted_agent_status_with_locator(&HostedAgentLocator {
         agent_id: Some(agent_id.to_string()),
@@ -6270,8 +6273,7 @@ fn command_exists(command: &str) -> bool {
         .arg("-lc")
         .arg(format!("command -v {command} >/dev/null 2>&1"))
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .is_ok_and(|status| status.success())
 }
 
 #[allow(clippy::too_many_lines)]

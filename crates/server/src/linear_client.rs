@@ -59,7 +59,7 @@ impl LinearClient {
         let api_url = std::env::var("ORBIT_LINEAR_API_URL")
             .unwrap_or_else(|_| "https://api.linear.app/graphql".to_string());
 
-        if let Ok(Some(mut token_set)) = load_oauth_credentials_for("linear") {
+        if let Ok(Some(token_set)) = load_oauth_credentials_for("linear") {
             if !token_is_expired(&token_set) {
                 return Some(Self {
                     http: Client::new(),

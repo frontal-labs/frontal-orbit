@@ -99,6 +99,7 @@ pub struct DevelopmentConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FeatureConfig {
     pub auto_compaction_threshold: u32,
     pub enable_telemetry: bool,
@@ -224,7 +225,7 @@ impl ProjectConfig {
     /// Load configuration from a specific file path
     pub fn load_from_path(path: &PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         if !path.exists() {
-            return Err(format!("Config file not found: {:?}", path).into());
+            return Err(format!("Config file not found: {}", path.display()).into());
         }
 
         let content = fs::read_to_string(path)?;
@@ -233,13 +234,13 @@ impl ProjectConfig {
     }
 
     /// Load configuration with fallback to defaults
+    #[must_use]
     pub fn load_or_default() -> Self {
-        match Self::load() {
-            Ok(config) => config,
-            Err(_) => {
-                eprintln!("Warning: Could not load config file, using defaults");
-                ProjectConfig::default()
-            }
+        if let Ok(config) = Self::load() {
+            config
+        } else {
+            eprintln!("Warning: Could not load config file, using defaults");
+            ProjectConfig::default()
         }
     }
 
@@ -309,6 +310,7 @@ impl ProjectConfig {
     }
 
     /// Get a specific provider configuration
+    #[must_use]
     pub fn get_provider_config(&self, provider: &str) -> Option<&ProviderDetails> {
         match provider {
             "anthropic" => Some(&self.runtime.providers.anthropic),
@@ -319,13 +321,14 @@ impl ProjectConfig {
     }
 
     /// Check if a provider is enabled
+    #[must_use]
     pub fn is_provider_enabled(&self, provider: &str) -> bool {
         self.get_provider_config(provider)
-            .map(|details| details.enabled)
-            .unwrap_or(false)
+            .is_some_and(|details| details.enabled)
     }
 
     /// Get the default model for a provider
+    #[must_use]
     pub fn get_default_model(&self, provider: &str) -> Option<String> {
         self.get_provider_config(provider)
             .map(|details| details.default_model.clone())

@@ -232,13 +232,13 @@ impl SentryClient {
         }
 
         if event.environment.is_none() {
-            event.environment = self.config.environment.clone();
+            event.environment.clone_from(&self.config.environment);
         }
         if event.release.is_none() {
-            event.release = self.config.release.clone();
+            event.release.clone_from(&self.config.release);
         }
         if event.server_name.is_none() {
-            event.server_name = self.config.server_name.clone();
+            event.server_name.clone_from(&self.config.server_name);
         }
         self.sink.capture(event);
     }

@@ -215,6 +215,7 @@ pub struct StyleTrainer;
 
 impl StyleTrainer {
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn train(&self, samples: &[StyleSample]) -> StyleProfile {
         if samples.is_empty() {
             return StyleProfile::default();
@@ -273,6 +274,7 @@ impl StyleTrainer {
     }
 
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn style_score(&self, profile: &StyleProfile, candidate_code: &str) -> f32 {
         let mut score = 0.0_f32;
         let line_count = candidate_code.lines().count().max(1) as f32;

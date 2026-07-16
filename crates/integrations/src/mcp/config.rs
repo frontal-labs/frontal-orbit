@@ -81,6 +81,7 @@ pub struct ScopedMcpServerConfig {
 }
 
 impl ScopedMcpServerConfig {
+    #[must_use]
     pub fn transport(&self) -> McpTransport {
         match &self.config {
             McpServerConfig::Stdio(_) => McpTransport::Stdio,

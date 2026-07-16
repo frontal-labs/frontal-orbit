@@ -259,7 +259,7 @@ pub enum McpServerManagerError {
     JsonRpc {
         server_name: String,
         method: &'static str,
-        error: JsonRpcError,
+        error: Box<JsonRpcError>,
     },
     InvalidResponse {
         server_name: String,
@@ -491,7 +491,7 @@ impl McpServerManager {
         for (server_name, server_config) in servers {
             if server_config.transport() == McpTransport::Stdio {
                 let bootstrap = McpClientBootstrap::from_scoped_config(server_name, server_config);
-                managed_servers.insert(server_name.to_string(), ManagedMcpServer::new(bootstrap));
+                managed_servers.insert(server_name.to_owned(), ManagedMcpServer::new(bootstrap));
             } else {
                 unsupported_servers.push(UnsupportedMcpServer {
                     server_name: server_name.clone(),
@@ -833,7 +833,7 @@ impl McpServerManager {
                 return Err(McpServerManagerError::JsonRpc {
                     server_name: server_name.to_string(),
                     method: "tools/list",
-                    error,
+                    error: Box::new(error),
                 });
             }
 
@@ -901,7 +901,7 @@ impl McpServerManager {
                 return Err(McpServerManagerError::JsonRpc {
                     server_name: server_name.to_string(),
                     method: "resources/list",
-                    error,
+                    error: Box::new(error),
                 });
             }
 
@@ -963,7 +963,7 @@ impl McpServerManager {
             return Err(McpServerManagerError::JsonRpc {
                 server_name: server_name.to_string(),
                 method: "resources/read",
-                error,
+                error: Box::new(error),
             });
         }
 
@@ -1111,7 +1111,7 @@ impl McpServerManager {
                 return Err(McpServerManagerError::JsonRpc {
                     server_name: server_name.to_string(),
                     method: "initialize",
-                    error,
+                    error: Box::new(error),
                 });
             }
 

@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-const GIT_TIMEOUT: Duration = Duration::from_secs(300);
+const GIT_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Spawn a child and wait for it to complete with a timeout, collecting stdout + stderr.
 fn wait_for_output_with_timeout(
@@ -27,8 +27,7 @@ fn wait_for_output_with_timeout(
             io::ErrorKind::TimedOut,
             format!("git command timed out after {GIT_TIMEOUT:?}"),
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
-            io::ErrorKind::Other,
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(
             "child process panicked",
         )),
     }
@@ -151,7 +150,6 @@ pub fn normalize_branch_name(branch: &str) -> String {
         .chars()
         .map(|character| match character {
             'a'..='z' | '0'..='9' => character,
-            '/' | '.' | '_' | '-' => '-',
             _ => '-',
         })
         .collect::<String>();

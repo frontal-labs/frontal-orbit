@@ -506,6 +506,7 @@ pub struct MemoryService {
 }
 
 #[derive(Clone)]
+#[derive(Default)]
 pub struct SemanticMemoryEngine {
     service: MemoryService,
     default_scope: MemoryScope,
@@ -649,6 +650,7 @@ impl MemoryService {
         self.vector_store.upsert_embedding(scope, &id, embedding);
     }
 
+    #[must_use] 
     pub fn delete_memory(&self, scope: &MemoryScope, id: &str) -> bool {
         let removed_metadata = self.metadata_store.delete_item(scope, id);
         let removed_vector = self.vector_store.delete_embedding(scope, id);
@@ -668,7 +670,7 @@ impl MemoryService {
             &MemorySearchRequest {
                 query: query.to_string(),
                 top_k,
-                tags: tags.map_or_else(Vec::new, |value| value.to_vec()),
+                tags: tags.map_or_else(Vec::new, <[std::string::String]>::to_vec),
                 min_score: None,
                 source_filter: None,
                 preferred_source: None,
@@ -743,12 +745,12 @@ impl MemoryService {
                     now_ms,
                     request.rerank_policy.recency_half_life_ms,
                 );
-                let score = (hit.score * request.rerank_policy.vector_weight)
+                let weighted_score = (hit.score * request.rerank_policy.vector_weight)
                     + (lexical * request.rerank_policy.lexical_weight)
                     + (tag_score * request.rerank_policy.tag_weight)
                     + (source_score * request.rerank_policy.source_weight)
                     + (recency_score * request.rerank_policy.recency_weight);
-                if score < min_score {
+                if weighted_score < min_score {
                     diagnostics.min_score_drops += 1;
                     return None;
                 }
@@ -756,7 +758,7 @@ impl MemoryService {
                     id: item.id,
                     source: item.source,
                     text: item.text,
-                    score,
+                    score: weighted_score,
                     embedding_model: item.embedding_model,
                     embedding_provider: item.embedding_provider,
                     embedding_dimension: item.embedding_dimension,
@@ -794,10 +796,12 @@ impl MemoryService {
         self.graph_store.neighbors(scope, entity_id)
     }
 
+    #[must_use] 
     pub fn delete_entity(&self, scope: &MemoryScope, entity_id: &str) -> bool {
         self.graph_store.delete_entity(scope, entity_id)
     }
 
+    #[must_use] 
     pub fn delete_relation(&self, scope: &MemoryScope, relation: &KgRelation) -> bool {
         self.graph_store.delete_relation(scope, relation)
     }
@@ -824,14 +828,6 @@ impl Default for MemoryService {
     }
 }
 
-impl Default for SemanticMemoryEngine {
-    fn default() -> Self {
-        Self {
-            service: MemoryService::default(),
-            default_scope: MemoryScope::default(),
-        }
-    }
-}
 
 impl SemanticMemoryEngine {
     #[must_use]
@@ -880,6 +876,7 @@ impl SemanticMemoryEngine {
         self.service.upsert_memory(scope, id, source, text, tags);
     }
 
+    #[must_use] 
     pub fn delete_memory_scoped(&self, scope: &MemoryScope, id: &str) -> bool {
         self.service.delete_memory(scope, id)
     }
@@ -927,10 +924,12 @@ impl SemanticMemoryEngine {
         self.service.neighbors(scope, entity_id)
     }
 
+    #[must_use] 
     pub fn delete_entity_scoped(&self, scope: &MemoryScope, entity_id: &str) -> bool {
         self.service.delete_entity(scope, entity_id)
     }
 
+    #[must_use] 
     pub fn delete_relation_scoped(&self, scope: &MemoryScope, relation: &KgRelation) -> bool {
         self.service.delete_relation(scope, relation)
     }
@@ -945,6 +944,7 @@ impl SemanticMemoryEngine {
         self.upsert_memory_scoped(&self.default_scope, id, source, text, tags);
     }
 
+    #[must_use] 
     pub fn delete_memory(&self, id: &str) -> bool {
         self.delete_memory_scoped(&self.default_scope, id)
     }
@@ -987,10 +987,12 @@ impl SemanticMemoryEngine {
         self.neighbors_scoped(&self.default_scope, entity_id)
     }
 
+    #[must_use] 
     pub fn delete_entity(&self, entity_id: &str) -> bool {
         self.delete_entity_scoped(&self.default_scope, entity_id)
     }
 
+    #[must_use] 
     pub fn delete_relation(&self, relation: &KgRelation) -> bool {
         self.delete_relation_scoped(&self.default_scope, relation)
     }
@@ -1011,6 +1013,7 @@ impl SemanticMemoryEngine {
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn lexical_overlap_score(query: &str, candidate: &str) -> f32 {
     let q = normalize_terms(query);
     let c = normalize_terms(candidate);
@@ -1022,6 +1025,7 @@ fn lexical_overlap_score(query: &str, candidate: &str) -> f32 {
     overlap / q.len() as f32
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn tag_overlap_score(
     filter_tags: &BTreeSet<String>,
     item_tags: &[String],
@@ -1050,7 +1054,7 @@ fn normalize_terms(input: &str) -> BTreeSet<String> {
     input
         .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
         .filter(|token| !token.is_empty())
-        .map(|token| token.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -1081,6 +1085,7 @@ fn normalize_source(source: &str) -> String {
     source.trim().to_ascii_lowercase()
 }
 
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn recency_boost(created_at_ms: u128, now_ms: u128, half_life_ms: u128) -> f32 {
     if half_life_ms == 0 {
         return 0.0;

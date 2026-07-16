@@ -1,4 +1,4 @@
-//! Example usage of the ProjectConfig
+//! Example usage of the `ProjectConfig`
 //!
 //! This module demonstrates how to load and use the project configuration.
 
@@ -24,9 +24,9 @@ pub fn load_and_use_config() -> Result<(), Box<dyn std::error::Error>> {
     for provider in ["anthropic", "openai", "xai"] {
         if config.is_provider_enabled(provider) {
             let model = config.get_default_model(provider).unwrap_or_default();
-            println!("{}: enabled (default model: {})", provider, model);
+            println!("{provider}: enabled (default model: {model})");
         } else {
-            println!("{}: disabled", provider);
+            println!("{provider}: disabled");
         }
     }
 

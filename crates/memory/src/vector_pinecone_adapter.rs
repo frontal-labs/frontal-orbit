@@ -258,6 +258,7 @@ impl<T: PineconeTransport> MemoryVectorStore for PineconeVectorStoreAdapter<T> {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn parse_search_hits_from_text(raw: &str) -> Vec<VectorSearchHit> {
     if let Ok(parsed) = serde_json::from_str::<PineconeQueryResponse>(raw) {
         return parsed
@@ -385,7 +386,7 @@ mod tests {
         let hits = store.similarity_search(&scope, &[0.1, 0.2]);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "memory-1");
-        assert_eq!(hits[0].score, 0.93);
+        assert!((hits[0].score - 0.93).abs() < 1e-3, "score was {}", hits[0].score);
     }
 
     #[test]

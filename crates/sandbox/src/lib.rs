@@ -497,6 +497,7 @@ struct BackendCapabilities {
     network_reason: &'static str,
 }
 
+#[allow(clippy::fn_params_excessive_bools)]
 fn backend_capabilities(
     platform: Platform,
     in_container: bool,
@@ -585,8 +586,7 @@ fn unshare_user_namespace_works() -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .is_ok_and(|s| s.success())
     })
 }
 
@@ -603,8 +603,7 @@ fn sandbox_exec_works() -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .is_ok_and(|s| s.success())
     })
 }
 

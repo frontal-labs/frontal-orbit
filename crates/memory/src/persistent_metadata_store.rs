@@ -220,9 +220,8 @@ impl MemoryMetadataStore for PersistentFileMetadataStore {
 }
 
 fn load_snapshot(path: &Path) -> BTreeMap<ScopedMemoryKey, MemoryMetadata> {
-    let contents = match fs::read_to_string(path) {
-        Ok(value) => value,
-        Err(_) => return BTreeMap::new(),
+    let Ok(contents) = fs::read_to_string(path) else {
+        return BTreeMap::new();
     };
 
     let mut state = BTreeMap::new();

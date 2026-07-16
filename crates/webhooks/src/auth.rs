@@ -22,6 +22,7 @@ pub struct HmacAuthenticator {
 }
 
 impl HmacAuthenticator {
+    #[must_use] 
     pub fn new(secret: String, _header_name: String) -> Self {
         Self { secret }
     }
@@ -47,6 +48,7 @@ impl HmacAuthenticator {
     }
 
     /// Generate signature for payload
+    #[must_use] 
     pub fn sign(&self, payload: &[u8]) -> String {
         let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())
             .expect("HMAC can be created with valid key");
@@ -58,6 +60,7 @@ impl HmacAuthenticator {
 }
 
 /// Extract webhook signature from headers
+#[must_use] 
 pub fn extract_signature(headers: &BTreeMap<String, String>, header_name: &str) -> Option<String> {
     headers.get(header_name).cloned()
 }

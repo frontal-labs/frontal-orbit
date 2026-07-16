@@ -79,7 +79,7 @@ impl ApiServiceConfig {
                 .split(',')
                 .map(str::trim)
                 .filter(|item| !item.is_empty())
-                .map(|item| item.to_ascii_lowercase())
+                .map(str::to_ascii_lowercase)
                 .collect::<BTreeSet<_>>();
             if !parsed.is_empty() {
                 config.allowed_commands = Some(parsed);
@@ -510,8 +510,7 @@ fn authorize(
 
     if provided_key
         .as_deref()
-        .map(|provided| constant_time_equals(expected, provided))
-        .unwrap_or(false)
+        .is_some_and(|provided| constant_time_equals(expected, provided))
     {
         Ok(())
     } else {

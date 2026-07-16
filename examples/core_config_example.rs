@@ -1,7 +1,7 @@
 //! Example demonstrating how to use the core configuration system
 //!
-//! This example shows how to load and use the ProjectConfig from the orbit-core crate
-//! and the ConfigurationManager from the orbit-runtime crate.
+//! This example shows how to load and use the `ProjectConfig` from the orbit-core crate
+//! and the `ConfigurationManager` from the orbit-runtime crate.
 
 use orbit_core::config::ProjectConfig;
 use orbit_runtime::ConfigurationManager;
@@ -111,12 +111,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for provider in ["anthropic", "openai", "xai"] {
                 if config_manager.is_provider_enabled(provider) {
                     if let Some(model) = config_manager.default_model(provider) {
-                        println!("    {}: enabled (default model: {})", provider, model);
+                        println!("    {provider}: enabled (default model: {model})");
                     } else {
-                        println!("    {}: enabled (no default model)", provider);
+                        println!("    {provider}: enabled (no default model)");
                     }
                 } else {
-                    println!("    {}: disabled", provider);
+                    println!("    {provider}: disabled");
                 }
             }
 
@@ -169,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Err(e) => {
-            println!("  Failed to load ConfigurationManager: {}", e);
+            println!("  Failed to load ConfigurationManager: {e}");
             println!("  This is expected if runtime configuration files are not present");
         }
     }
@@ -179,11 +179,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 3: Demonstrate provider-specific configuration
     println!("3. Provider-specific Configuration:");
     for provider in ["anthropic", "openai", "xai"] {
-        println!("  {} Provider:", provider);
+        println!("  {provider} Provider:");
         println!("    Enabled: {}", core_config.is_provider_enabled(provider));
 
         if let Some(model) = core_config.get_default_model(provider) {
-            println!("    Default Model: {}", model);
+            println!("    Default Model: {model}");
         }
 
         if let Some(provider_config) = core_config.get_provider_config(provider) {
@@ -205,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if enabled_providers == 0 {
         println!("  Warning: No AI providers are enabled");
     } else {
-        println!("  {} AI provider(s) enabled", enabled_providers);
+        println!("  {enabled_providers} AI provider(s) enabled");
     }
 
     // Validate reasonable timeout values

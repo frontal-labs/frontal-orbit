@@ -200,9 +200,9 @@ impl<T: Neo4jTransport> Neo4jGraphStoreAdapter<T> {
     pub fn upsert_entity_best_effort(
         &self,
         scope: &MemoryScope,
-        entity: KgEntity,
+        entity: &KgEntity,
     ) -> Result<(), String> {
-        let statement = Self::build_upsert_entity_statement(scope, &entity);
+        let statement = Self::build_upsert_entity_statement(scope, entity);
         let request = Neo4jTransactionRequest {
             statements: vec![Neo4jStatement { statement }],
         };
@@ -215,9 +215,9 @@ impl<T: Neo4jTransport> Neo4jGraphStoreAdapter<T> {
     pub fn add_relation_best_effort(
         &self,
         scope: &MemoryScope,
-        relation: KgRelation,
+        relation: &KgRelation,
     ) -> Result<(), String> {
-        let statement = Self::build_add_relation_statement(scope, &relation);
+        let statement = Self::build_add_relation_statement(scope, relation);
         let request = Neo4jTransactionRequest {
             statements: vec![Neo4jStatement { statement }],
         };
@@ -319,11 +319,11 @@ impl Neo4jTransport for ReqwestNeo4jTransport {
 
 impl<T: Neo4jTransport> MemoryGraphStore for Neo4jGraphStoreAdapter<T> {
     fn upsert_entity(&self, scope: &MemoryScope, entity: KgEntity) {
-        let _ = self.upsert_entity_best_effort(scope, entity);
+        let _ = self.upsert_entity_best_effort(scope, &entity);
     }
 
     fn add_relation(&self, scope: &MemoryScope, relation: KgRelation) {
-        let _ = self.add_relation_best_effort(scope, relation);
+        let _ = self.add_relation_best_effort(scope, &relation);
     }
 
     fn list_entities(&self, scope: &MemoryScope) -> Vec<KgEntity> {

@@ -142,7 +142,8 @@ impl EmbeddingProvider for LocalMlEmbeddingProvider {
             let mut hasher = DefaultHasher::new();
             token.hash(&mut hasher);
             let hash = hasher.finish();
-            let index = (hash as usize) % dim;
+            let dim_u64 = dim as u64;
+            let index = usize::try_from(hash % dim_u64).unwrap_or(0);
             let sign = if hash & 1 == 0 { 1.0_f32 } else { -1.0_f32 };
             vector[index] += sign;
         }
@@ -224,7 +225,7 @@ pub fn top_k_by_similarity(
 fn tokenize(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
         .filter(|token| !token.is_empty())
-        .map(|token| token.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
 }
 
 fn normalize_l2(vector: &mut [f32]) {

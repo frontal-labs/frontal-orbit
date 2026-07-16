@@ -24,6 +24,7 @@ pub struct ToolSpec {
 }
 
 /// Webhook tool specifications
+#[must_use] 
 pub fn webhook_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -109,7 +110,7 @@ pub fn execute_webhook_tool(name: &str, input: &JsonValue) -> Result<String, Str
     }
 }
 
-/// Execute RemoteTrigger tool (synchronous version)
+/// Execute `RemoteTrigger` tool (synchronous version)
 #[allow(clippy::needless_pass_by_value)]
 fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
     let method = input.method.unwrap_or_else(|| "GET".to_string());
@@ -176,7 +177,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
     }
 }
 
-/// Execute ListWebhookEvents tool
+/// Execute `ListWebhookEvents` tool
 #[allow(clippy::needless_pass_by_value)]
 fn run_list_webhook_events(input: ListWebhookEventsInput) -> Result<String, String> {
     let store = global_event_store();
@@ -187,7 +188,7 @@ fn run_list_webhook_events(input: ListWebhookEventsInput) -> Result<String, Stri
     let source_filter = input.source.clone();
     let mut events = if let Some(ref source) = source_filter {
         guard
-            .events_by_source(&source)
+            .events_by_source(source)
             .into_iter()
             .cloned()
             .collect::<Vec<_>>()
@@ -209,7 +210,7 @@ fn run_list_webhook_events(input: ListWebhookEventsInput) -> Result<String, Stri
     serde_json::to_string_pretty(&result).map_err(|e| format!("Failed to serialize response: {e}"))
 }
 
-/// Execute TriggerWebhook tool
+/// Execute `TriggerWebhook` tool
 #[allow(clippy::needless_pass_by_value)]
 fn run_trigger_webhook(input: TriggerWebhookInput) -> Result<String, String> {
     let event_type = WebhookEventType::Custom {

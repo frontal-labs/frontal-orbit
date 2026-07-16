@@ -54,6 +54,7 @@ pub struct WebhookReceiver {
 
 impl WebhookReceiver {
     /// Create a new webhook receiver
+    #[must_use] 
     pub fn new(config: WebhookConfig) -> Self {
         let event_processor = Arc::new(RwLock::new(EventProcessor::new(config.max_events)));
 
@@ -87,6 +88,7 @@ impl WebhookReceiver {
     }
 
     /// Get event processor reference
+    #[must_use] 
     pub fn event_processor(&self) -> Arc<RwLock<EventProcessor>> {
         self.state.event_processor.clone()
     }
@@ -100,8 +102,8 @@ async fn handle_webhook(
 ) -> Result<Json<Value>, StatusCode> {
     // Convert headers to BTreeMap
     let mut header_map = BTreeMap::new();
-    for (name, value) in headers.iter() {
-        if let Some(value_str) = value.to_str().ok() {
+    for (name, value) in &headers {
+        if let Ok(value_str) = value.to_str() {
             header_map.insert(name.as_str().to_string(), value_str.to_string());
         }
     }
@@ -149,8 +151,8 @@ async fn handle_webhook_with_source(
 ) -> Result<Json<Value>, StatusCode> {
     // Convert headers to BTreeMap
     let mut header_map = BTreeMap::new();
-    for (name, value) in headers.iter() {
-        if let Some(value_str) = value.to_str().ok() {
+    for (name, value) in &headers {
+        if let Ok(value_str) = value.to_str() {
             header_map.insert(name.as_str().to_string(), value_str.to_string());
         }
     }

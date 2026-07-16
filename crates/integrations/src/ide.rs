@@ -24,6 +24,7 @@ pub enum IdeTarget {
 }
 
 impl IdeTarget {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Vscode => "vscode",
@@ -149,6 +150,7 @@ pub fn parse_target(value: &str) -> Result<IdeTarget, IdeIntegrationError> {
     }
 }
 
+#[must_use]
 pub fn collect_status(workspace_root: &Path) -> IdeStatus {
     let config_path = ide_config_path(workspace_root);
     let (configured_target, config_error) = match read_config(&config_path) {
@@ -347,11 +349,12 @@ fn command_on_path(command: &str) -> bool {
         format!("{command}.cmd"),
     ];
     #[cfg(not(windows))]
-    let candidates = vec![command.to_string()];
+    let candidates = [command.to_string()];
 
     env::split_paths(&paths).any(|dir| candidates.iter().any(|name| dir.join(name).is_file()))
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn macos_fallback_binary(target: IdeTarget) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
