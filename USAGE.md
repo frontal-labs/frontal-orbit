@@ -58,7 +58,7 @@ The system looks for `project.json` in this order:
 ```json
 {
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "max_concurrent_requests": 10,
     "request_timeout_seconds": 30,
     "permission_mode": "permissive",
@@ -252,7 +252,7 @@ The workspace includes a deterministic Anthropic-compatible mock service and par
 Manual mock service startup:
 
 ```bash
-cargo run -p mock-anthropic-service -- --bind 127.0.0.1:0
+cargo run -p orbit-mock-gateway -- --bind 127.0.0.1:0
 ```
 
 ## Verification
@@ -269,7 +269,7 @@ Current Rust crates:
 - `providers`
 - `commands`
 - `compat-harness`
-- `mock-anthropic-service`
+- `orbit-mock-gateway`
 - `plugins`
 - `runtime`
 - `cli` (package in `crates/cli/`)

@@ -1,20 +1,39 @@
 # Frontal Provider
 
-The Frontal provider is not yet implemented or available at `ai.frontal.dev`. 
-
-We are still working on deploying our full platform for production. Once the platform is ready, the Frontal provider will be integrated into Orbit and made available for use.
+The Frontal provider is the **default AI provider** for Orbit. It is an
+OpenAI-compatible API served at `https://ai.frontal.dev/v1`.
 
 ## Status
 
-- **Current Status**: Not Implemented
-- **Availability**: Not Available
-- **Platform Status**: In Development
+- **Current Status**: Implemented and available
+- **Availability**: Available at `https://ai.frontal.dev/v1`
+- **Provider Name**: `frontal`
 
-## Future Implementation
+## Configuration
 
-When the Frontal platform is deployed for production, this provider will offer:
-- AI model access through the Frontal platform
-- Integration with Orbit's existing provider system
-- Support for various AI models and capabilities
+The Frontal provider is enabled by default (`runtime.default_provider = "frontal"`).
+To use it, set your credentials via environment variables:
 
-Please check back later for updates on the Frontal provider availability.
+```bash
+export FRONTAL_API_KEY="frontal-..."
+export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
+```
+
+If `FRONTAL_BASE_URL` is not set, Orbit defaults to `https://ai.frontal.dev/v1`.
+
+## Usage
+
+When no `--provider` flag is given, Orbit routes requests through the Frontal
+gateway. The model name configured in `runtime.providers.frontal.default_model`
+(or `DEFAULT_MODEL` when invoked without `--model`) is passed to the gateway,
+which maps it to the underlying model.
+
+Explicit selection still works:
+
+```bash
+orbit --provider frontal -p "hello"
+orbit --model frontal/gpt-4.1 -p "hello"
+```
+
+To use a different provider instead, pass `--provider <name>`
+(`anthropic`, `openai`, `xai`, `bedrock`, `azure`, `ollama`).

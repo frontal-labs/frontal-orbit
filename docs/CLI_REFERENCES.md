@@ -687,7 +687,7 @@ Location: `~/.orbit/config.json`
 ```json
 {
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "default_model": "claude-sonnet-4-6",
     "permission_mode": "safe-mode"
   },

@@ -22,7 +22,7 @@ Welcome to the Orbit CLI documentation hub. This comprehensive guide covers ever
 - **[Performance](./PERFORMANCE.md)** - Performance optimization and monitoring
 - **[Security](./SECURITY.md)** - Security features and best practices
 - **[Containers](./CONTAINERS.md)** - Docker and containerization
-- **[Hosted Engineering Plan](https://github.com/frontal-labs/frontal-orbit/issues)** - Implementation plan for the hosted server, worker containers, multi-agent execution, and GitHub automation
+- **[Hosted Engineering Plan](https://github.com/frontal-labs/orbit/issues)** - Implementation plan for the hosted server, worker containers, multi-agent execution, and GitHub automation
 
 ### Support
 - **[Troubleshooting](./TROUBLESHOOTING.md)** - Common issues and solutions

@@ -84,7 +84,7 @@ The project uses a Cargo workspace with multiple crates:
 - **`crates/commands`** - Slash command definitions and parsing
 - **`crates/plugins`** - Plugin system and management
 - **`crates/api`** - Public API facade
-- **`crates/mock-anthropic-service`** - Testing mock service
+- **`crates/orbit-mock-gateway`** - Testing mock service
 
 ### Adding New Features
 
@@ -120,7 +120,7 @@ The project includes a comprehensive mock testing harness:
 ./scripts/run_mock_parity_harness.sh
 
 # Run mock service manually
-cargo run -p mock-anthropic-service -- --bind 127.0.0.1:0
+cargo run -p orbit-mock-gateway -- --bind 127.0.0.1:0
 ```
 
 ## Linting and Formatting

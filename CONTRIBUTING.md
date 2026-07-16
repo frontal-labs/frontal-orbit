@@ -20,7 +20,7 @@ Thank you for your interest in contributing to Frontal Orbit Code! This document
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/frontal-labs/frontal-orbit.git
+   git remote add upstream https://github.com/frontal-labs/orbit.git
    ```
 4. Install dependencies and build:
    ```bash

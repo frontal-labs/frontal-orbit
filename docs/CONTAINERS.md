@@ -193,7 +193,7 @@ services:
   orbit:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: infrastructure/docker/orbit-dev.Dockerfile
     ports:
       - "8080:8080"
     volumes:

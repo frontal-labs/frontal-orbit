@@ -27,7 +27,7 @@ The main configuration file is `config/project.json`:
     "description": "AI-powered development environment and CLI tool"
   },
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "providers": {
       "anthropic": {
         "enabled": true,
@@ -106,7 +106,7 @@ The main configuration file is `config/project.json`:
 - `description`: Project description
 
 #### Runtime
-- `default_provider`: Default AI provider (`anthropic`, `openai`, `xai`)
+- `default_provider`: Default AI provider (`anthropic`, `openai`, `xai`, `frontal`)
 - `providers`: Provider-specific configurations
 - `permission_mode`: Permission mode (`permissive`, `read-only`, `restricted`)
 - `log_level`: Logging level (`debug`, `info`, `warn`, `error`)
@@ -245,7 +245,7 @@ export XAI_BASE_URL="https://api.x.ai/v1"
 
 # Frontal
 export FRONTAL_API_KEY="frontal-..."
-export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
+export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
 ```
 
 ### Service Variables
@@ -329,7 +329,7 @@ if enabled_providers == 0 {
 ```json
 {
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "log_level": "debug",
     "permission_mode": "permissive"
   },
@@ -350,7 +350,7 @@ if enabled_providers == 0 {
 ```json
 {
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "log_level": "info",
     "permission_mode": "restricted",
     "max_concurrent_requests": 5,

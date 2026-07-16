@@ -218,13 +218,13 @@ orbit prompt "Use filesystem to watch /tmp for changes"
 orbit prompt "Use GitHub to list my repositories"
 
 # Get repository information
-orbit prompt "Use GitHub to get information about frontal-labs/frontal-orbit"
+orbit prompt "Use GitHub to get information about frontal-labs/orbit"
 
 # List issues
-orbit prompt "Use GitHub to list open issues in frontal-labs/frontal-orbit"
+orbit prompt "Use GitHub to list open issues in frontal-labs/orbit"
 
 # Create issue
-orbit prompt "Use GitHub to create an issue in frontal-labs/frontal-orbit with title 'Bug found'"
+orbit prompt "Use GitHub to create an issue in frontal-labs/orbit with title 'Bug found'"
 ```
 
 ### Database Operations
@@ -632,3 +632,65 @@ orbit prompt "Use Kubernetes to deploy the application and Docker to build the c
 ```
 
 This MCP guide provides comprehensive coverage of MCP integration in Orbit, from basic usage to advanced custom server development.
+
+## Native Integrations (GitHub, Linear, Graphite, Slack)
+
+Orbit has **no hardcoded integrations**. Every external tracker (GitHub PRs, Linear
+issues, Graphite stacks, Slack messages) is reached exclusively through an MCP server.
+The server acts as an **MCP client**: it resolves a logical integration name
+(`github`, `linear`, `graphite`, `slack`) to a configured MCP server and invokes that
+server's tools. Adding a new provider requires **no code changes** — only config.
+
+### Configuration
+
+Integrations are declared under `mcp.integrations` in `.orbit.json`, mapping each
+logical name to an MCP `server` plus the tool names it exposes and optional OAuth:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+      }
+    },
+    "integrations": {
+      "github": {
+        "server": "github",
+        "tools": {
+          "create_pr": "create_pull_request",
+          "create_issue_comment": "create_issue_comment",
+          "create_check_run": "create_check_run"
+        },
+        "oauth": {
+          "auth_url": "https://github.com/login/oauth/authorize",
+          "token_url": "https://github.com/login/oauth/access_token",
+          "scopes": ["repo", "read:org", "workflow"],
+          "client_id_env": "ORBIT_GITHUB_CLIENT_ID",
+          "client_secret_env": "ORBIT_GITHUB_CLIENT_SECRET"
+        }
+      }
+    }
+  }
+}
+```
+
+### Server endpoints (all generic)
+
+| Method & Path | Purpose |
+| --- | --- |
+| `POST /v1/webhooks/:source` | Receive a webhook for any integration. The raw payload is stored in the task's `metadata` map and a `ConnectorEventReceived` event is broadcast. |
+| `GET/POST /v1/oauth/:provider/authorize` + `/callback` | Generic OAuth flow driven entirely by the integration's `oauth` config. |
+| `GET/POST /v1/tasks/:task_id/integration/:name` | Read or patch a task's integration-specific data (stored in `metadata`). |
+
+### How it works
+
+- `crates/integrations/src/mcp/integration.rs` holds `IntegrationRegistry` and the
+  global registry. `register_integrations_from_json` populates it from the
+  `mcp.integrations` config block.
+- The server calls `global_integration_registry().call_github_create_pr(...)` etc.,
+  which forward to the configured MCP server's tool.
+- Provider-specific task data lives in the generic `metadata: HashMap<String,String>`
+  field (e.g. `github_pr_url`, `linear_issue_id`), not in bespoke struct fields.

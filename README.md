@@ -40,7 +40,7 @@ Set your API credentials:
 export ORBIT_API_KEY="sk-ant-..."
 # Or use Frontal's OpenAI-compatible API gateway
 export FRONTAL_API_KEY="frontal-..."
-export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
+export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
 # Or use an Anthropic proxy
 export ORBIT_BASE_URL="https://your-proxy.com"
 ```
@@ -75,7 +75,7 @@ The system looks for `project.json` in this order:
     "description": "AI-powered development environment and CLI tool"
   },
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "max_concurrent_requests": 10,
     "request_timeout_seconds": 30,
     "permission_mode": "permissive",
@@ -115,7 +115,7 @@ The workspace now includes a deterministic Anthropic-compatible mock service and
 ./scripts/run_mock_parity_harness.sh
 
 # Or start the mock service manually for ad hoc CLI runs
-cargo run -p mock-anthropic-service -- --bind 127.0.0.1:0
+cargo run -p orbit-mock-gateway -- --bind 127.0.0.1:0
 ```
 
 Harness coverage:
@@ -133,7 +133,7 @@ Harness coverage:
 
 Primary artifacts:
 
-- `crates/mock-anthropic-service/` — reusable mock Anthropic-compatible service
+- `tests/mock-gateway/` — reusable mock Anthropic-compatible service
 - `crates/cli/tests/mock_parity_harness.rs` — clean-env CLI harness
 - `scripts/run_mock_parity_harness.sh` — reproducible wrapper
 - `scripts/run_mock_parity_diff.py` — scenario checklist + PARITY mapping runner
@@ -265,7 +265,7 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 |   |   github/             # GitHub API client integration
 |   |   integrations/       # MCP interoperability and IDE integration
 |   |   memory/             # Semantic memory and knowledge graph utilities
-|   |   mock-anthropic-service/ # Deterministic local Anthropic-compatible mock
+|   |   tests/mock-gateway/ # Deterministic local Anthropic-compatible mock
 |   |   observability/      # Structured observability primitives
 |   |   orchestrator/       # Workflow management and resource allocation
 |   |   plugins/            # Plugin metadata, manager, install/enable/disable surfaces
@@ -294,7 +294,7 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 - **github** - GitHub API client for PRs, issues, check runs, and repository operations
 - **integrations** - MCP server management, IDE integration, and external service bridges
 - **memory** - semantic memory, knowledge graphs, and persistent storage abstractions
-- **mock-anthropic-service** - deterministic `/v1/messages` mock for CLI parity tests and local harness runs
+- **orbit-mock-gateway** - deterministic `/v1/messages` mock for CLI parity tests and local harness runs
 - **observability** - error reporting, structured logging, and agent-level observability
 - **orchestrator** - work item routing, execution planning, lane assignment, and resource management
 - **plugins** - plugin metadata, install/enable/disable/update flows, plugin tool definitions, hook integration surfaces

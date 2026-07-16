@@ -20,7 +20,7 @@ If you prefer to build from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/frontal-labs/frontal-orbit.git
+git clone https://github.com/frontal-labs/orbit.git
 cd frontal-orbit
 
 # Build the workspace
@@ -75,7 +75,7 @@ After installation, configure your API credentials:
 export ORBIT_API_KEY="sk-ant-..."
 # Or use Frontal's OpenAI-compatible API gateway
 export FRONTAL_API_KEY="frontal-..."
-export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
+export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
 # Or use an Anthropic proxy
 export ORBIT_BASE_URL="https://your-proxy.com"
 ```

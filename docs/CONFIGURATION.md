@@ -31,7 +31,7 @@ export XAI_BASE_URL="https://api.x.ai/v1"  # optional
 
 # Frontal API gateway
 export FRONTAL_API_KEY="frontal-..."
-export FRONTAL_BASE_URL="https://api.frontal.ai/v1"
+export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
 ```
 
 ### Optional Variables
@@ -85,7 +85,7 @@ The `.orbit.json` config file uses JSON format with the following structure:
     }
   },
   "runtime": {
-    "default_provider": "anthropic",
+    "default_provider": "frontal",
     "default_model": "claude-opus-4-6",
     "permission_mode": "danger-full-access",
     "allowed_tools": ["bash", "read", "write", "edit", "grep", "glob", "web_search", "web_fetch"],
@@ -312,9 +312,9 @@ orbit mcp config filesystem --timeout 60 --auto-start
   "plugins": {
     "plugins_dir": "~/.orbit/plugins",
     "auto_load": ["plugin-name"],
-    "registry_url": "https://github.com/frontal-labs/frontal-orbit",
+    "registry_url": "https://github.com/frontal-labs/orbit",
     "update_check_interval": "24h",
-    "trusted_sources": ["https://github.com", "https://github.com/frontal-labs/frontal-orbit"]
+    "trusted_sources": ["https://github.com", "https://github.com/frontal-labs/orbit"]
   }
 }
 ```
