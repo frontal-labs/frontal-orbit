@@ -30,7 +30,9 @@ use orbit_events::{
     HostedEventStatus, HostedEventTopic, HostedTaskEventSummary, LaneSignalEventPayload,
     TaskRoutedEventPayload, TerminalEventPayload,
 };
-use orbit_github::{parse_github_repo_url, GitHubRepoRef};
+use orbit_integrations::mcp::integration::{
+    global_integration_registry, register_integrations_from_json,
+};
 use orbit_orchestrator::{
     plan_work_item, LaneRole, WorkItem, WorkItemContext, WorkItemPriority, WorkItemSource,
 };
@@ -39,16 +41,12 @@ use orbit_runtime::task_registry::{Task, TaskRegistry, TaskRegistrySnapshot, Tas
 use orbit_runtime::worker_boot::{
     WorkerEventKind, WorkerEventPayload, WorkerRegistry, WorkerStatus,
 };
-use orbit_runtime::{
-    generate_pkce_pair, generate_state, save_oauth_credentials_for, OAuthTokenSet,
-};
+use orbit_runtime::{generate_state, save_oauth_credentials_for, OAuthTokenSet};
 use orbit_tools::{
     cancel_hosted_agent_with_locator, hosted_agent_status_with_locator, launch_hosted_agent,
     HostedAgentCancellationSource, HostedAgentLaunchRequest, HostedAgentLocator,
     HostedAgentStatusSnapshot,
 };
-mod graphite_client;
-mod linear_client;
 mod tracker_reporting;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -263,7 +261,6 @@ impl ServerConfig {
 #[derive(Debug, Clone)]
 struct LinearOAuthPendingState {
     state: String,
-    code_verifier: String,
     redirect_uri: String,
     created_at: Instant,
 }
@@ -384,19 +381,23 @@ impl ServerState {
         let persistence = state_file.map(|path| Arc::new(ServerStatePersistence { path }));
         let (tasks, contexts, event_history) = persistence
             .as_ref()
-            .and_then(|persistence| persistence.load().ok()).map_or_else(|| {
-                (
-                    TaskRegistry::new(),
-                    HashMap::new(),
-                    VecDeque::with_capacity(event_replay_limit.max(1)),
-                )
-            }, |snapshot| {
-                (
-                    TaskRegistry::from_snapshot(snapshot.tasks),
-                    snapshot.contexts,
-                    trim_event_history(snapshot.event_history, event_replay_limit.max(1)),
-                )
-            });
+            .and_then(|persistence| persistence.load().ok())
+            .map_or_else(
+                || {
+                    (
+                        TaskRegistry::new(),
+                        HashMap::new(),
+                        VecDeque::with_capacity(event_replay_limit.max(1)),
+                    )
+                },
+                |snapshot| {
+                    (
+                        TaskRegistry::from_snapshot(snapshot.tasks),
+                        snapshot.contexts,
+                        trim_event_history(snapshot.event_history, event_replay_limit.max(1)),
+                    )
+                },
+            );
         let state = Self {
             started_at: Instant::now(),
             tasks,
@@ -539,6 +540,18 @@ impl ServerState {
         contexts.get(task_id).cloned()
     }
 
+    fn all_contexts(&self) -> Vec<(String, HostedTaskContext)> {
+        let contexts = self
+            .contexts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        contexts
+            .iter()
+            .map(|(id, context)| (id.clone(), context.clone()))
+            .collect()
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     fn broadcast_event(&self, event: EventEnvelope) {
         let event = self.hydrate_event_for_stream(&event);
         {
@@ -671,7 +684,10 @@ fn default_server_state_file() -> Option<PathBuf> {
 }
 
 fn default_server_workspace_root() -> PathBuf {
-    env::current_dir().map_or_else(|_| env::temp_dir().join("orbit-server-workspaces"), |cwd| cwd.join(".orbit-server").join("workspaces"))
+    env::current_dir().map_or_else(
+        |_| env::temp_dir().join("orbit-server-workspaces"),
+        |cwd| cwd.join(".orbit-server").join("workspaces"),
+    )
 }
 
 fn default_server_docker_image() -> String {
@@ -1040,6 +1056,8 @@ pub struct HostedTaskContext {
     pub pr_head_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_base_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub metadata: std::collections::HashMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1199,6 +1217,8 @@ pub struct HostedTaskSnapshot {
     pub pr_head_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_base_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub metadata: std::collections::HashMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1264,6 +1284,7 @@ impl HostedTaskSnapshot {
             pr_api_url: context.pr_api_url,
             pr_head_ref: context.pr_head_ref,
             pr_base_ref: context.pr_base_ref,
+            metadata: context.metadata,
             execution_backend: context.execution_backend,
             priority: context.priority,
             plan_id: context.plan_id,
@@ -1366,79 +1387,6 @@ pub struct UpdateTaskContextRequest {
     pub graphite_stack_id: Option<String>,
     pub graphite_head_branch: Option<String>,
     pub graphite_base_branch: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct UpdateTaskGithubRequest {
-    pub published_branch: Option<String>,
-    pub published_commit_sha: Option<String>,
-    pub published_remote: Option<String>,
-    pub pr_number: Option<u64>,
-    pub pr_url: Option<String>,
-    pub pr_state: Option<String>,
-    pub pr_merged: Option<bool>,
-    pub pr_closed_at: Option<String>,
-    pub pr_merged_at: Option<String>,
-    pub pr_api_url: Option<String>,
-    pub pr_head_ref: Option<String>,
-    pub pr_base_ref: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TaskGithubResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_remote: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_commit_sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_number: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_merged: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_closed_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_merged_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_api_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_head_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_base_ref: Option<String>,
-}
-
-fn github_repo_ref_for_context(context: &HostedTaskContext) -> Option<GitHubRepoRef> {
-    let repo_url = context.repo_url.as_deref()?;
-    parse_github_repo_url(repo_url).ok()
-}
-
-fn task_github_response_for_context(context: &HostedTaskContext) -> TaskGithubResponse {
-    let repo_ref = github_repo_ref_for_context(context);
-    TaskGithubResponse {
-        owner: repo_ref.as_ref().map(|repo| repo.owner.clone()),
-        repo: repo_ref.as_ref().map(|repo| repo.repo.clone()),
-        published_remote: context.published_remote.clone(),
-        published_branch: context.published_branch.clone(),
-        published_commit_sha: context.published_commit_sha.clone(),
-        pr_number: context.pr_number,
-        pr_url: context.pr_url.clone(),
-        pr_state: context.pr_state.clone(),
-        pr_merged: context.pr_merged,
-        pr_closed_at: context.pr_closed_at.clone(),
-        pr_merged_at: context.pr_merged_at.clone(),
-        pr_api_url: context.pr_api_url.clone(),
-        pr_head_ref: context.pr_head_ref.clone(),
-        pr_base_ref: context.pr_base_ref.clone(),
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1568,8 +1516,7 @@ fn is_control_plane_authorized(state: &ServerState, headers: &HeaderMap) -> bool
         return true;
     };
 
-    extract_api_key(headers)
-        .is_some_and(|provided| constant_time_equals(expected, provided))
+    extract_api_key(headers).is_some_and(|provided| constant_time_equals(expected, provided))
 }
 
 async fn require_control_plane_auth(
@@ -1594,8 +1541,8 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .route("/v1/tasks/:task_id", get(get_task))
         .route("/v1/tasks/:task_id/context", post(update_task_context))
         .route(
-            "/v1/tasks/:task_id/github",
-            get(get_task_github).post(update_task_github),
+            "/v1/tasks/:task_id/integration/:name",
+            get(get_task_integration).post(update_task_integration),
         )
         .route("/v1/tasks/:task_id/runtime", get(get_task_runtime))
         .route("/v1/tasks/:task_id/cancel", post(cancel_task))
@@ -1616,15 +1563,12 @@ pub fn app(state: Arc<ServerState>) -> Router {
 
     Router::new()
         .route("/health", get(health))
-        .route("/v1/webhooks/github", post(github_webhook))
-        .route("/v1/webhooks/linear", post(linear_webhook))
-        .route("/v1/webhooks/graphite", post(graphite_webhook))
-        .route("/v1/oauth/github/authorize", get(github_oauth_authorize))
-        .route("/v1/oauth/github/callback", get(github_oauth_callback))
-        .route("/v1/oauth/linear/authorize", get(linear_oauth_authorize))
-        .route("/v1/oauth/linear/callback", get(linear_oauth_callback))
-        .route("/v1/oauth/slack/authorize", get(slack_oauth_authorize))
-        .route("/v1/oauth/slack/callback", get(slack_oauth_callback))
+        .route("/v1/webhooks/:source", post(integration_webhook))
+        .route(
+            "/v1/oauth/:provider/authorize",
+            get(generic_oauth_authorize),
+        )
+        .route("/v1/oauth/:provider/callback", get(generic_oauth_callback))
         .merge(protected)
         .with_state(state)
 }
@@ -1656,6 +1600,13 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
             }
         });
     }
+    if let Ok(raw) = env::var("ORBIT_INTEGRATIONS_CONFIG") {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Err(err) = register_integrations_from_json(&value) {
+                eprintln!("failed to register integrations from ORBIT_INTEGRATIONS_CONFIG: {err}");
+            }
+        }
+    }
     let app = app(state);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     println!("orbit-server listening on http://{}", config.bind_addr);
@@ -1667,13 +1618,21 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
-async fn github_oauth_authorize(
+async fn generic_oauth_authorize(
+    Path(provider): Path<String>,
     State(state): State<Arc<ServerState>>,
 ) -> Result<axum::response::Redirect, AppError> {
-    let client_id = std::env::var("ORBIT_GITHUB_CLIENT_ID")
-        .map_err(|_| AppError::internal("ORBIT_GITHUB_CLIENT_ID not set"))?;
-    let redirect_uri = std::env::var("ORBIT_GITHUB_OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "https://frontal-orbit.fly.dev/v1/oauth/github/callback".to_string());
+    let oauth = global_integration_registry()
+        .get_oauth_config(&provider)
+        .ok_or_else(|| {
+            AppError::not_found(format!("no OAuth config for integration '{provider}'"))
+        })?;
+
+    let client_id = std::env::var(&oauth.client_id_env)
+        .map_err(|_| AppError::internal(format!("{} not set", oauth.client_id_env)))?;
+    let redirect_uri = std::env::var("ORBIT_OAUTH_REDIRECT_BASE")
+        .map(|base| format!("{base}/v1/oauth/{provider}/callback"))
+        .unwrap_or_else(|_| format!("https://frontal-orbit.fly.dev/v1/oauth/{provider}/callback"));
 
     let csrf_state = generate_state()
         .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
@@ -1683,24 +1642,32 @@ async fn github_oauth_authorize(
         csrf_state.clone(),
         LinearOAuthPendingState {
             state: csrf_state.clone(),
-            code_verifier: String::new(),
             redirect_uri: redirect_uri.clone(),
             created_at: Instant::now(),
         },
     );
     states.retain(|_, v| v.created_at.elapsed() < Duration::from_mins(10));
 
+    let scope = oauth.scopes.join(",");
     let authorize_url = format!(
-        "https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&scope=repo,read:org,workflow&state={csrf_state}"
+        "{}?client_id={}&redirect_uri={}&scope={}&state={}",
+        oauth.auth_url, client_id, redirect_uri, scope, csrf_state
     );
 
     Ok(axum::response::Redirect::to(&authorize_url))
 }
 
-async fn github_oauth_callback(
+async fn generic_oauth_callback(
+    Path(provider): Path<String>,
     State(state): State<Arc<ServerState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let oauth = global_integration_registry()
+        .get_oauth_config(&provider)
+        .ok_or_else(|| {
+            AppError::not_found(format!("no OAuth config for integration '{provider}'"))
+        })?;
+
     let code = params
         .get("code")
         .ok_or_else(|| AppError::bad_request("missing code parameter"))?;
@@ -1718,10 +1685,10 @@ async fn github_oauth_callback(
         return Err(AppError::bad_request("OAuth state mismatch"));
     }
 
-    let client_id = std::env::var("ORBIT_GITHUB_CLIENT_ID")
-        .map_err(|_| AppError::internal("ORBIT_GITHUB_CLIENT_ID not set"))?;
-    let client_secret = std::env::var("ORBIT_GITHUB_CLIENT_SECRET")
-        .map_err(|_| AppError::internal("ORBIT_GITHUB_CLIENT_SECRET not set"))?;
+    let client_id = std::env::var(&oauth.client_id_env)
+        .map_err(|_| AppError::internal(format!("{} not set", oauth.client_id_env)))?;
+    let client_secret = std::env::var(&oauth.client_secret_env)
+        .map_err(|_| AppError::internal(format!("{} not set", oauth.client_secret_env)))?;
 
     let params_map = [
         ("client_id", client_id.as_str()),
@@ -1732,7 +1699,7 @@ async fn github_oauth_callback(
 
     let http = reqwest::Client::new();
     let response = http
-        .post("https://github.com/login/oauth/access_token")
+        .post(&oauth.token_url)
         .header("Accept", "application/json")
         .form(&params_map)
         .send()
@@ -1745,32 +1712,31 @@ async fn github_oauth_callback(
     }
 
     #[derive(serde::Deserialize)]
-    struct GitHubTokenResponse {
+    struct GenericTokenResponse {
         access_token: Option<String>,
         scope: Option<String>,
-        token_type: Option<String>,
         error: Option<String>,
         error_description: Option<String>,
     }
 
-    let raw: GitHubTokenResponse = response
+    let raw: GenericTokenResponse = response
         .json()
         .await
         .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
 
     if let Some(error) = raw.error {
         return Err(AppError::internal(format!(
-            "GitHub OAuth failed: {}",
+            "{provider} OAuth failed: {}",
             raw.error_description.unwrap_or(error)
         )));
     }
 
     let access_token = raw
         .access_token
-        .ok_or_else(|| AppError::internal("GitHub returned no access token"))?;
+        .ok_or_else(|| AppError::internal("OAuth provider returned no access token"))?;
 
     let token_set = OAuthTokenSet {
-        access_token: access_token.clone(),
+        access_token,
         refresh_token: None,
         expires_at: None,
         scopes: raw
@@ -1779,269 +1745,12 @@ async fn github_oauth_callback(
             .unwrap_or_default(),
     };
 
-    save_oauth_credentials_for(&token_set, "github")
+    save_oauth_credentials_for(&token_set, &provider)
         .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
 
     Ok(Json(json!({
         "ok": true,
-        "provider": "github",
-        "token_type": raw.token_type,
-        "scopes": token_set.scopes,
-    })))
-}
-
-async fn linear_oauth_authorize(
-    State(state): State<Arc<ServerState>>,
-) -> Result<axum::response::Redirect, AppError> {
-    let client_id = std::env::var("ORBIT_LINEAR_CLIENT_ID")
-        .map_err(|_| AppError::internal("ORBIT_LINEAR_CLIENT_ID not set"))?;
-    let redirect_uri = std::env::var("ORBIT_LINEAR_OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "https://frontal-orbit.fly.dev/v1/oauth/linear/callback".to_string());
-
-    let pkce = generate_pkce_pair()
-        .map_err(|e| AppError::internal(format!("pkce generation failed: {e}")))?;
-    let csrf_state = generate_state()
-        .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
-
-    let mut states = state.pending_oauth_states.lock().unwrap();
-    states.insert(
-        csrf_state.clone(),
-        LinearOAuthPendingState {
-            state: csrf_state.clone(),
-            code_verifier: pkce.verifier,
-            redirect_uri: redirect_uri.clone(),
-            created_at: Instant::now(),
-        },
-    );
-    // Purge states older than 10 minutes
-    states.retain(|_, v| v.created_at.elapsed() < Duration::from_mins(10));
-
-    let authorize_url = format!(
-        "https://linear.app/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&state={csrf_state}&code_challenge={challenge}&code_challenge_method=S256&scope=read,write,issues:create,comments:create",
-        challenge = pkce.challenge,
-    );
-
-    Ok(axum::response::Redirect::to(&authorize_url))
-}
-
-async fn linear_oauth_callback(
-    State(state): State<Arc<ServerState>>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let code = params
-        .get("code")
-        .ok_or_else(|| AppError::bad_request("missing code parameter"))?;
-    let state_param = params
-        .get("state")
-        .ok_or_else(|| AppError::bad_request("missing state parameter"))?;
-
-    let pending = {
-        let mut states = state.pending_oauth_states.lock().unwrap();
-        states.remove(state_param)
-    }
-    .ok_or_else(|| AppError::bad_request("unknown or expired OAuth state"))?;
-
-    if pending.state != *state_param {
-        return Err(AppError::bad_request("OAuth state mismatch"));
-    }
-
-    let client_id = std::env::var("ORBIT_LINEAR_CLIENT_ID")
-        .map_err(|_| AppError::internal("ORBIT_LINEAR_CLIENT_ID not set"))?;
-    let client_secret = std::env::var("ORBIT_LINEAR_CLIENT_SECRET").ok();
-
-    let mut params_map = std::collections::HashMap::from([
-        ("grant_type".to_string(), "authorization_code".to_string()),
-        ("code".to_string(), code.clone()),
-        ("redirect_uri".to_string(), pending.redirect_uri.clone()),
-        ("client_id".to_string(), client_id.clone()),
-        ("code_verifier".to_string(), pending.code_verifier.clone()),
-    ]);
-    if let Some(ref secret) = client_secret {
-        params_map.insert("client_secret".to_string(), secret.clone());
-    }
-
-    let http = reqwest::Client::new();
-    let response = http
-        .post("https://api.linear.app/oauth/token")
-        .form(&params_map)
-        .send()
-        .await
-        .map_err(|e| AppError::internal(format!("token exchange failed: {e}")))?;
-
-    if !response.status().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(AppError::internal(format!("token exchange failed: {body}")));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct LinearTokenResponse {
-        access_token: String,
-        refresh_token: Option<String>,
-        expires_in: Option<u64>,
-        scope: Option<String>,
-    }
-
-    let raw: LinearTokenResponse = response
-        .json()
-        .await
-        .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let token_set = OAuthTokenSet {
-        access_token: raw.access_token,
-        refresh_token: raw.refresh_token,
-        expires_at: raw.expires_in.map(|secs| now + secs),
-        scopes: raw
-            .scope
-            .map(|s| {
-                s.split_whitespace()
-                    .map(str::trim)
-                    .map(String::from)
-                    .collect()
-            })
-            .unwrap_or_default(),
-    };
-
-    save_oauth_credentials_for(&token_set, "linear")
-        .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
-
-    Ok(Json(json!({
-        "ok": true,
-        "provider": "linear",
-        "scopes": token_set.scopes,
-    })))
-}
-
-async fn slack_oauth_authorize(
-    State(state): State<Arc<ServerState>>,
-) -> Result<axum::response::Redirect, AppError> {
-    let client_id = std::env::var("ORBIT_SLACK_CLIENT_ID")
-        .map_err(|_| AppError::internal("ORBIT_SLACK_CLIENT_ID not set"))?;
-    let redirect_uri = std::env::var("ORBIT_SLACK_OAUTH_REDIRECT_URI")
-        .unwrap_or_else(|_| "https://frontal-orbit.fly.dev/v1/oauth/slack/callback".to_string());
-
-    let csrf_state = generate_state()
-        .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
-
-    let mut states = state.pending_oauth_states.lock().unwrap();
-    states.insert(
-        csrf_state.clone(),
-        LinearOAuthPendingState {
-            state: csrf_state.clone(),
-            code_verifier: String::new(), // Slack doesn't use PKCE
-            redirect_uri: redirect_uri.clone(),
-            created_at: Instant::now(),
-        },
-    );
-    states.retain(|_, v| v.created_at.elapsed() < Duration::from_mins(10));
-
-    let scopes = "chat:write,commands,channels:history,im:history,app_mentions:read,reactions:write,team:read";
-    let authorize_url = format!(
-        "https://slack.com/oauth/v2/authorize?client_id={client_id}&scope={scopes}&redirect_uri={redirect_uri}&state={csrf_state}"
-    );
-
-    Ok(axum::response::Redirect::to(&authorize_url))
-}
-
-async fn slack_oauth_callback(
-    State(state): State<Arc<ServerState>>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let code = params
-        .get("code")
-        .ok_or_else(|| AppError::bad_request("missing code parameter"))?;
-    let state_param = params
-        .get("state")
-        .ok_or_else(|| AppError::bad_request("missing state parameter"))?;
-
-    let pending = {
-        let mut states = state.pending_oauth_states.lock().unwrap();
-        states.remove(state_param)
-    }
-    .ok_or_else(|| AppError::bad_request("unknown or expired OAuth state"))?;
-
-    if pending.state != *state_param {
-        return Err(AppError::bad_request("OAuth state mismatch"));
-    }
-
-    let client_id = std::env::var("ORBIT_SLACK_CLIENT_ID")
-        .map_err(|_| AppError::internal("ORBIT_SLACK_CLIENT_ID not set"))?;
-    let client_secret = std::env::var("ORBIT_SLACK_CLIENT_SECRET")
-        .map_err(|_| AppError::internal("ORBIT_SLACK_CLIENT_SECRET not set"))?;
-
-    let params_map = [
-        ("client_id", client_id.as_str()),
-        ("client_secret", client_secret.as_str()),
-        ("code", code.as_str()),
-        ("redirect_uri", pending.redirect_uri.as_str()),
-    ];
-
-    let http = reqwest::Client::new();
-    let response = http
-        .post("https://slack.com/api/oauth.v2.access")
-        .form(&params_map)
-        .send()
-        .await
-        .map_err(|e| AppError::internal(format!("token exchange failed: {e}")))?;
-
-    if !response.status().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(AppError::internal(format!("token exchange failed: {body}")));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct SlackTeamInfo {
-        id: Option<String>,
-        name: Option<String>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct SlackTokenResponse {
-        ok: bool,
-        access_token: Option<String>,
-        error: Option<String>,
-        team: Option<SlackTeamInfo>,
-        bot_user_id: Option<String>,
-        scope: Option<String>,
-    }
-
-    let raw: SlackTokenResponse = response
-        .json()
-        .await
-        .map_err(|e| AppError::internal(format!("failed to parse token response: {e}")))?;
-
-    if !raw.ok {
-        return Err(AppError::internal(format!(
-            "Slack OAuth failed: {}",
-            raw.error.unwrap_or_else(|| "unknown error".to_string())
-        )));
-    }
-
-    let access_token = raw
-        .access_token
-        .ok_or_else(|| AppError::internal("Slack returned no access token"))?;
-
-    let token_set = OAuthTokenSet {
-        access_token: access_token.clone(),
-        refresh_token: None, // Slack bot tokens don't expire
-        expires_at: None,
-        scopes: raw
-            .scope
-            .map(|s| s.split(',').map(str::trim).map(String::from).collect())
-            .unwrap_or_default(),
-    };
-
-    save_oauth_credentials_for(&token_set, "slack")
-        .map_err(|e| AppError::internal(format!("failed to persist credentials: {e}")))?;
-
-    Ok(Json(json!({
-        "ok": true,
-        "provider": "slack",
-        "bot_token": access_token,
-        "team": raw.team.map(|t| json!({"id": t.id, "name": t.name})),
-        "bot_user_id": raw.bot_user_id,
+        "provider": provider,
         "scopes": token_set.scopes,
     })))
 }
@@ -2214,70 +1923,65 @@ async fn update_task_context(
     Ok(Json(state.task_snapshot(task)))
 }
 
-async fn get_task_github(
-    Path(task_id): Path<String>,
+async fn get_task_integration(
+    Path((task_id, name)): Path<(String, String)>,
     State(state): State<Arc<ServerState>>,
-) -> Result<Json<TaskGithubResponse>, AppError> {
+) -> Result<Json<Value>, AppError> {
     state
         .tasks
         .get(&task_id)
         .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
     let context = state.context_for(&task_id).unwrap_or_default();
-    Ok(Json(task_github_response_for_context(&context)))
+    let value = serde_json::to_value(&context)
+        .map_err(|e| AppError::internal(format!("failed to serialize context: {e}")))?;
+    let filtered: Value = value
+        .as_object()
+        .map(|obj| {
+            let prefix = format!("{name}_");
+            json!({
+                "metadata": obj.get("metadata").cloned().unwrap_or(Value::Object(Default::default())),
+                "fields": obj.iter()
+                    .filter(|(k, _)| k.starts_with(&prefix))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<serde_json::Map<String, Value>>(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    Ok(Json(filtered))
 }
 
-async fn update_task_github(
-    Path(task_id): Path<String>,
+async fn update_task_integration(
+    Path((task_id, name)): Path<(String, String)>,
     State(state): State<Arc<ServerState>>,
-    Json(request): Json<UpdateTaskGithubRequest>,
-) -> Result<Json<TaskGithubResponse>, AppError> {
+    Json(request): Json<Value>,
+) -> Result<Json<HostedTaskSnapshot>, AppError> {
     state
         .tasks
         .get(&task_id)
         .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
     let mut context = state.context_for(&task_id).unwrap_or_default();
 
-    if let Some(published_branch) = request.published_branch {
-        context.published_branch = Some(published_branch);
-    }
-    if let Some(published_commit_sha) = request.published_commit_sha {
-        context.published_commit_sha = Some(published_commit_sha);
-    }
-    if let Some(published_remote) = request.published_remote {
-        context.published_remote = Some(published_remote);
-    }
-    if let Some(pr_number) = request.pr_number {
-        context.pr_number = Some(pr_number);
-    }
-    if let Some(pr_url) = request.pr_url {
-        context.pr_url = Some(pr_url);
-    }
-    if let Some(pr_state) = request.pr_state {
-        context.pr_state = Some(pr_state);
-    }
-    if let Some(pr_merged) = request.pr_merged {
-        context.pr_merged = Some(pr_merged);
-    }
-    if let Some(pr_closed_at) = request.pr_closed_at {
-        context.pr_closed_at = Some(pr_closed_at);
-    }
-    if let Some(pr_merged_at) = request.pr_merged_at {
-        context.pr_merged_at = Some(pr_merged_at);
-    }
-    if let Some(pr_api_url) = request.pr_api_url {
-        context.pr_api_url = Some(pr_api_url);
-    }
-    if let Some(pr_head_ref) = request.pr_head_ref {
-        context.pr_head_ref = Some(pr_head_ref);
-    }
-    if let Some(pr_base_ref) = request.pr_base_ref {
-        context.pr_base_ref = Some(pr_base_ref);
+    if let Some(obj) = request.as_object() {
+        for (key, value) in obj {
+            if let Some(string_value) = value.as_str() {
+                context
+                    .metadata
+                    .insert(format!("{name}_{key}"), string_value.to_string());
+            } else {
+                context
+                    .metadata
+                    .insert(format!("{name}_{key}"), value.to_string());
+            }
+        }
     }
 
-    let response = task_github_response_for_context(&context);
     state.record_context(&task_id, context);
     state.persist_state().map_err(AppError::internal)?;
-    Ok(Json(response))
+    let task = state
+        .tasks
+        .get(&task_id)
+        .ok_or_else(|| AppError::not_found(format!("task not found: {task_id}")))?;
+    Ok(Json(state.task_snapshot(task)))
 }
 
 async fn reconcile_task(
@@ -3116,7 +2820,7 @@ async fn connector_interaction(
                     approval_kind: "orphaned_hosted_agent".to_string(),
                     action: action.to_string(),
                     resolved_by: request.user_id.clone(),
-                    reason: Some("resolved from Slack interaction".to_string()),
+                    reason: Some(format!("resolved from {connector} interaction")),
                 }),
             )
             .await
@@ -3203,333 +2907,51 @@ fn verify_hmac_signature(secret: &str, signature_header: Option<&str>, body: &[u
     mac.verify_slice(&expected).is_ok()
 }
 
-#[derive(Debug, Clone, Default)]
-struct GitHubWebhookSummary {
-    event_name: String,
-    action: Option<String>,
-    repository: Option<String>,
-    pr_number: Option<u64>,
-    pr_state: Option<String>,
-    pr_merged: Option<bool>,
-    pr_closed_at: Option<String>,
-    pr_merged_at: Option<String>,
-    pr_head_ref: Option<String>,
-    pr_base_ref: Option<String>,
-    pr_head_sha: Option<String>,
-    sender_login: Option<String>,
-    comment_body: Option<String>,
-    review_state: Option<String>,
-    review_body: Option<String>,
-    html_url: Option<String>,
-}
+async fn integration_webhook(
+    Path(source): Path<String>,
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let secret_env = format!("ORBIT_{}_WEBHOOK_SECRET", source.to_uppercase());
+    if let Ok(secret) = env::var(&secret_env) {
+        let signature_header = format!("x-{}-signature", source);
+        let signature = headers.get(&signature_header).and_then(|h| h.to_str().ok());
+        if !verify_hmac_signature(&secret, signature, &body) {
+            return StatusCode::UNAUTHORIZED;
+        }
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GitHubFollowupStateChange {
-    required: bool,
-    reason: Option<String>,
-    detail: Option<String>,
-}
+    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
 
-fn summarize_github_webhook(headers: &HeaderMap, payload: &Value) -> GitHubWebhookSummary {
-    GitHubWebhookSummary {
-        event_name: headers
-            .get("x-github-event")
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("unknown")
-            .to_string(),
-        action: payload
-            .get("action")
+    let connector_payload = ConnectorEventPayload::new(
+        source.clone(),
+        payload
+            .get("event_type")
             .and_then(Value::as_str)
-            .map(str::to_string),
-        repository: payload
-            .get("repository")
-            .and_then(|value| value.get("full_name"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        pr_number: payload
-            .get("pull_request")
-            .and_then(|value| value.get("number"))
-            .and_then(Value::as_u64)
-            .or_else(|| {
-                payload
-                    .get("issue")
-                    .and_then(|value| value.get("number"))
-                    .and_then(Value::as_u64)
-            }),
-        pr_state: payload
-            .get("pull_request")
-            .and_then(|value| value.get("state"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        pr_merged: payload
-            .get("pull_request")
-            .and_then(|value| value.get("merged"))
-            .and_then(Value::as_bool),
-        pr_closed_at: payload
-            .get("pull_request")
-            .and_then(|value| value.get("closed_at"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        pr_merged_at: payload
-            .get("pull_request")
-            .and_then(|value| value.get("merged_at"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        pr_head_ref: payload
-            .get("pull_request")
-            .and_then(|value| value.get("head"))
-            .and_then(|value| value.get("ref"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        pr_base_ref: payload
-            .get("pull_request")
-            .and_then(|value| value.get("base"))
-            .and_then(|value| value.get("ref"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        pr_head_sha: payload
-            .get("pull_request")
-            .and_then(|value| value.get("head"))
-            .and_then(|value| value.get("sha"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        sender_login: payload
-            .get("sender")
-            .and_then(|value| value.get("login"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        comment_body: payload
-            .get("comment")
-            .and_then(|value| value.get("body"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        review_state: payload
-            .get("review")
-            .and_then(|value| value.get("state"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        review_body: payload
-            .get("review")
-            .and_then(|value| value.get("body"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        html_url: payload
-            .get("pull_request")
-            .and_then(|value| value.get("html_url"))
-            .and_then(Value::as_str)
+            .or_else(|| payload.get("action").and_then(Value::as_str))
             .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("review")
-                    .and_then(|value| value.get("html_url"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .or_else(|| {
-                payload
-                    .get("comment")
-                    .and_then(|value| value.get("html_url"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-    }
-}
+            .unwrap_or_default(),
+        payload
+            .get("actor")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        payload.clone(),
+    );
 
-fn apply_github_webhook_to_context(
-    context: &mut HostedTaskContext,
-    webhook: &GitHubWebhookSummary,
-) {
-    if let Some(pr_number) = webhook.pr_number {
-        context.pr_number = Some(pr_number);
-    }
-    if let Some(html_url) = webhook.html_url.clone() {
-        context.pr_url = Some(html_url);
-    }
-    if let Some(pr_state) = webhook.pr_state.clone() {
-        context.pr_state = Some(pr_state);
-    }
-    if let Some(pr_merged) = webhook.pr_merged {
-        context.pr_merged = Some(pr_merged);
-    }
-    if let Some(pr_closed_at) = webhook.pr_closed_at.clone() {
-        context.pr_closed_at = Some(pr_closed_at);
-    }
-    if let Some(pr_merged_at) = webhook.pr_merged_at.clone() {
-        context.pr_merged_at = Some(pr_merged_at);
-    }
-    if let Some(pr_head_ref) = webhook.pr_head_ref.clone() {
-        context.pr_head_ref = Some(pr_head_ref.clone());
-        if context.published_branch.is_none() {
-            context.published_branch = Some(pr_head_ref);
-        }
-    }
-    if let Some(pr_base_ref) = webhook.pr_base_ref.clone() {
-        context.pr_base_ref = Some(pr_base_ref);
-    }
-    if let Some(pr_head_sha) = webhook.pr_head_sha.clone() {
-        context.published_commit_sha = Some(pr_head_sha);
-    }
-}
-
-fn apply_github_followup_signal(
-    context: &mut HostedTaskContext,
-    webhook: &GitHubWebhookSummary,
-) -> Option<GitHubFollowupStateChange> {
-    let previous_required = context.github_feedback_required.unwrap_or(false);
-    let previous_reason = context.github_feedback_reason.clone();
-
-    let next = match webhook.event_name.as_str() {
-        "pull_request_review" => {
-            let review_state = webhook
-                .review_state
-                .clone()
-                .map(|state| state.to_ascii_lowercase());
-            context.github_review_state = review_state.clone();
-            match review_state.as_deref() {
-                Some("changes_requested") => Some(GitHubFollowupStateChange {
-                    required: true,
-                    reason: Some("GitHub review requested changes.".to_string()),
-                    detail: webhook
-                        .review_body
-                        .clone()
-                        .or_else(|| webhook.html_url.clone()),
-                }),
-                Some("commented") => Some(GitHubFollowupStateChange {
-                    required: true,
-                    reason: Some("GitHub review feedback requires follow-up.".to_string()),
-                    detail: webhook
-                        .review_body
-                        .clone()
-                        .or_else(|| webhook.html_url.clone()),
-                }),
-                Some("approved") => Some(GitHubFollowupStateChange {
-                    required: false,
-                    reason: Some("GitHub review follow-up cleared.".to_string()),
-                    detail: webhook.html_url.clone(),
-                }),
-                _ => None,
-            }
-        }
-        "issue_comment" if webhook.action.as_deref() == Some("created") => {
-            Some(GitHubFollowupStateChange {
-                required: true,
-                reason: Some("GitHub PR comment requires follow-up.".to_string()),
-                detail: webhook
-                    .comment_body
-                    .clone()
-                    .or_else(|| webhook.html_url.clone()),
-            })
-        }
-        "pull_request"
-            if webhook.action.as_deref() == Some("closed") && webhook.pr_merged == Some(true) =>
-        {
-            Some(GitHubFollowupStateChange {
-                required: false,
-                reason: Some("GitHub PR merged; follow-up cleared.".to_string()),
-                detail: webhook.html_url.clone(),
-            })
-        }
-        _ => None,
-    }?;
-
-    context.github_feedback_required = Some(next.required);
-    if next.required {
-        context.github_feedback_reason = next.reason.clone();
-    } else {
-        context.github_feedback_reason = None;
-    }
-
-    if previous_required == next.required
-        && (next.required || previous_reason == context.github_feedback_reason)
+    if let Some((task_id, mut context)) =
+        find_task_for_webhook_source(state.as_ref(), &source, &payload)
     {
-        return None;
-    }
-
-    Some(next)
-}
-
-fn matches_github_webhook_to_context(
-    context: &HostedTaskContext,
-    webhook: &GitHubWebhookSummary,
-) -> bool {
-    let Some(repository) = webhook.repository.as_deref() else {
-        return false;
-    };
-    let repository_matches = context.repository.as_deref() == Some(repository)
-        || github_repo_ref_for_context(context)
-            .is_some_and(|repo| format!("{}/{}", repo.owner, repo.repo) == repository);
-    if !repository_matches {
-        return false;
-    }
-    match webhook.pr_number {
-        Some(pr_number) => context.pr_number == Some(pr_number),
-        None => false,
-    }
-}
-
-fn find_task_for_github_webhook(
-    state: &ServerState,
-    webhook: &GitHubWebhookSummary,
-) -> Option<(String, HostedTaskContext)> {
-    let contexts = state.contexts.lock().ok()?;
-    contexts.iter().find_map(|(task_id, context)| {
-        matches_github_webhook_to_context(context, webhook)
-            .then(|| (task_id.clone(), context.clone()))
-    })
-}
-
-async fn github_webhook(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    if let Ok(secret) = env::var("ORBIT_GITHUB_WEBHOOK_SECRET") {
-        let signature = headers
-            .get("x-hub-signature-256")
-            .and_then(|h| h.to_str().ok());
-        if !verify_hmac_signature(&secret, signature, &body) {
-            return StatusCode::UNAUTHORIZED;
-        }
-    }
-
-    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
-        return StatusCode::BAD_REQUEST;
-    };
-
-    let webhook = summarize_github_webhook(&headers, &payload);
-    let event_type = match webhook.action.as_deref() {
-        Some(action) if !action.is_empty() => format!("{}.{}", webhook.event_name, action),
-        _ => webhook.event_name.clone(),
-    };
-    let connector_payload = ConnectorEventPayload::new(
-        "github",
-        event_type,
-        webhook.sender_login.clone(),
-        json!({
-            "repository": webhook.repository,
-            "action": webhook.action,
-            "pr_number": webhook.pr_number,
-            "pr_state": webhook.pr_state,
-            "pr_merged": webhook.pr_merged,
-            "pr_closed_at": webhook.pr_closed_at,
-            "pr_merged_at": webhook.pr_merged_at,
-            "pr_head_ref": webhook.pr_head_ref,
-            "pr_base_ref": webhook.pr_base_ref,
-            "pr_head_sha": webhook.pr_head_sha,
-            "comment_body": webhook.comment_body,
-            "review_state": webhook.review_state,
-            "review_body": webhook.review_body,
-            "html_url": webhook.html_url,
-            "payload": payload,
-        }),
-    );
-
-    if let Some((task_id, context)) = find_task_for_github_webhook(state.as_ref(), &webhook) {
-        let mut context = context;
-        apply_github_webhook_to_context(&mut context, &webhook);
-        let followup_change = apply_github_followup_signal(&mut context, &webhook);
+        let serialized = serde_json::to_string(&payload).unwrap_or_default();
+        context
+            .metadata
+            .entry(format!("{source}_webhook"))
+            .or_insert_with(|| serialized.clone());
+        context
+            .metadata
+            .insert(format!("{source}_event"), serialized);
         state.record_context(&task_id, context.clone());
         let task_status = state
             .tasks
@@ -3548,482 +2970,57 @@ async fn github_webhook(
             build_event_payload(
                 &context,
                 task_status,
-                Some(
-                    serde_json::to_value(connector_payload)
-                        .expect("connector event payload should serialize"),
-                ),
+                Some(serialize_event_extra(connector_payload.clone())),
             ),
             None,
         ));
-        if let Some(followup_change) = followup_change {
-            if followup_change.required {
-                maybe_spawn_tracker_report(
-                    task_id.clone(),
-                    context.clone(),
-                    TrackerEvent::ApprovalRequested {
-                        reason: followup_change.reason.as_deref(),
-                    },
-                );
-                state.broadcast_event(EventEnvelope::new(
-                    HostedEventName::ApprovalRequested,
-                    HostedEventStatus::Pending,
-                    HostedEventTopic::Approval,
-                    EventIdentifiers {
-                        repo_id: context.repository.clone(),
-                        lane_id: context.lane_id.clone(),
-                        task_id: Some(task_id.clone()),
-                        ..EventIdentifiers::default()
-                    },
-                    build_event_payload(
-                        &context,
-                        task_status,
-                        Some(serialize_event_extra(ApprovalRequestedEventPayload {
-                            approval_kind: "github_review_followup".to_string(),
-                            reason: followup_change.reason,
-                            detail: followup_change.detail,
-                            extra: Map::from_iter([("connector".to_string(), json!("github"))]),
-                        })),
-                    ),
-                    None,
-                ));
-            } else {
-                state.broadcast_event(EventEnvelope::new(
-                    HostedEventName::ApprovalResolved,
-                    HostedEventStatus::Completed,
-                    HostedEventTopic::Approval,
-                    EventIdentifiers {
-                        repo_id: context.repository.clone(),
-                        lane_id: context.lane_id.clone(),
-                        task_id: Some(task_id.clone()),
-                        ..EventIdentifiers::default()
-                    },
-                    build_event_payload(
-                        &context,
-                        task_status,
-                        Some(serialize_event_extra(ApprovalResolvedEventPayload {
-                            approval_kind: "github_review_followup".to_string(),
-                            action: "cleared".to_string(),
-                            resolved_by: webhook.sender_login.clone(),
-                            reason: followup_change.reason,
-                            extra: Map::from_iter([("connector".to_string(), json!("github"))]),
-                        })),
-                    ),
-                    None,
-                ));
+        let _ = state.persist_state();
+    } else {
+        state.broadcast_event(EventEnvelope::new(
+            HostedEventName::ConnectorEventReceived,
+            HostedEventStatus::Completed,
+            HostedEventTopic::Connector,
+            EventIdentifiers::default(),
+            Some(
+                serde_json::to_value(connector_payload)
+                    .expect("connector event payload should serialize"),
+            ),
+            None,
+        ));
+    }
+
+    StatusCode::ACCEPTED
+}
+
+fn find_task_for_webhook_source(
+    state: &ServerState,
+    source: &str,
+    payload: &Value,
+) -> Option<(String, HostedTaskContext)> {
+    let task_id = payload
+        .get("task_id")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("work_item_id").and_then(Value::as_str))
+        .or_else(|| payload.get("lane_id").and_then(Value::as_str))
+        .map(str::to_string);
+
+    if let Some(task_id) = task_id {
+        if let Some(context) = state.context_for(&task_id) {
+            return Some((task_id, context));
+        }
+    }
+
+    for (id, context) in state.all_contexts() {
+        if context.source.as_deref() == Some(source) {
+            return Some((id, context));
+        }
+        if let Some(value) = payload.get("repository").and_then(Value::as_str) {
+            if context.repository.as_deref() == Some(value) {
+                return Some((id, context));
             }
         }
-        let _ = state.persist_state();
-    } else {
-        state.broadcast_event(EventEnvelope::new(
-            HostedEventName::ConnectorEventReceived,
-            HostedEventStatus::Completed,
-            HostedEventTopic::Connector,
-            EventIdentifiers::default(),
-            Some(
-                serde_json::to_value(connector_payload)
-                    .expect("connector event payload should serialize"),
-            ),
-            None,
-        ));
     }
-
-    StatusCode::ACCEPTED
-}
-
-#[derive(Debug, Clone, Default)]
-struct LinearWebhookSummary {
-    event_type: String,
-    issue_id: Option<String>,
-    issue_url: Option<String>,
-    issue_state: Option<String>,
-    issue_identifier: Option<String>,
-    task_id: Option<String>,
-    actor: Option<String>,
-}
-
-fn summarize_linear_webhook(payload: &Value) -> LinearWebhookSummary {
-    LinearWebhookSummary {
-        event_type: payload
-            .get("type")
-            .and_then(Value::as_str).map_or_else(|| "linear.event".to_string(), str::to_string),
-        issue_id: payload
-            .get("issue")
-            .and_then(|v| v.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("issue_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        issue_url: payload
-            .get("issue")
-            .and_then(|v| v.get("url"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("issue_url")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        issue_state: payload
-            .get("issue")
-            .and_then(|v| v.get("state"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("issue_state")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        issue_identifier: payload
-            .get("issue")
-            .and_then(|v| v.get("identifier"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("issue_identifier")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        task_id: payload
-            .get("task_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        actor: payload
-            .get("actor")
-            .and_then(|v| v.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("user_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-    }
-}
-
-fn apply_linear_webhook_to_context(
-    context: &mut HostedTaskContext,
-    webhook: &LinearWebhookSummary,
-) {
-    if let Some(id) = webhook.issue_id.clone() {
-        context.linear_issue_id = Some(id);
-    }
-    if let Some(url) = webhook.issue_url.clone() {
-        context.linear_issue_url = Some(url);
-    }
-    if let Some(state) = webhook.issue_state.clone() {
-        context.linear_issue_state = Some(state);
-    }
-    if let Some(identifier) = webhook.issue_identifier.clone() {
-        context.linear_issue_identifier = Some(identifier);
-    }
-}
-
-fn matches_linear_webhook_to_context(
-    context: &HostedTaskContext,
-    webhook: &LinearWebhookSummary,
-) -> bool {
-    if let Some(task_id) = webhook.task_id.as_deref() {
-        return context
-            .work_item_id
-            .as_deref()
-            .is_some_and(|id| id == task_id)
-            || context
-                .lane_id
-                .as_deref()
-                .is_some_and(|id| id == task_id);
-    }
-
-    if let Some(issue_id) = webhook.issue_id.as_deref() {
-        return context.linear_issue_id.as_deref() == Some(issue_id);
-    }
-    if let Some(identifier) = webhook.issue_identifier.as_deref() {
-        return context.linear_issue_identifier.as_deref() == Some(identifier);
-    }
-
-    false
-}
-
-fn find_task_for_linear_webhook(
-    state: &ServerState,
-    webhook: &LinearWebhookSummary,
-) -> Option<(String, HostedTaskContext)> {
-    if let Some(task_id) = webhook.task_id.as_deref() {
-        if let Some(context) = state.context_for(task_id) {
-            return Some((task_id.to_string(), context));
-        }
-    }
-    let contexts = state.contexts.lock().ok()?;
-    contexts.iter().find_map(|(task_id, context)| {
-        matches_linear_webhook_to_context(context, webhook)
-            .then(|| (task_id.clone(), context.clone()))
-    })
-}
-
-async fn linear_webhook(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    if let Ok(secret) = env::var("ORBIT_LINEAR_WEBHOOK_SECRET") {
-        let signature = headers
-            .get("x-linear-signature")
-            .and_then(|h| h.to_str().ok());
-        if !verify_hmac_signature(&secret, signature, &body) {
-            return StatusCode::UNAUTHORIZED;
-        }
-    }
-
-    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
-        return StatusCode::BAD_REQUEST;
-    };
-
-    let webhook = summarize_linear_webhook(&payload);
-    let connector_payload = ConnectorEventPayload::new(
-        "linear",
-        webhook.event_type.clone(),
-        webhook.actor.clone(),
-        payload.clone(),
-    );
-
-    if let Some((task_id, mut context)) = find_task_for_linear_webhook(state.as_ref(), &webhook) {
-        apply_linear_webhook_to_context(&mut context, &webhook);
-        state.record_context(&task_id, context.clone());
-        let task_status = state
-            .tasks
-            .get(&task_id)
-            .map(|task| hosted_task_status_label(HostedTaskStatus::from_runtime(task.status)));
-        state.broadcast_event(EventEnvelope::new(
-            HostedEventName::ConnectorEventReceived,
-            HostedEventStatus::Completed,
-            HostedEventTopic::Connector,
-            EventIdentifiers {
-                repo_id: context.repository.clone(),
-                lane_id: context.lane_id.clone(),
-                task_id: Some(task_id.clone()),
-                ..EventIdentifiers::default()
-            },
-            build_event_payload(
-                &context,
-                task_status,
-                Some(serialize_event_extra(connector_payload.clone())),
-            ),
-            None,
-        ));
-        let _ = state.persist_state();
-    } else {
-        state.broadcast_event(EventEnvelope::new(
-            HostedEventName::ConnectorEventReceived,
-            HostedEventStatus::Completed,
-            HostedEventTopic::Connector,
-            EventIdentifiers::default(),
-            Some(
-                serde_json::to_value(connector_payload)
-                    .expect("connector event payload should serialize"),
-            ),
-            None,
-        ));
-    }
-
-    StatusCode::ACCEPTED
-}
-
-#[derive(Debug, Clone, Default)]
-struct GraphiteWebhookSummary {
-    event_type: String,
-    stack_id: Option<String>,
-    head_branch: Option<String>,
-    base_branch: Option<String>,
-    task_id: Option<String>,
-    actor: Option<String>,
-}
-
-fn summarize_graphite_webhook(payload: &Value) -> GraphiteWebhookSummary {
-    GraphiteWebhookSummary {
-        event_type: payload
-            .get("type")
-            .and_then(Value::as_str).map_or_else(|| "graphite.event".to_string(), str::to_string),
-        stack_id: payload
-            .get("stack_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("stackId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .or_else(|| {
-                payload
-                    .get("stack")
-                    .and_then(|v| v.get("id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        head_branch: payload
-            .get("stack")
-            .and_then(|v| v.get("head"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("head_branch")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        base_branch: payload
-            .get("stack")
-            .and_then(|v| v.get("base"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("base_branch")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        task_id: payload
-            .get("task_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        actor: payload
-            .get("actor")
-            .and_then(|v| v.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .get("user_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-    }
-}
-
-fn apply_graphite_webhook_to_context(
-    context: &mut HostedTaskContext,
-    webhook: &GraphiteWebhookSummary,
-) {
-    if let Some(stack_id) = webhook.stack_id.clone() {
-        context.graphite_stack_id = Some(stack_id);
-    }
-    if let Some(head) = webhook.head_branch.clone() {
-        context.graphite_head_branch = Some(head);
-    }
-    if let Some(base) = webhook.base_branch.clone() {
-        context.graphite_base_branch = Some(base);
-    }
-}
-
-fn matches_graphite_webhook_to_context(
-    context: &HostedTaskContext,
-    webhook: &GraphiteWebhookSummary,
-) -> bool {
-    if let Some(task_id) = webhook.task_id.as_deref() {
-        return context
-            .work_item_id
-            .as_deref()
-            .is_some_and(|id| id == task_id)
-            || context
-                .lane_id
-                .as_deref()
-                .is_some_and(|id| id == task_id);
-    }
-    if let Some(stack_id) = webhook.stack_id.as_deref() {
-        return context.graphite_stack_id.as_deref() == Some(stack_id);
-    }
-    false
-}
-
-fn find_task_for_graphite_webhook(
-    state: &ServerState,
-    webhook: &GraphiteWebhookSummary,
-) -> Option<(String, HostedTaskContext)> {
-    if let Some(task_id) = webhook.task_id.as_deref() {
-        if let Some(context) = state.context_for(task_id) {
-            return Some((task_id.to_string(), context));
-        }
-    }
-    let contexts = state.contexts.lock().ok()?;
-    contexts.iter().find_map(|(task_id, context)| {
-        matches_graphite_webhook_to_context(context, webhook)
-            .then(|| (task_id.clone(), context.clone()))
-    })
-}
-
-async fn graphite_webhook(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    if let Ok(secret) = env::var("ORBIT_GRAPHITE_WEBHOOK_SECRET") {
-        let signature = headers
-            .get("x-graphite-signature")
-            .and_then(|h| h.to_str().ok());
-        if !verify_hmac_signature(&secret, signature, &body) {
-            return StatusCode::UNAUTHORIZED;
-        }
-    }
-
-    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
-        return StatusCode::BAD_REQUEST;
-    };
-
-    let webhook = summarize_graphite_webhook(&payload);
-    let connector_payload = ConnectorEventPayload::new(
-        "graphite",
-        webhook.event_type.clone(),
-        webhook.actor.clone(),
-        payload.clone(),
-    );
-
-    if let Some((task_id, mut context)) = find_task_for_graphite_webhook(state.as_ref(), &webhook) {
-        apply_graphite_webhook_to_context(&mut context, &webhook);
-        state.record_context(&task_id, context.clone());
-        let task_status = state
-            .tasks
-            .get(&task_id)
-            .map(|task| hosted_task_status_label(HostedTaskStatus::from_runtime(task.status)));
-        state.broadcast_event(EventEnvelope::new(
-            HostedEventName::ConnectorEventReceived,
-            HostedEventStatus::Completed,
-            HostedEventTopic::Connector,
-            EventIdentifiers {
-                repo_id: context.repository.clone(),
-                lane_id: context.lane_id.clone(),
-                task_id: Some(task_id.clone()),
-                ..EventIdentifiers::default()
-            },
-            build_event_payload(
-                &context,
-                task_status,
-                Some(serialize_event_extra(connector_payload.clone())),
-            ),
-            None,
-        ));
-        let _ = state.persist_state();
-    } else {
-        state.broadcast_event(EventEnvelope::new(
-            HostedEventName::ConnectorEventReceived,
-            HostedEventStatus::Completed,
-            HostedEventTopic::Connector,
-            EventIdentifiers::default(),
-            Some(
-                serde_json::to_value(connector_payload)
-                    .expect("connector event payload should serialize"),
-            ),
-            None,
-        ));
-    }
-
-    StatusCode::ACCEPTED
+    None
 }
 
 async fn stream_events(socket: WebSocket, state: Arc<ServerState>, query: EventStreamQuery) {
@@ -4683,6 +3680,7 @@ fn create_task_internal(state: &ServerState, request: CreateTaskRequest) -> Resu
         provider: request.provider,
         permission_mode: request.permission_mode,
         allowed_tools: request.allowed_tools.unwrap_or_default(),
+        ..Default::default()
     };
     state.record_context(&task_id, context.clone());
     if let Some(lane_id) = lane_id.as_deref() {
@@ -5061,9 +4059,7 @@ fn lane_role_from_plan_kind(plan_kind: Option<&str>) -> Option<LaneRole> {
 fn hosted_subagent_type(role: Option<LaneRole>) -> &'static str {
     match role {
         Some(LaneRole::Planner) => "Plan",
-        Some(LaneRole::Reviewer | LaneRole::Verifier | LaneRole::Triager) => {
-            "Verification"
-        }
+        Some(LaneRole::Reviewer | LaneRole::Verifier | LaneRole::Triager) => "Verification",
         _ => "general-purpose",
     }
 }
@@ -6118,7 +5114,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .uri(format!("/v1/tasks/{task_id}/integration/github"))
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&json!({
@@ -6127,7 +5123,6 @@ mod tests {
                             "published_commit_sha": "abc123def456",
                             "pr_number": 42,
                             "pr_url": "https://github.com/acme/payments/pull/42",
-                            "pr_api_url": "https://api.github.com/repos/acme/payments/pulls/42",
                             "pr_head_ref": "orbit/fix-flake",
                             "pr_base_ref": "main"
                         }))
@@ -6139,29 +5134,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(update_response.status(), StatusCode::OK);
-        let update_body = to_bytes(update_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let updated: serde_json::Value = serde_json::from_slice(&update_body).unwrap();
-        assert_eq!(updated["owner"], "acme");
-        assert_eq!(updated["repo"], "payments");
-        assert_eq!(updated["published_remote"], "origin");
-        assert_eq!(updated["published_branch"], "orbit/fix-flake");
-        assert_eq!(updated["published_commit_sha"], "abc123def456");
-        assert_eq!(updated["pr_number"], 42);
-        assert_eq!(
-            updated["pr_url"],
-            "https://github.com/acme/payments/pull/42"
-        );
-        assert_eq!(updated["pr_head_ref"], "orbit/fix-flake");
-        assert_eq!(updated["pr_base_ref"], "main");
 
         let get_response = router
             .clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!("/v1/tasks/{task_id}/github"))
+                    .uri(format!("/v1/tasks/{task_id}/integration/github"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -6172,7 +5151,41 @@ mod tests {
             .await
             .unwrap();
         let fetched: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
-        assert_eq!(fetched, updated);
+        let metadata = fetched["metadata"].as_object().expect("metadata map");
+        assert_eq!(
+            metadata
+                .get("github_published_remote")
+                .and_then(Value::as_str),
+            Some("origin")
+        );
+        assert_eq!(
+            metadata
+                .get("github_published_branch")
+                .and_then(Value::as_str),
+            Some("orbit/fix-flake")
+        );
+        assert_eq!(
+            metadata
+                .get("github_published_commit_sha")
+                .and_then(Value::as_str),
+            Some("abc123def456")
+        );
+        assert_eq!(
+            metadata.get("github_pr_number").and_then(Value::as_str),
+            Some("42")
+        );
+        assert_eq!(
+            metadata.get("github_pr_url").and_then(Value::as_str),
+            Some("https://github.com/acme/payments/pull/42")
+        );
+        assert_eq!(
+            metadata.get("github_pr_head_ref").and_then(Value::as_str),
+            Some("orbit/fix-flake")
+        );
+        assert_eq!(
+            metadata.get("github_pr_base_ref").and_then(Value::as_str),
+            Some("main")
+        );
 
         let restored = Arc::new(ServerState::with_lane_transport_and_state_file(
             DEFAULT_EVENT_REPLAY_LIMIT,
@@ -6182,25 +5195,27 @@ mod tests {
         let restored_context = restored
             .context_for(&task_id)
             .expect("github context should reload from state file");
-        assert_eq!(restored_context.published_remote.as_deref(), Some("origin"));
         assert_eq!(
-            restored_context.published_branch.as_deref(),
+            restored_context
+                .metadata
+                .get("github_published_branch")
+                .map(String::as_str),
             Some("orbit/fix-flake")
         );
         assert_eq!(
-            restored_context.published_commit_sha.as_deref(),
-            Some("abc123def456")
+            restored_context
+                .metadata
+                .get("github_pr_number")
+                .map(String::as_str),
+            Some("42")
         );
-        assert_eq!(restored_context.pr_number, Some(42));
         assert_eq!(
-            restored_context.pr_url.as_deref(),
+            restored_context
+                .metadata
+                .get("github_pr_url")
+                .map(String::as_str),
             Some("https://github.com/acme/payments/pull/42")
         );
-        assert_eq!(
-            restored_context.pr_head_ref.as_deref(),
-            Some("orbit/fix-flake")
-        );
-        assert_eq!(restored_context.pr_base_ref.as_deref(), Some("main"));
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -8145,27 +7160,6 @@ mod tests {
         let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
-        let github_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/tasks/{task_id}/github"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "published_branch": "orbit/fix-flake",
-                            "pr_number": 42,
-                            "pr_url": "https://github.com/acme/payments/pull/42"
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(github_response.status(), StatusCode::OK);
-
         let webhook_response = router
             .oneshot(
                 Request::builder()
@@ -8176,6 +7170,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::to_vec(&json!({
                             "action": "synchronize",
+                            "task_id": task_id,
                             "repository": {
                                 "full_name": "acme/payments"
                             },
@@ -8225,43 +7220,39 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload.get("type"))
                 .and_then(|value| value.as_str()),
-            Some("pull_request.synchronize")
-        );
-        assert_eq!(
-            connector_event
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("task_status"))
-                .and_then(|value| value.as_str()),
-            Some("running")
-        );
-        assert_eq!(
-            connector_event
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("channel_id"))
-                .and_then(|value| value.as_str()),
-            Some("C123")
+            Some("synchronize")
         );
         assert_eq!(
             connector_event
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("data"))
-                .and_then(|value| value.get("pr_number"))
-                .and_then(Value::as_u64),
-            Some(42)
+                .and_then(|value| value.get("action"))
+                .and_then(Value::as_str),
+            Some("synchronize")
         );
+
         let context = state
             .context_for(&task_id)
             .expect("context should be recorded");
-        assert_eq!(context.pr_state.as_deref(), Some("open"));
+        let github_event: serde_json::Value = serde_json::from_str(
+            context
+                .metadata
+                .get("github_event")
+                .expect("github_event metadata should be stored"),
+        )
+        .expect("github_event metadata should be valid json");
         assert_eq!(
-            context.published_commit_sha.as_deref(),
-            Some("abc123def456")
+            github_event
+                .get("repository")
+                .and_then(|repo| repo.get("full_name"))
+                .and_then(Value::as_str),
+            Some("acme/payments")
         );
-        assert_eq!(context.pr_head_ref.as_deref(), Some("orbit/fix-flake"));
-        assert_eq!(context.pr_base_ref.as_deref(), Some("main"));
+        assert_eq!(
+            context.metadata.get("github_webhook").map(String::as_str),
+            Some(github_event.to_string().as_str())
+        );
     }
 
     #[tokio::test]
@@ -8297,27 +7288,6 @@ mod tests {
         let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
-        let github_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/tasks/{task_id}/github"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "published_branch": "orbit/fix-flake",
-                            "pr_number": 42,
-                            "pr_url": "https://github.com/acme/payments/pull/42"
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(github_response.status(), StatusCode::OK);
-
         let webhook_response = router
             .oneshot(
                 Request::builder()
@@ -8328,6 +7298,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::to_vec(&json!({
                             "action": "closed",
+                            "task_id": task_id,
                             "repository": {
                                 "full_name": "acme/payments"
                             },
@@ -8354,14 +7325,32 @@ mod tests {
         let context = state
             .context_for(&task_id)
             .expect("context should be recorded");
-        assert_eq!(context.pr_state.as_deref(), Some("closed"));
-        assert_eq!(context.pr_merged, Some(true));
+        let github_event: serde_json::Value = serde_json::from_str(
+            context
+                .metadata
+                .get("github_event")
+                .expect("github_event metadata should be stored"),
+        )
+        .expect("github_event metadata should be valid json");
         assert_eq!(
-            context.pr_merged_at.as_deref(),
-            Some("2026-04-09T12:00:00Z")
+            github_event
+                .get("pull_request")
+                .and_then(|pr| pr.get("state"))
+                .and_then(Value::as_str),
+            Some("closed")
         );
         assert_eq!(
-            context.pr_closed_at.as_deref(),
+            github_event
+                .get("pull_request")
+                .and_then(|pr| pr.get("merged"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            github_event
+                .get("pull_request")
+                .and_then(|pr| pr.get("merged_at"))
+                .and_then(Value::as_str),
             Some("2026-04-09T12:00:00Z")
         );
 
@@ -8371,11 +7360,14 @@ mod tests {
             .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
             .last()
             .expect("github webhook event should be emitted");
+        assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(
             connector_event
                 .payload
                 .as_ref()
-                .and_then(|payload| payload.get("pr_merged"))
+                .and_then(|payload| payload.get("data"))
+                .and_then(|value| value.get("pull_request"))
+                .and_then(|pr| pr.get("merged"))
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -8414,27 +7406,6 @@ mod tests {
         let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
-        let github_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/tasks/{task_id}/github"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "published_branch": "orbit/fix-flake",
-                            "pr_number": 42,
-                            "pr_url": "https://github.com/acme/payments/pull/42"
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(github_response.status(), StatusCode::OK);
-
         let webhook_response = router
             .oneshot(
                 Request::builder()
@@ -8445,6 +7416,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::to_vec(&json!({
                             "action": "submitted",
+                            "task_id": task_id,
                             "repository": {
                                 "full_name": "acme/payments"
                             },
@@ -8471,29 +7443,42 @@ mod tests {
         let context = state
             .context_for(&task_id)
             .expect("context should be recorded");
+        let github_event: serde_json::Value = serde_json::from_str(
+            context
+                .metadata
+                .get("github_event")
+                .expect("github_event metadata should be stored"),
+        )
+        .expect("github_event metadata should be valid json");
         assert_eq!(
-            context.github_review_state.as_deref(),
+            github_event
+                .get("review")
+                .and_then(|review| review.get("state"))
+                .and_then(Value::as_str),
             Some("changes_requested")
         );
-        assert_eq!(context.github_feedback_required, Some(true));
         assert_eq!(
-            context.github_feedback_reason.as_deref(),
-            Some("GitHub review requested changes.")
+            github_event
+                .get("review")
+                .and_then(|review| review.get("body"))
+                .and_then(Value::as_str),
+            Some("Please add more tests")
         );
 
-        let approval_event = state
+        let connector_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ApprovalRequested)
+            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
             .last()
-            .expect("github review should emit approval requested");
+            .expect("github review webhook event should be emitted");
+        assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(
-            approval_event
+            connector_event
                 .payload
                 .as_ref()
-                .and_then(|payload| payload.get("approval_kind"))
+                .and_then(|payload| payload.get("type"))
                 .and_then(Value::as_str),
-            Some("github_review_followup")
+            Some("submitted")
         );
     }
 
@@ -8552,6 +7537,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::to_vec(&json!({
                             "action": "submitted",
+                            "task_id": task_id,
                             "repository": {
                                 "full_name": "acme/payments"
                             },
@@ -8578,31 +7564,42 @@ mod tests {
         let context = state
             .context_for(&task_id)
             .expect("context should be recorded");
-        assert_eq!(context.github_review_state.as_deref(), Some("approved"));
-        assert_eq!(context.github_feedback_required, Some(false));
-        assert_eq!(context.github_feedback_reason, None);
-
-        let resolved_event = state
-            .replay_events()
-            .into_iter()
-            .filter(|event| event.event == HostedEventName::ApprovalResolved)
-            .last()
-            .expect("github review approval should emit approval resolved");
+        let github_event: serde_json::Value = serde_json::from_str(
+            context
+                .metadata
+                .get("github_event")
+                .expect("github_event metadata should be stored"),
+        )
+        .expect("github_event metadata should be valid json");
         assert_eq!(
-            resolved_event
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("approval_kind"))
+            github_event
+                .get("review")
+                .and_then(|review| review.get("state"))
                 .and_then(Value::as_str),
-            Some("github_review_followup")
+            Some("approved")
         );
         assert_eq!(
-            resolved_event
+            github_event
+                .get("review")
+                .and_then(|review| review.get("body"))
+                .and_then(Value::as_str),
+            Some("Looks good")
+        );
+
+        let connector_event = state
+            .replay_events()
+            .into_iter()
+            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
+            .last()
+            .expect("github review approval webhook event should be emitted");
+        assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
+        assert_eq!(
+            connector_event
                 .payload
                 .as_ref()
-                .and_then(|payload| payload.get("action"))
+                .and_then(|payload| payload.get("type"))
                 .and_then(Value::as_str),
-            Some("cleared")
+            Some("submitted")
         );
     }
 
@@ -8657,14 +7654,15 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload.get("type"))
                 .and_then(|value| value.as_str()),
-            Some("issue_comment.created")
+            Some("created")
         );
         assert_eq!(
             connector_event
                 .payload
                 .as_ref()
                 .and_then(|payload| payload.get("data"))
-                .and_then(|value| value.get("comment_body"))
+                .and_then(|value| value.get("comment"))
+                .and_then(|comment| comment.get("body"))
                 .and_then(Value::as_str),
             Some("Looks good to me")
         );
