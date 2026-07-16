@@ -20,7 +20,7 @@ This will:
 The `orbit.rb` formula:
 
 - **Description**: High-performance Rust AI agent harness
-- **Homepage**: https://github.com/frontal-labs/frontal-orbit
+- **Homepage**: https://github.com/frontal-labs/orbit
 - **License**: MIT
 - **Source**: Installs from the main git branch (`--HEAD`)
 - **Dependencies**: Rust toolchain for building

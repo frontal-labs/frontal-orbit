@@ -1,20 +1,20 @@
 class Orbit < Formula
   desc "High-performance Rust AI agent harness"
-  homepage "https://github.com/frontal-labs/frontal-orbit"
+  homepage "https://github.com/frontal-labs/orbit"
   license "MIT"
   version "0.1.1"
 
   if OS.mac?
     if Hardware::CPU.arm?
-      url "https://github.com/frontal-labs/frontal-orbit/releases/download/v#{version}/orbit-macos-arm64.tar.gz"
+      url "https://github.com/frontal-labs/orbit/releases/download/v#{version}/orbit-macos-arm64.tar.gz"
       sha256 "e2513b12a1000b6c6fb5c96df030e9d1218a218032da54117c9ebee20c076688"
     else
-      url "https://github.com/frontal-labs/frontal-orbit/releases/download/v#{version}/orbit-macos-x64.tar.gz"
+      url "https://github.com/frontal-labs/orbit/releases/download/v#{version}/orbit-macos-x64.tar.gz"
       sha256 "<INSERT_X64_SHA256>" # filled by release CI (macos-13 runner)
     end
   end
 
-  head "https://github.com/frontal-labs/frontal-orbit.git", branch: "main"
+  head "https://github.com/frontal-labs/orbit.git", branch: "main"
 
   depends_on "rust" => :build if build.head?
 
