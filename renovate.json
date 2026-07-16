@@ -1,0 +1,73 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    "schedule:weekly",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "labels": ["dependencies", "devops"],
+  "dependencyDashboardLabels": ["dependencies", "devops"],
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 2,
+  "rangeStrategy": "bump",
+  "separateMajorMinor": true,
+  "rebaseWhen": "conflicted",
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/target/**",
+    "**/bazel-out/**",
+    "**/bazel-bin/**",
+    "**/dist/**",
+    "**/.orbit/**",
+    "**/vendor/**"
+  ],
+  "postUpdateOptions": ["gomodTidy", "cargoUpdateLockFile"],
+  "packageRules": [
+    {
+      "description": "Group all non-major dev/runtime dependency updates into a single PR.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "all non-major"
+    },
+    {
+      "description": "Apply the dependency-rollback package rule",
+      "matchDepTypes": ["dependencies", "devDependencies"],
+      "matchUpdateTypes": ["rollback"],
+      "enabled": false
+    },
+    {
+      "description": "Pin GitHub Actions to digest only for non-major bumps.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "pinDigests": false
+    },
+    {
+      "description": "Automatically merge patch and digest updates for non-critical deps on passing status.",
+      "matchUpdateTypes": ["patch", "digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Limit major bumps to Rust crate dependencies (keep them separate).",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "rust major"
+    },
+    {
+      "description": "Treat Renovate's own config as internal maintenance.",
+      "matchPaths": ["renovate.json", ".github/renovate.json"],
+      "addLabels": ["renovate-config"]
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "dockerfile": {
+    "enabled": true,
+    "fileMatch": ["infrastructure/docker/.*\\.Dockerfile$", "\\.devcontainer/Dockerfile$"]
+  }
+}
