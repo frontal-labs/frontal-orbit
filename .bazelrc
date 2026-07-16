@@ -1,0 +1,26 @@
+# ============================================================================
+# Common Bazel configuration for the frontal-orbit Bzlmod monorepo.
+# Machine-specific overrides go in .bazelrc.project (gitignored).
+# ============================================================================
+
+common --verbose_failures
+common --color=yes
+common --keep_going
+
+# Use the Bzlmod module system exclusively. There is no WORKSPACE file.
+common --enable_bzlmod
+common --noenable_workspace
+
+# Make builds hermetic and reproducible.
+build --incompatible_strict_action_env
+build --announce_rc
+
+# Show test failures immediately.
+test --test_output=errors
+test --test_verbose_timeout_warnings
+
+# Aggregate coverage into a single lcov report when requested.
+coverage --combined_report=lcov
+
+# User-local overrides (output_base, remote cache, etc.).
+try-import %workspace%/.bazelrc.project

@@ -163,5 +163,20 @@
     "web_fetch": {
       "enabled": true
     }
+  },
+  "devtools": {
+    "_comment": "Repo-level developer tooling. Distinct from `tools` (agent runtime tools). Canonical implementations live under //tools; scripts/ delegate to them.",
+    "doctor":     { "kind": "rust",   "cargo_pkg": "tools-doctor",     "bazel_label": "//tools/doctor:doctor",          "make_target": "doctor",     "description": "Environment/toolchain health check" },
+    "coverage":   { "kind": "mixed",  "cargo_pkg": "tools-coverage",   "bazel_label": "//tools/coverage:coverage",        "make_target": "coverage",   "description": "Run bazel coverage and summarize lcov" },
+    "benchmark":  { "kind": "rust",   "cargo_pkg": "tools-benchmark",  "bazel_label": "//tools/benchmark:benchmark",     "make_target": "bench",      "description": "Build/CI timing harness" },
+    "cache":      { "kind": "rust",   "cargo_pkg": "tools-cache",      "bazel_label": "//tools/cache:cache",             "make_target": "cache",      "description": "Inspect and prune Bazel/Cargo caches" },
+    "codegen":    { "kind": "rust",   "cargo_pkg": "tools-codegen",    "bazel_label": "//tools/codegen:codegen",         "make_target": "codegen",    "description": "Generate Rust boilerplate from names/schemas" },
+    "fuzz":       { "kind": "rust",   "cargo_pkg": "tools-fuzz",       "bazel_label": "//tools/fuzz:fuzz",               "make_target": "fuzz",       "description": "Discover, scaffold, and run fuzz targets" },
+    "generators": { "kind": "rust",   "cargo_pkg": "tools-generators", "bazel_label": "//tools/generators:generators",   "make_target": "generators", "description": "Scaffold crates from templates" },
+    "remote":     { "kind": "rust",   "cargo_pkg": "tools-remote",     "bazel_label": "//tools/remote:remote",           "make_target": "remote",     "description": "Generate/validate Bazel remote-cache config" },
+    "telemetry":  { "kind": "rust",   "cargo_pkg": "tools-telemetry",  "bazel_label": "//tools/telemetry:telemetry",     "make_target": "telemetry",  "description": "Wrap a command and emit a telemetry event" },
+    "templates":  { "kind": "lib",    "cargo_pkg": "tools-templates",  "bazel_label": "//tools/templates:cargo_run.sh",  "make_target": null,        "description": "Shared templating library (no CLI)" },
+    "version":    { "kind": "rust",   "cargo_pkg": "tools-version",    "bazel_label": "//tools/version:version",         "make_target": "version",    "description": "Bump monorepo version across root files" },
+    "workspace":  { "kind": "rust",   "cargo_pkg": "tools-workspace",  "bazel_label": "//tools/workspace:workspace",     "make_target": "workspace",  "description": "Validate and maintain the workspace member list" }
   }
 }

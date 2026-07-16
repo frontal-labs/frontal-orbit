@@ -1,0 +1,7 @@
+# Rust formatting for the Orbit Rust SDK (orbit-sdk).
+# Resolved by `cargo fmt` for files under sdk/rust.
+edition = "2021"
+max_width = 100
+tab_spaces = 2
+newline_style = "Unix"
+use_small_heuristics = "Default"

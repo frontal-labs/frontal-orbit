@@ -1,0 +1,16 @@
+{
+  "name": "frontal-orbit",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": {
+    "@changesets/cli": "^2.26.2"
+  },
+  "scripts": {
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "changeset:publish": "changeset publish"
+  },
+  "packages": [
+    "sdk/typescript"
+  ]
+}

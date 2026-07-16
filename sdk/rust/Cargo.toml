@@ -1,0 +1,27 @@
+[package]
+name = "orbit-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = true
+description = "Embed the Orbit agent in your Rust workflows and apps by wrapping the orbit CLI."
+repository = "https://github.com/frontal-labs/orbit"
+homepage = "https://frontal.ai"
+documentation = "https://docs.rs/orbit-sdk"
+readme = "README.md"
+keywords = ["orbit", "ai", "agent", "cli", "sdk"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.80.0"
+
+[dependencies]
+tokio = { version = "1", features = ["process", "rt", "macros", "io-util", "sync"] }
+serde_json = "1"
+thiserror = "1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

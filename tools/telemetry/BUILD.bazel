@@ -1,0 +1,7 @@
+package(default_visibility = ["//visibility:public"])
+
+sh_binary(
+    name = "telemetry",
+    srcs = ["//tools:cargo_run.sh"],
+    args = ["tools-telemetry"],
+)

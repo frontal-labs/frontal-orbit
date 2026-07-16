@@ -1,0 +1,6 @@
+sdk/typescript/node_modules
+sdk/typescript/dist
+sdk/typescript/coverage
+.git
+target
+**/*.rs.bk

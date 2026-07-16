@@ -1,0 +1,21 @@
+# Smoke test for the //tools dev-tooling suite (see tools_smoke.sh).
+sh_test(
+    name = "tools_smoke",
+    srcs = ["tools_smoke.sh"],
+    tags = ["manual"],
+    data = [
+        "//:Cargo.toml",
+        "//:Cargo.lock",
+    ],
+)
+
+# Cache status smoke test for the //tools/cache tool.
+sh_test(
+    name = "cache_status",
+    srcs = ["bazel/ci/cache_status.sh"],
+    tags = ["manual"],
+    data = [
+        "//:Cargo.toml",
+        "//:Cargo.lock",
+    ],
+)

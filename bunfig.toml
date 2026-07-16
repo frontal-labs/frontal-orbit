@@ -1,0 +1,48 @@
+# Root Bun configuration for the Frontal Orbit monorepo.
+# https://bun.sh/docs/bunfig
+
+[install]
+# Install exact versions into the lockfile for reproducible builds.
+exact = false
+# Cache directory shared across CI and local runs.
+cache = "node_modules/.bun-cache"
+# Don't auto-install when running scripts; explicit is better for CI.
+auto = false
+# Workspaces are resolved from the root package.json `workspaces` field.
+workspaces = true
+
+[install.scopes]
+# Publish the TypeScript SDK under the @frontal-labs scope.
+# "@frontal-labs" = "https://registry.npmjs.org/"
+
+[run]
+# Preload nothing by default; keep startup lean.
+preload = []
+
+[build]
+# Target the current Node LTS for maximum compatibility.
+target = "node"
+# Emit sourcemaps for published artifacts.
+sourcemap = "external"
+
+[bun]
+# Enable first-class TypeScript support.
+typescript = true
+
+[test]
+# Vitest is the test runner for the TypeScript SDK; Bun's runner is available
+# for fast unit loops via `bun test`.
+coverage = false
+coverageDir = "coverage"
+testMatch = ["**/*.test.ts", "**/*.spec.ts"]
+# Keep CI output deterministic.
+reporter = "default"
+
+[fmt]
+# Biome is the canonical formatter; disable Bun's built-in formatter to avoid
+# conflicting on `bun fmt`.
+enabled = false
+
+[defines]
+# Provide a stable NODE_ENV for SDK builds/tests.
+"process.env.NODE_ENV" = "\"production\""

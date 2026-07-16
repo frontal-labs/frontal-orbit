@@ -1,0 +1,21 @@
+package(default_visibility = ["//visibility:public"])
+
+# Aggregate of the Orbit SDK packages so `bazel test //sdk:all` exercises
+# both the TypeScript and Rust SDKs.
+filegroup(
+    name = "all_sdks",
+    srcs = [
+        "//sdk/typescript:typescript_sdk_srcs",
+        "//sdk/rust:rust_sdk_srcs",
+    ],
+)
+
+alias(
+    name = "typescript",
+    actual = "//sdk/typescript:test",
+)
+
+alias(
+    name = "rust",
+    actual = "//sdk/rust:test",
+)

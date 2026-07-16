@@ -1,0 +1,7 @@
+package(default_visibility = ["//visibility:public"])
+
+sh_binary(
+    name = "version",
+    srcs = ["//tools:cargo_run.sh"],
+    args = ["tools-version"],
+)

@@ -1,0 +1,26 @@
+package(default_visibility = ["//visibility:public"])
+
+# Shell scripts in this directory are also invoked directly by the Makefile
+# and CI; exporting them makes them usable as Bazel labels (e.g. test srcs).
+exports_files([
+    "bootstrap.sh",
+    "build.sh",
+    "test.sh",
+    "fmt.sh",
+    "lint.sh",
+    "tidy.sh",
+    "doctor.sh",
+    "clean.sh",
+    "ci.sh",
+    "coverage.sh",
+    "third_party_check.sh",
+    "cache.sh",
+    "workspace.sh",
+    "version.sh",
+    "bench.sh",
+    "telemetry.sh",
+    "codegen.sh",
+    "generators.sh",
+    "remote.sh",
+    "fuzz.sh",
+])

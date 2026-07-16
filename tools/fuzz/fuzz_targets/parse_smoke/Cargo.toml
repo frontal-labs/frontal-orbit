@@ -1,0 +1,17 @@
+[package]
+name = "parse-smoke-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "parse-smoke"
+path = "fuzz_targets/parse_smoke.rs"
+test = false
+doc = false

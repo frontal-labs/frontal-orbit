@@ -1,0 +1,44 @@
+load("//tools:lint.bzl", "biome_lint", "rust_lint", "rust_format")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "typescript_sdk_srcs",
+    srcs = glob(
+        ["**/*"],
+        exclude = [
+            "node_modules/**",
+            "dist/**",
+            "coverage/**",
+            "BUILD.bazel",
+        ],
+    ),
+)
+
+# Lint the TypeScript SDK with Biome (Ultracite preset).
+biome_lint(
+    name = "lint",
+    target = "sdk/typescript",
+)
+
+# Type-check, build, and test the SDK via Bun/Vitest.
+sh_test(
+    name = "typecheck",
+    srcs = ["//tools:sdk_ts.sh"],
+    args = ["sdk/typescript", "typecheck"],
+    tags = ["typescript", "test"],
+)
+
+sh_test(
+    name = "build",
+    srcs = ["//tools:sdk_ts.sh"],
+    args = ["sdk/typescript", "build"],
+    tags = ["typescript", "build"],
+)
+
+sh_test(
+    name = "test",
+    srcs = ["//tools:sdk_ts.sh"],
+    args = ["sdk/typescript", "test"],
+    tags = ["typescript", "test"],
+)

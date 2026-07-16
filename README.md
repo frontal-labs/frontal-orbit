@@ -1,9 +1,9 @@
-<picture>
-  <source srcset="./assets/banner.jpg" media="(prefers-color-scheme: dark)">
-  <img src="./assets/banner.jpg" alt="Frontal Banner">
-</picture>
-
 # Frontal Orbit
+
+<picture>
+  <source srcset="./banner.jpg" media="(prefers-color-scheme: dark)">
+  <img src="./banner.jpg" alt="Frontal Banner">
+</picture>
 
 A high-performance Rust rewrite of the Orbit CLI agent harness. Built for speed, safety, and native tool execution.
 
@@ -278,6 +278,7 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 |   |   tools/              # Built-in tools, skill resolution, tool search, agent runtime surfaces
 |   |   training/           # Style-learning and adaptation system
 |   |   webhooks/           # Webhook receiving and processing
+|   tools/              # Repo-level developer tooling suite (doctor, coverage, version, …) — see docs/TOOLS.md
 ```
 
 ### Crate Responsibilities
@@ -318,6 +319,23 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 ## Attribution
 
 Originally based on [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code), a high-performance Rust rewrite of AI agent tooling. This fork has been significantly modified and rebranded as "Frontal Orbit" by Frontal Labs.
+
+## Bazel monorepo
+
+A hermetic, reproducible build foundation is provided via **Bzlmod** (no
+`WORKSPACE` file). `MODULE.bazel` is the single source of truth; all build
+infrastructure lives under `bazel/` and `third_party/`.
+
+```bash
+make bootstrap   # install pre-commit + non-fatal `bazel mod tidy`
+make build       # bazel build //...
+make test        # bazel test //...
+make lint        # pre-commit run --all-files
+```
+
+See [`docs/bazel/ARCHITECTURE.md`](./docs/bazel/ARCHITECTURE.md),
+[`docs/bazel/GETTING-STARTED.md`](./docs/bazel/GETTING-STARTED.md), and
+[`docs/bazel/ROADMAP.md`](./docs/bazel/ROADMAP.md).
 
 ## License
 

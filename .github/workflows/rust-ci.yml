@@ -19,6 +19,12 @@ on:
       - extensions/orbit-slack/**
       - scripts/**
       - docs/**
+      - sdk/rust/**
+      - sdk/typescript/**
+      - biome.json
+      - ultracite.json
+      - bunfig.toml
+      - tools/**
   pull_request:
     branches:
       - main

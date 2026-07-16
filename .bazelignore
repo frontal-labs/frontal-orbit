@@ -1,0 +1,23 @@
+# IDE
+.idea
+.vscode
+
+# Python
+__pycache__
+
+# Node
+node_modules
+
+# Rust build artifacts
+target/
+rust/target
+
+# Bazel
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-<module>
+bazel-frontal-orbit
+
+# Coverage
+coverage/

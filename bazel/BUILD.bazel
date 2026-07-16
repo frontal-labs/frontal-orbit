@@ -1,0 +1,18 @@
+# Package marker for the shared Bazel infrastructure library.
+#
+# This package deliberately contains NO application source. It only provides
+# reusable Starlark helpers, macros, platforms, constraints, aspects, and CI
+# glue consumed by language packages across the monorepo.
+#
+# Subpackages:
+#   bazel/defs/          pure helper functions and per-language constants
+#   bazel/macros/        *_app() wrappers that keep BUILD files declarative
+#   bazel/toolchains/    select() helpers for toolchain resolution
+#   bazel/platforms/     host + target platform definitions
+#   bazel/constraints/   os/arch constraint settings and values
+#   bazel/config/        build-affecting config flags + config_settings
+#   bazel/aspects/       lint + coverage aspects (wired to real tooling)
+#   bazel/transitions/   configuration transitions (e.g. platform forcing)
+#   bazel/extensions/    SCAFFOLD module extensions — placeholders
+#   bazel/bzlmod/        override helper structs consumed by MODULE.bazel
+#   bazel/ci/            thin shell sh_test wrappers around bazel + pre-commit

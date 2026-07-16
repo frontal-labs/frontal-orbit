@@ -1,0 +1,27 @@
+# Platform definitions composed from //bazel/constraints:constraints values.
+
+package(default_visibility = ["//visibility:public"])
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "//bazel/constraints:os_linux",
+        "//bazel/constraints:arch_x86_64",
+    ],
+)
+
+platform(
+    name = "linux_arm64",
+    constraint_values = [
+        "//bazel/constraints:os_linux",
+        "//bazel/constraints:arch_arm64",
+    ],
+)
+
+platform(
+    name = "macos_arm64",
+    constraint_values = [
+        "//bazel/constraints:os_macos",
+        "//bazel/constraints:arch_arm64",
+    ],
+)

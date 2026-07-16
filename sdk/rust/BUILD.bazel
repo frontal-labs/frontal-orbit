@@ -1,0 +1,33 @@
+load("//tools:lint.bzl", "rust_lint", "rust_format")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "rust_sdk_srcs",
+    srcs = glob(
+        ["**/*"],
+        exclude = [
+            "target/**",
+            "BUILD.bazel",
+        ],
+    ),
+)
+
+# Format check for the Rust SDK.
+rust_format(
+    name = "fmt",
+)
+
+# Clippy (with -D warnings) for the Rust SDK.
+rust_lint(
+    name = "lint",
+    crate = "orbit-sdk",
+)
+
+# Run the SDK's test suite.
+sh_test(
+    name = "test",
+    srcs = ["//tools:sdk_rust.sh"],
+    args = ["test"],
+    tags = ["rust", "test"],
+)

@@ -1,0 +1,31 @@
+# OS / architecture constraint settings and values.
+#
+# These are intentionally minimal: only the target triples the monorepo
+# commits to supporting. They back the platform definitions in
+# //bazel/platforms:platforms.bzl.
+
+package(default_visibility = ["//visibility:public"])
+
+constraint_setting(name = "os")
+
+constraint_value(
+    name = "os_linux",
+    constraint_setting = ":os",
+)
+
+constraint_value(
+    name = "os_macos",
+    constraint_setting = ":os",
+)
+
+constraint_setting(name = "arch")
+
+constraint_value(
+    name = "arch_x86_64",
+    constraint_setting = ":arch",
+)
+
+constraint_value(
+    name = "arch_arm64",
+    constraint_setting = ":arch",
+)

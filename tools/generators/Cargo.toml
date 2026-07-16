@@ -1,0 +1,15 @@
+[package]
+name = "tools-generators"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+handlebars = "6"
+serde_json = "1"
+
+[lints]
+workspace = true

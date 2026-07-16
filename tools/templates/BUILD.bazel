@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+# Shared templating library consumed by //tools/generators and //tools/codegen.
+exports_files([
+    "Cargo.toml",
+    "src/lib.rs",
+    "templates/crate/Cargo.toml",
+    "templates/crate/crate_lib.rs",
+    "templates/crate/crate_bin.rs",
+    "templates/fuzz/Cargo.toml",
+    "templates/fuzz/target.rs",
+])

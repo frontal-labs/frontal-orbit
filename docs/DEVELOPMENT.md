@@ -211,6 +211,24 @@ Releases are automated through GitHub Actions:
 - Monitor memory usage with `valgrind` or similar tools
 - Use the mock service for consistent performance testing
 
+## Bazel build foundation
+
+A hermetic, reproducible build foundation is also provided via **Bzlmod** (no
+`WORKSPACE` file). All build infrastructure lives under `bazel/` and
+`third_party/`; `MODULE.bazel` is the single source of truth.
+
+```bash
+make bootstrap   # install pre-commit + non-fatal `bazel mod tidy`
+make build       # bazel build //...
+make test        # bazel test //...
+make lint        # pre-commit run --all-files
+make doctor      # sanity-check the toolchain
+```
+
+See [`docs/bazel/ARCHITECTURE.md`](./bazel/ARCHITECTURE.md),
+[`docs/bazel/GETTING-STARTED.md`](./bazel/GETTING-STARTED.md), and
+[`docs/bazel/ROADMAP.md`](./bazel/ROADMAP.md).
+
 ## Troubleshooting
 
 ### Build Issues
@@ -218,6 +236,12 @@ Releases are automated through GitHub Actions:
 - Clear cargo cache: `cargo clean`
 - Update dependencies: `cargo update`
 - Check Rust version: `rustc --version`
+
+### Bazel Issues
+
+- Clear Bazel state: `make clean` (or `EXPUNGE=1 make clean` for full expunge)
+- Verify the Bazel version is pinned: `cat .bazelversion`
+- Run `make doctor` to check the toolchain
 
 ### Runtime Issues
 

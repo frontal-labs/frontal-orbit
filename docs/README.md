@@ -18,6 +18,7 @@ Welcome to the Orbit CLI documentation hub. This comprehensive guide covers ever
 
 ### Advanced Topics
 - **[MCP Integration](./MCP.md)** - Model Context Protocol guide
+- **[Developer Tools](./TOOLS.md)** - Repo-level dev tooling suite (`tools/`: doctor, coverage, version, …)
 - **[Performance](./PERFORMANCE.md)** - Performance optimization and monitoring
 - **[Security](./SECURITY.md)** - Security features and best practices
 - **[Containers](./CONTAINERS.md)** - Docker and containerization

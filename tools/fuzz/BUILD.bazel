@@ -1,0 +1,10 @@
+package(default_visibility = ["//visibility:public"])
+
+# `fuzz` is a runner over standalone cargo-fuzz crates under fuzz_targets/.
+sh_binary(
+    name = "fuzz",
+    srcs = ["//tools:cargo_run.sh"],
+    args = ["tools-fuzz"],
+)
+
+exports_files(glob(["fuzz_targets/**"]))

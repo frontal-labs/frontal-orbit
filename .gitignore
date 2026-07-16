@@ -13,6 +13,7 @@ target/
 
 # Node.js
 node_modules/
+dist/
 bun.lockb
 
 # IDE
@@ -26,3 +27,13 @@ bun.lockb
 Thumbs.db
 extensions/orbit-slack/.bun-cache/
 extensions/orbit-slack/node_modules/
+
+# Bazel (Bzlmod)
+.bazelrc.project
+coverage/
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-frontal-orbit
+bazel-<module>
+

@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+# Demonstration target: its `srcs` include a Starlark file so the lint aspect
+# (//bazel/aspects:lint_aspect.bzl%lint_aspect) has something to act on.
+# This target is intentionally tiny and never breaks `bazel build //...`.
+
+exports_files(["sample.bzl"])
+
+filegroup(
+    name = "example",
+    srcs = ["sample.bzl"],
+)

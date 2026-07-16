@@ -1,0 +1,9 @@
+# Per-language application macros.
+#
+# Each *_app() macro emits a consistent set of targets so individual BUILD
+# files stay small and uniform:
+#   <name>        — the runnable binary
+#   <name>_lib    — the library surface
+#   <name>_test   — a test target
+#
+# Language-specific implementations live in ./<lang>.bzl.

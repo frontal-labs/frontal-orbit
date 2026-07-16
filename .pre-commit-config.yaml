@@ -38,6 +38,52 @@ repos:
       - id: cargo-audit
         args: ['--workspace']
 
+  # --- Bazel / polyglot tooling (added by the Bzlmod migration) ---------------
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.41.0
+    hooks:
+      - id: markdownlint
+        files: '.*\.md$'
+
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker.python
+    rev: 2.7.3
+    hooks:
+      - id: editorconfig-checker
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
+  # --- Biome (Ultracite preset) for TS/JS/JSON/YAML formatting & lint ------
+  # Replaces prettier: Biome is the single formatter/linter for the monorepo's
+  # TypeScript and JavaScript surface (including the Orbit SDKs).
+  - repo: local
+    hooks:
+      - id: biome-check
+        name: biome check
+        entry: bunx @biomejs/biome check --write --no-errors-on-unmatched
+        language: system
+        types_or: [file]
+        files: '\.(ts|tsx|js|jsx|json|jsonc|ya?ml)$'
+        pass_filenames: false
+        always_run: true
+
+      - id: biome-format
+        name: biome format
+        entry: bunx @biomejs/biome format --write --no-errors-on-unmatched
+        language: system
+        types_or: [file]
+        files: '\.(ts|tsx|js|jsx|json|jsonc|ya?ml)$'
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint
+        files: '^\.devcontainer/Dockerfile$'
+
   - repo: local
     hooks:
       - id: cargo-test
@@ -75,6 +121,39 @@ repos:
         types: [file]
         pass_filenames: false
         always_run: true
+
+      - id: buildifier
+        name: buildifier
+        entry: bazel run //:buildifier
+        language: system
+        types: [bazel]
+        pass_filenames: false
+
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        files: '^\.github/workflows/.*\.(ya?ml)$'
+
+      - id: third-party-check
+        name: third-party check
+        entry: bash scripts/third_party_check.sh
+        language: system
+        pass_filenames: false
+
+      - id: devtools-workspace-check
+        name: workspace member check
+        entry: cargo run -q -p tools-workspace -- check
+        language: system
+        pass_filenames: false
+        files: '^(Cargo\.toml|tools/.*/Cargo\.toml|crates/.*/Cargo\.toml)$'
+
+      - id: devtools-version-sync
+        name: version sync (Cargo.toml <-> MODULE.bazel)
+        entry: bash -c 'v=$(cargo run -q -p tools-version -- show); m=$(grep -m1 "version" MODULE.bazel | grep -oE "[0-9.]+"); [ "$v" = "$m" ] || { echo "version mismatch: Cargo.toml ($v) != MODULE.bazel ($m)"; exit 1; }'
+        language: system
+        pass_filenames: false
+        files: '^(Cargo\.toml|MODULE\.bazel)$'
 
 # Configuration
 default_language_version:

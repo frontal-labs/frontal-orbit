@@ -1,0 +1,39 @@
+# Build-affecting boolean flags and matching config_setting rules.
+#
+# These are usable inside select() expressions so packages can opt into
+# sanitizers, coverage instrumentation, or strict mode without hardcoding
+# flags in .bazelrc. `bool_flag` comes from bazel_skylib (not native in Bazel 7).
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+package(default_visibility = ["//visibility:public"])
+
+bool_flag(
+    name = "asan",
+    build_setting_default = False,
+)
+
+bool_flag(
+    name = "coverage",
+    build_setting_default = False,
+)
+
+bool_flag(
+    name = "strict",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "asan_enabled",
+    flag_values = {":asan": "true"},
+)
+
+config_setting(
+    name = "coverage_enabled",
+    flag_values = {":coverage": "true"},
+)
+
+config_setting(
+    name = "strict_enabled",
+    flag_values = {":strict": "true"},
+)

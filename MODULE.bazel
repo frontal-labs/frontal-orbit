@@ -1,0 +1,20 @@
+# ============================================================================
+# Bzlmod module definition for the frontal-orbit monorepo.
+# This is the SINGLE SOURCE OF TRUTH. There is no WORKSPACE file.
+# ============================================================================
+
+module(
+    name = "frontal-orbit",
+    version = "0.1.1",
+)
+
+# --- Core Bazel rulesets -----------------------------------------------------
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "rules_shell", version = "0.4.0")
+bazel_dep(name = "buildifier_prebuilt", version = "7.3.1")
+
+# --- third_party non-module deps (placeholders) -----------------------------
+# Declared per the Bzlmod conventions in //third_party:repos.bzl. No repos are
+# pinned by default; every added entry must pin sha256/commit.
+non_module_deps = use_extension("//third_party:repos.bzl", "non_module_deps")
+use_repo(non_module_deps, "non_module_deps")

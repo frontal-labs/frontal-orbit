@@ -1,0 +1,20 @@
+package(default_visibility = ["//visibility:public"])
+
+# Shared wrapper used by every //tools/<name>:<name> sh_binary target.
+# It execs `cargo run -p tools-<name>` from the workspace checkout.
+exports_files([
+    "cargo_run.sh",
+    "format.sh",
+    "lint.sh",
+    "lint.bzl",
+    "sdk_rust.sh",
+    "sdk_ts.sh",
+])
+
+# TODO(bazel): once rules_rust + crate_universe land (see docs/bazel/ROADMAP.md),
+# replace these sh_binary wrappers with native `rust_binary` targets so the
+# tools build hermetically inside Bazel instead of shelling out to cargo.
+alias(
+    name = "cargo_run",
+    actual = ":cargo_run.sh",
+)
