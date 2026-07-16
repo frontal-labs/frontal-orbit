@@ -5,7 +5,7 @@
 BAZEL ?= bazel
 ARGS  ?=
 
-.PHONY: build test lint fmt tidy bootstrap doctor clean coverage ci cache workspace version bench telemetry codegen generators remote fuzz
+.PHONY: build test lint fmt tidy bootstrap doctor clean coverage ci cache workspace version bench telemetry codegen generators remote fuzz cli changeset renovate
 
 build:
 	./scripts/build.sh $(ARGS)
@@ -64,3 +64,13 @@ remote:
 
 fuzz:
 	./scripts/fuzz.sh $(ARGS)
+
+cli:
+	./scripts/cli.sh $(ARGS)
+
+# --- Dependency & release automation --------------------------------------
+changeset:
+	./scripts/changeset.sh $(ARGS)
+
+renovate:
+	./scripts/renovate.sh $(ARGS)
