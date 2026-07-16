@@ -37,7 +37,7 @@ pub struct WebhookEvent {
 
 impl WebhookEvent {
     /// Create a new webhook event
-    #[must_use] 
+    #[must_use]
     pub fn new(
         event_type: WebhookEventType,
         source: String,
@@ -55,19 +55,19 @@ impl WebhookEvent {
     }
 
     /// Get a header value
-    #[must_use] 
+    #[must_use]
     pub fn header(&self, name: &str) -> Option<&String> {
         self.headers.get(name)
     }
 
     /// Check if this is a GitHub event
-    #[must_use] 
+    #[must_use]
     pub fn is_github(&self) -> bool {
         matches!(self.event_type, WebhookEventType::GitHub { .. })
     }
 
     /// Check if this is an MCP server event
-    #[must_use] 
+    #[must_use]
     pub fn is_mcp(&self) -> bool {
         matches!(self.event_type, WebhookEventType::McpServer { .. })
     }
@@ -82,7 +82,7 @@ pub struct EventProcessor {
 
 impl EventProcessor {
     /// Create a new event processor
-    #[must_use] 
+    #[must_use]
     pub fn new(max_events: usize) -> Self {
         Self {
             events: Vec::with_capacity(max_events),
@@ -101,13 +101,13 @@ impl EventProcessor {
     }
 
     /// Get all events
-    #[must_use] 
+    #[must_use]
     pub fn events(&self) -> &[WebhookEvent] {
         &self.events
     }
 
     /// Get events by source
-    #[must_use] 
+    #[must_use]
     pub fn events_by_source(&self, source: &str) -> Vec<&WebhookEvent> {
         self.events
             .iter()
@@ -116,7 +116,7 @@ impl EventProcessor {
     }
 
     /// Get events by type
-    #[must_use] 
+    #[must_use]
     pub fn events_by_type(&self, event_type: &WebhookEventType) -> Vec<&WebhookEvent> {
         self.events
             .iter()
@@ -130,13 +130,13 @@ impl EventProcessor {
     }
 
     /// Get event count
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.events.len()
     }
 
     /// Check if empty
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }

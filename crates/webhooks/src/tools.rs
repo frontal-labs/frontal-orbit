@@ -24,7 +24,7 @@ pub struct ToolSpec {
 }
 
 /// Webhook tool specifications
-#[must_use] 
+#[must_use]
 pub fn webhook_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {

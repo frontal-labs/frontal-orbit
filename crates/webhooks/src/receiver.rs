@@ -54,7 +54,7 @@ pub struct WebhookReceiver {
 
 impl WebhookReceiver {
     /// Create a new webhook receiver
-    #[must_use] 
+    #[must_use]
     pub fn new(config: WebhookConfig) -> Self {
         let event_processor = Arc::new(RwLock::new(EventProcessor::new(config.max_events)));
 
@@ -88,7 +88,7 @@ impl WebhookReceiver {
     }
 
     /// Get event processor reference
-    #[must_use] 
+    #[must_use]
     pub fn event_processor(&self) -> Arc<RwLock<EventProcessor>> {
         self.state.event_processor.clone()
     }
