@@ -23,13 +23,13 @@
     "format": "biome format --write src/",
     "ci": "vitest run --coverage && biome ci src/"
   },
-  "homepage": "https://github.com/frontal-labs/frontal-orbit",
+  "homepage": "https://github.com/frontal-labs/orbit",
   "bugs": {
-    "url": "https://github.com/frontal-labs/frontal-orbit/issues"
+    "url": "https://github.com/frontal-labs/orbit/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/frontal-labs/frontal-orbit.git",
+    "url": "https://github.com/frontal-labs/orbit.git",
     "directory": "extensions/orbit-slack"
   },
   "keywords": [
