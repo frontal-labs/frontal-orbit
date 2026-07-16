@@ -38,7 +38,7 @@ use orbit_commands::{
     resume_supported_slash_commands, slash_command_specs, validate_slash_command_input,
     SkillSlashDispatch, SlashCommand, CONFIG_SECTION_ARGUMENT_HINT, SUPPORTED_CONFIG_SECTIONS,
 };
-use orbit_compat_harness::{extract_manifest, UpstreamPaths};
+use orbit_harness::{extract_manifest, UpstreamPaths};
 use orbit_events::{EventEnvelope, HostedEventName, HostedEventStatus, HostedEventTopic};
 use orbit_github::{
     parse_github_repo_url, GitHubCheckRunDraft, GitHubCheckRunOutput, GitHubClient,

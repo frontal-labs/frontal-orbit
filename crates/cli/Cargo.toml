@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 orbit-api = { path = "../api" }
 orbit-commands = { path = "../commands" }
-orbit-compat-harness = { path = "../compat-harness" }
+orbit-harness = { path = "../harness" }
 orbit-core = { path = "../core" }
 crossterm = "0.28"
 futures-util = "0.3"
