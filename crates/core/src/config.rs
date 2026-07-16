@@ -38,6 +38,7 @@ pub struct ProviderConfig {
     pub anthropic: ProviderDetails,
     pub openai: ProviderDetails,
     pub xai: ProviderDetails,
+    pub frontal: ProviderDetails,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +136,7 @@ impl Default for ProjectConfig {
                 description: "AI-powered development environment and CLI tool".to_string(),
             },
             runtime: RuntimeConfig {
-                default_provider: "anthropic".to_string(),
+                default_provider: "frontal".to_string(),
                 providers: ProviderConfig {
                     anthropic: ProviderDetails {
                         enabled: true,
@@ -148,6 +149,10 @@ impl Default for ProjectConfig {
                     xai: ProviderDetails {
                         enabled: true,
                         default_model: "grok-beta".to_string(),
+                    },
+                    frontal: ProviderDetails {
+                        enabled: true,
+                        default_model: "claude-3-5-sonnet-20241022".to_string(),
                     },
                 },
                 permission_mode: "permissive".to_string(),
@@ -316,6 +321,7 @@ impl ProjectConfig {
             "anthropic" => Some(&self.runtime.providers.anthropic),
             "openai" => Some(&self.runtime.providers.openai),
             "xai" => Some(&self.runtime.providers.xai),
+            "frontal" => Some(&self.runtime.providers.frontal),
             _ => None,
         }
     }
@@ -343,7 +349,7 @@ mod tests {
     fn test_default_config() {
         let config = ProjectConfig::default();
         assert_eq!(config.project.name, "Orbit");
-        assert_eq!(config.runtime.default_provider, "anthropic");
+        assert_eq!(config.runtime.default_provider, "frontal");
         assert!(config.runtime.providers.anthropic.enabled);
     }
 
@@ -369,6 +375,11 @@ mod tests {
         assert!(config.is_provider_enabled("anthropic"));
         assert_eq!(
             config.get_default_model("anthropic"),
+            Some("claude-3-5-sonnet-20241022".to_string())
+        );
+        assert!(config.is_provider_enabled("frontal"));
+        assert_eq!(
+            config.get_default_model("frontal"),
             Some("claude-3-5-sonnet-20241022".to_string())
         );
         assert!(!config.is_provider_enabled("unknown"));

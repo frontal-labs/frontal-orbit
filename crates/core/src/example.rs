@@ -5,7 +5,7 @@
 use crate::config::ProjectConfig;
 
 /// Example function showing how to load and use configuration
-pub fn load_and_use_config() -> Result<(), Box<dyn std::error::Error>> {
+pub fn load_and_use_config() {
     // Load configuration from default location
     let config = ProjectConfig::load_or_default();
 
@@ -55,8 +55,6 @@ pub fn load_and_use_config() -> Result<(), Box<dyn std::error::Error>> {
         "Auto-compaction threshold: {}",
         config.features.auto_compaction_threshold
     );
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -66,6 +64,6 @@ mod tests {
     #[test]
     fn test_example_usage() {
         // This test demonstrates the example usage
-        load_and_use_config().expect("Failed to load and use config");
+        load_and_use_config();
     }
 }
