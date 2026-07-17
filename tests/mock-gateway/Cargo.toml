@@ -1,0 +1,21 @@
+[package]
+name = "orbit-mock-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "orbit_mock_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mock-gateway"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
+
+[lints]
+workspace = true
