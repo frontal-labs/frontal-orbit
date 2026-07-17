@@ -32,20 +32,14 @@ fn main() {
     let core_config = ProjectConfig::load_or_default();
     for provider in ["anthropic", "openai", "xai"] {
         println!("  {provider} Provider:");
-        println!(
-            "    Enabled: {}",
-            core_config.is_provider_enabled(provider)
-        );
+        println!("    Enabled: {}", core_config.is_provider_enabled(provider));
 
         if let Some(model) = core_config.get_default_model(provider) {
             println!("    Default Model: {model}");
         }
 
         if let Some(provider_config) = core_config.get_provider_config(provider) {
-            println!(
-                "    Provider Config: enabled={}",
-                provider_config.enabled
-            );
+            println!("    Provider Config: enabled={}", provider_config.enabled);
         }
     }
 
@@ -75,10 +69,7 @@ fn print_core_config(core_config: &ProjectConfig) {
     println!("  Project Information:");
     println!("    Name: {}", core_config.project.name);
     println!("    Version: {}", core_config.project.version);
-    println!(
-        "    Description: {}",
-        core_config.project.description
-    );
+    println!("    Description: {}", core_config.project.description);
 
     println!("  Runtime Configuration:");
     println!(
@@ -160,10 +151,7 @@ fn print_configuration_manager(config_manager: &ConfigurationManager) {
         "    Request Timeout: {}s",
         config_manager.request_timeout_seconds()
     );
-    println!(
-        "    Permission Mode: {}",
-        config_manager.permission_mode()
-    );
+    println!("    Permission Mode: {}", config_manager.permission_mode());
     println!("    Log Level: {}", config_manager.log_level());
 
     println!("  Provider Configuration:");
@@ -187,20 +175,11 @@ fn print_configuration_manager(config_manager: &ConfigurationManager) {
 
     println!("  UI Settings:");
     println!("    Theme: {}", config_manager.ui_theme());
-    println!(
-        "    Colors: {}",
-        config_manager.are_ui_colors_enabled()
-    );
+    println!("    Colors: {}", config_manager.are_ui_colors_enabled());
 
     println!("  Paths:");
-    println!(
-        "    Cache Directory: {}",
-        config_manager.cache_dir()
-    );
-    println!(
-        "    Logs Directory: {}",
-        config_manager.logs_dir()
-    );
+    println!("    Cache Directory: {}", config_manager.cache_dir());
+    println!("    Logs Directory: {}", config_manager.logs_dir());
 
     println!("  Service Configuration:");
     let services = config_manager.service_config();
@@ -236,13 +215,9 @@ fn validate_timeout(request_timeout_seconds: u32) {
     if request_timeout_seconds == 0 {
         println!("  Warning: Request timeout is set to 0 seconds");
     } else if request_timeout_seconds > 300 {
-        println!(
-            "  Warning: Request timeout is very high ({request_timeout_seconds}s)"
-        );
+        println!("  Warning: Request timeout is very high ({request_timeout_seconds}s)");
     } else {
-        println!(
-            "  Request timeout looks reasonable ({request_timeout_seconds}s)"
-        );
+        println!("  Request timeout looks reasonable ({request_timeout_seconds}s)");
     }
 }
 
@@ -250,12 +225,8 @@ fn validate_concurrent_requests(max_concurrent_requests: u32) {
     if max_concurrent_requests == 0 {
         println!("  Warning: Max concurrent requests is set to 0");
     } else if max_concurrent_requests > 50 {
-        println!(
-            "  Warning: Max concurrent requests is very high ({max_concurrent_requests})"
-        );
+        println!("  Warning: Max concurrent requests is very high ({max_concurrent_requests})");
     } else {
-        println!(
-            "  Max concurrent requests looks reasonable ({max_concurrent_requests})"
-        );
+        println!("  Max concurrent requests looks reasonable ({max_concurrent_requests})");
     }
 }

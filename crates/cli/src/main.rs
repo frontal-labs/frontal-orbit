@@ -4,7 +4,10 @@
     unused_variables,
     clippy::unneeded_struct_pattern,
     clippy::unnecessary_wraps,
-    clippy::unused_self
+    clippy::unused_self,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments
 )]
 mod init;
 mod input;
@@ -12,6 +15,7 @@ mod render;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::ops::{Deref, DerefMut};
@@ -866,7 +870,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         &model,
         permission_mode_override,
         output_format,
-        provider: provider.as_ref(),
+        provider.as_ref(),
     ) {
         return action;
     }
@@ -917,9 +921,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             Ok(CliAction::Prompt {
                 prompt,
-                    model,
-                    provider: provider.cloned(),
-                    output_format,
+                model,
+                provider: provider.clone(),
+                output_format,
                 allowed_tools,
                 permission_mode,
             })
@@ -1471,6 +1475,7 @@ struct TelemetryTargetStatus {
     path: Option<String>,
 }
 
+#[allow(clippy::redundant_closure_for_method_calls)]
 fn resolve_config_section(
     runtime_config: &orbit_runtime::RuntimeConfig,
     section: &str,
@@ -1573,7 +1578,7 @@ fn parse_config_cli_action(
             output_format,
         }),
         [section] => Ok(CliAction::Config {
-            section: Some(section.to_string()),
+            section: Some(section.clone()),
             output_format,
         }),
         _ => Err(format!(
@@ -1611,7 +1616,7 @@ fn parse_direct_slash_cli_action(
                 SkillSlashDispatch::Invoke(prompt) => Ok(CliAction::Prompt {
                     prompt,
                     model,
-                    provider: provider.clone(),
+                    provider: provider.cloned(),
                     output_format,
                     allowed_tools,
                     permission_mode,
@@ -1685,7 +1690,7 @@ fn omc_compatibility_note_for_unknown_slash_command(name: &str) -> Option<&'stat
 }
 
 fn render_suggestion_line(label: &str, suggestions: &[String]) -> Option<String> {
-    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", "),))
+    (!suggestions.is_empty()).then(|| format!("  {label:<16} {}", suggestions.join(", ")))
 }
 
 fn suggest_slash_commands(input: &str) -> Vec<String> {
@@ -2165,7 +2170,7 @@ fn check_core_config_health(config_manager: &ConfigurationManager) -> Diagnostic
     for provider in ["anthropic", "openai", "xai"] {
         if config_manager.is_provider_enabled(provider) {
             if let Some(model) = config_manager.default_model(provider) {
-                details.push(format!("{} model: {}", provider, model));
+                details.push(format!("{provider} model: {model}"));
             }
         }
     }
@@ -2284,15 +2289,16 @@ fn check_auth_health() -> DiagnosticCheck {
         summary,
     )
     .with_details(details)
-    .with_data(Map::from_iter(
+    .with_data(
         provider_presence
             .into_iter()
             .map(|(name, present)| (name, json!(present)))
             .chain(std::iter::once((
                 "ollama_base_url_present".to_string(),
                 json!(ollama_base_url_present),
-            ))),
-    ))
+            )))
+            .collect::<Map<String, Value>>(),
+    )
 }
 
 fn check_config_health(
@@ -2900,7 +2906,7 @@ fn run_hosted_command(
             let response = fetch_hosted_policy(&client, &server_url, repository, source, priority)?;
             match output_format {
                 CliOutputFormat::Text => {
-                    println!("{}", render_hosted_policy_report(&server_url, &response))
+                    println!("{}", render_hosted_policy_report(&server_url, &response));
                 }
                 CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
             }
@@ -2918,7 +2924,7 @@ fn run_hosted_command(
                     println!(
                         "{}",
                         render_hosted_task_list_report(&server_url, &query, &response)
-                    )
+                    );
                 }
                 CliOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&response)?),
             }
@@ -3427,7 +3433,7 @@ fn publish_hosted_repo_changes(
         if let Ok(pr_result) = result {
             github.owner = Some(repo.owner.clone());
             github.repo = Some(repo.repo.clone());
-            if let Some(number) = pr_result.get("number").and_then(|v| v.as_u64()) {
+            if let Some(number) = pr_result.get("number").and_then(Value::as_u64) {
                 github.pr_number = Some(number);
             }
             if let Some(url) = pr_result.get("html_url").and_then(|v| v.as_str()) {
@@ -3470,13 +3476,13 @@ fn augment_hosted_result_with_publication(
     }
     value.push_str("Publication\n");
     if let Some(branch) = github.published_branch.as_deref() {
-        value.push_str(&format!("Branch: {branch}\n"));
+        let _ = writeln!(value, "Branch: {branch}");
     }
     if let Some(commit_sha) = github.published_commit_sha.as_deref() {
-        value.push_str(&format!("Commit: {commit_sha}\n"));
+        let _ = writeln!(value, "Commit: {commit_sha}");
     }
     if let Some(pr_url) = github.pr_url.as_deref() {
-        value.push_str(&format!("PR: {pr_url}\n"));
+        let _ = writeln!(value, "PR: {pr_url}");
     }
     Some(value.trim_end().to_string())
 }
@@ -3485,8 +3491,10 @@ fn summarize_hosted_result(value: Option<&str>, fallback: &str) -> String {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(240).collect::<String>())
-        .unwrap_or_else(|| fallback.to_string())
+        .map_or_else(
+            || fallback.to_string(),
+            |value| value.chars().take(240).collect::<String>(),
+        )
 }
 
 fn report_hosted_task_to_github(
@@ -3851,11 +3859,11 @@ fn hosted_events_ws_url(
     match url.scheme() {
         "http" => {
             url.set_scheme("ws")
-                .map_err(|_| "failed to convert hosted server URL from http to ws")?;
+                .map_err(|()| "failed to convert hosted server URL from http to ws")?;
         }
         "https" => {
             url.set_scheme("wss")
-                .map_err(|_| "failed to convert hosted server URL from https to wss")?;
+                .map_err(|()| "failed to convert hosted server URL from https to wss")?;
         }
         "ws" | "wss" => {}
         other => {
@@ -4117,9 +4125,10 @@ fn hosted_task_snapshot_from_event(event: &EventEnvelope) -> Option<HostedTaskSn
 
 fn infer_hosted_task_status_from_event(event: &EventEnvelope) -> Option<String> {
     let inferred = match event.event {
-        HostedEventName::TaskCreated => "pending",
+        HostedEventName::TaskCreated
+        | HostedEventName::LaneBlocked
+        | HostedEventName::ApprovalRequested => "pending",
         HostedEventName::TaskRouted | HostedEventName::LaneStarted => "running",
-        HostedEventName::LaneBlocked | HostedEventName::ApprovalRequested => "pending",
         HostedEventName::ApprovalResolved => match event.status {
             HostedEventStatus::Pending
             | HostedEventStatus::Running
@@ -4169,7 +4178,7 @@ fn render_hosted_task_watch_line(item: &HostedTaskWatchItem) -> String {
     if let Some(linear) = task
         .linear_issue_identifier
         .as_ref()
-        .or_else(|| task.linear_issue_id.as_ref())
+        .or(task.linear_issue_id.as_ref())
     {
         parts.push(format!("linear={linear}"));
     }
@@ -4186,8 +4195,7 @@ fn render_hosted_policy_report(server_url: &str, response: &HostedPolicyResponse
     let preview = response
         .preview
         .as_ref()
-        .map(format_hosted_preview)
-        .unwrap_or_else(|| "global defaults".to_string());
+        .map_or_else(|| "global defaults".to_string(), format_hosted_preview);
     let default_policy = format_hosted_policy_line(&response.default_policy);
     let effective_policy = format_hosted_policy_line(&response.effective_policy);
 
@@ -4414,14 +4422,14 @@ fn format_hosted_policy_line(policy: &HostedAppliedOrphanPolicy) -> String {
     };
     let timings = [
         format!("approval {}s", policy.approval_delay_secs),
-        policy
-            .auto_retry_after_secs
-            .map(|value| format!("retry {}s", value))
-            .unwrap_or_else(|| "retry off".to_string()),
-        policy
-            .auto_cancel_after_secs
-            .map(|value| format!("cancel {}s", value))
-            .unwrap_or_else(|| "cancel off".to_string()),
+        policy.auto_retry_after_secs.map_or_else(
+            || "retry off".to_string(),
+            |value| format!("retry {value}s"),
+        ),
+        policy.auto_cancel_after_secs.map_or_else(
+            || "cancel off".to_string(),
+            |value| format!("cancel {value}s"),
+        ),
     ];
     format!("{scope}; {}", timings.join(", "))
 }
@@ -4441,11 +4449,11 @@ fn format_hosted_rule(rule: &HostedPolicyRule) -> String {
     .collect::<Vec<_>>();
     let timings = [
         rule.approval_delay_secs
-            .map(|value| format!("approval {}s", value)),
+            .map(|value| format!("approval {value}s")),
         rule.auto_retry_after_secs
-            .map(|value| format!("retry {}s", value)),
+            .map(|value| format!("retry {value}s")),
         rule.auto_cancel_after_secs
-            .map(|value| format!("cancel {}s", value)),
+            .map(|value| format!("cancel {value}s")),
     ]
     .into_iter()
     .flatten()
@@ -6437,28 +6445,25 @@ impl LiveCli {
     fn handle_ide_command(&self, target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
 
-        match target {
-            Some(value) => {
-                let parsed_target = parse_ide_target(value)?;
-                let config_path = set_default_ide_target(&cwd, parsed_target)?;
-                let editor_config_path = setup_ide_editor_integration(&cwd, parsed_target)?;
-                let install_result = install_ide_extension(parsed_target, &cwd);
-                let launch_result = launch_ide_target(parsed_target, &cwd);
-                println!(
-                    "{}",
-                    format_ide_command_report(
-                        parsed_target,
-                        &config_path,
-                        &editor_config_path,
-                        install_result,
-                        launch_result,
-                    )
-                );
-            }
-            None => {
-                let status = collect_ide_status(&cwd);
-                println!("{}", format_ide_status_report(&status));
-            }
+        if let Some(value) = target {
+            let parsed_target = parse_ide_target(value)?;
+            let config_path = set_default_ide_target(&cwd, parsed_target)?;
+            let editor_config_path = setup_ide_editor_integration(&cwd, parsed_target)?;
+            let install_result = install_ide_extension(parsed_target, &cwd);
+            let launch_result = launch_ide_target(parsed_target, &cwd);
+            println!(
+                "{}",
+                format_ide_command_report(
+                    parsed_target,
+                    &config_path,
+                    &editor_config_path,
+                    install_result,
+                    launch_result,
+                )
+            );
+        } else {
+            let status = collect_ide_status(&cwd);
+            println!("{}", format_ide_status_report(&status));
         }
 
         Ok(())
@@ -7718,8 +7723,7 @@ fn telemetry_target_detail_lines(status: &TelemetryTargetStatus) -> Vec<String> 
             "Target enabled",
             status
                 .enabled
-                .map(|value| if value { "true" } else { "false" })
-                .unwrap_or("<unset>"),
+                .map_or("<unset>", |value| if value { "true" } else { "false" }),
         ),
         report_row("Target path", status.path.as_deref().unwrap_or("<unset>")),
     ]
@@ -8080,7 +8084,7 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
             } else {
                 preview
             };
-            lines.push(format!("  {}. {}", index + 1, file.path.display(),));
+            lines.push(format!("  {}. {}", index + 1, file.path.display()));
             lines.push(format!(
                 "     lines={} preview={}",
                 file.content.lines().count(),
@@ -8362,8 +8366,7 @@ fn command_exists(name: &str) -> bool {
     Command::new("which")
         .arg(name)
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn write_temp_text_file(
@@ -12542,8 +12545,8 @@ mod tests {
     #[test]
     fn startup_banner_mentions_workflow_completions() {
         let _guard = env_lock();
-        // Inject dummy credentials so LiveCli can construct without real Anthropic key
-        std::env::set_var("ORBIT_API_KEY", "test-dummy-key-for-banner-test");
+        // Inject dummy credentials so LiveCli can construct without real provider key
+        std::env::set_var("FRONTAL_API_KEY", "test-dummy-key-for-banner-test");
         let root = temp_dir();
         fs::create_dir_all(&root).expect("root dir");
 
@@ -12562,7 +12565,7 @@ mod tests {
         assert!(banner.contains("workflow completions"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
-        std::env::remove_var("ORBIT_API_KEY");
+        std::env::remove_var("FRONTAL_API_KEY");
     }
 
     #[test]

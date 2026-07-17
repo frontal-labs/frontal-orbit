@@ -862,11 +862,12 @@ fn trim_matching_events(
     events
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn build_event_payload(
     context: &HostedTaskContext,
     task_status: Option<&str>,
     payload: Option<Value>,
-) -> Value {
+) -> Option<Value> {
     let mut object = match payload {
         Some(Value::Object(object)) => object,
         Some(value) => Map::from_iter([("value".to_string(), value)]),
@@ -921,7 +922,7 @@ fn build_event_payload(
         object.entry(key).or_insert(value);
     }
 
-    Value::Object(object)
+    Some(Value::Object(object))
 }
 
 fn serialize_event_extra<T: Serialize>(payload: T) -> Value {
@@ -1633,11 +1634,10 @@ async fn generic_oauth_authorize(
 
     let client_id = std::env::var(&oauth.client_id_env)
         .map_err(|_| AppError::internal(format!("{} not set", oauth.client_id_env)))?;
-    let redirect_uri = std::env::var("ORBIT_OAUTH_REDIRECT_BASE")
-        .map_or_else(
-            |_| format!("https://frontal-orbit.fly.dev/v1/oauth/{provider}/callback"),
-            |base| format!("{base}/v1/oauth/{provider}/callback"),
-        );
+    let redirect_uri = std::env::var("ORBIT_OAUTH_REDIRECT_BASE").map_or_else(
+        |_| format!("https://frontal-orbit.fly.dev/v1/oauth/{provider}/callback"),
+        |base| format!("{base}/v1/oauth/{provider}/callback"),
+    );
 
     let csrf_state = generate_state()
         .map_err(|e| AppError::internal(format!("state generation failed: {e}")))?;
@@ -1939,19 +1939,16 @@ async fn get_task_integration(
     let context = state.context_for(&task_id).unwrap_or_default();
     let value = serde_json::to_value(&context)
         .map_err(|e| AppError::internal(format!("failed to serialize context: {e}")))?;
-    let filtered: Value = value
-        .as_object()
-        .map(|obj| {
-            let prefix = format!("{name}_");
-            json!({
-                "metadata": obj.get("metadata").cloned().unwrap_or(Value::Object(Default::default())),
-                "fields": obj.iter()
-                    .filter(|(k, _)| k.starts_with(&prefix))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<serde_json::Map<String, Value>>(),
-            })
+    let filtered: Value = value.as_object().map_or(Value::Null, |obj| {
+        let prefix = format!("{name}_");
+        json!({
+            "metadata": obj.get("metadata").cloned().unwrap_or(Value::Object(Map::default())),
+            "fields": obj.iter()
+                .filter(|(k, _)| k.starts_with(&prefix))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<serde_json::Map<String, Value>>(),
         })
-        .unwrap_or(Value::Null);
+    });
     Ok(Json(filtered))
 }
 
@@ -2056,6 +2053,7 @@ fn reconcile_active_tasks(state: &ServerState) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn reconcile_task_from_artifacts(state: &ServerState, task_id: &str) -> Result<bool, AppError> {
     let task = state
         .tasks
@@ -2065,9 +2063,8 @@ fn reconcile_task_from_artifacts(state: &ServerState, task_id: &str) -> Result<b
         return Ok(false);
     }
 
-    let mut context = match state.context_for(task_id) {
-        Some(context) => context,
-        None => return Ok(false),
+    let Some(mut context) = state.context_for(task_id) else {
+        return Ok(false);
     };
     let Some(manifest_file) = context.worker_manifest_file.clone() else {
         return Ok(false);
@@ -2525,6 +2522,7 @@ fn retry_task_lane_internal(
     Ok(state.task_snapshot(reloaded))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn resolve_approval(
     Path(task_id): Path<String>,
     State(state): State<Arc<ServerState>>,
@@ -2668,6 +2666,7 @@ async fn resolve_approval(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn complete_task(
     Path(task_id): Path<String>,
     State(state): State<Arc<ServerState>>,
@@ -2813,7 +2812,10 @@ async fn connector_interaction(
         || request.action == "orphaned_hosted_agent.retry"
     {
         if let Some(task_id) = request.value.as_deref() {
-            let action = if request.action.ends_with(".retry") {
+            let action = if std::path::Path::new(&request.action)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("retry"))
+            {
                 "retry"
             } else {
                 "cancel"
@@ -2896,17 +2898,15 @@ async fn connector_event(
 type HmacSha256 = Hmac<Sha256>;
 
 fn verify_hmac_signature(secret: &str, signature_header: Option<&str>, body: &[u8]) -> bool {
-    let signature = match signature_header {
-        Some(sig) => sig,
-        None => return false,
+    let Some(signature) = signature_header else {
+        return false;
     };
     let hex_sig = signature.strip_prefix("sha256=").unwrap_or(signature);
     let Ok(expected) = hex::decode(hex_sig) else {
         return false;
     };
-    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
-        Ok(mac) => mac,
-        Err(_) => return false,
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
     };
     mac.update(body);
     mac.verify_slice(&expected).is_ok()
@@ -2920,7 +2920,7 @@ async fn integration_webhook(
 ) -> StatusCode {
     let secret_env = format!("ORBIT_{}_WEBHOOK_SECRET", source.to_uppercase());
     if let Ok(secret) = env::var(&secret_env) {
-        let signature_header = format!("x-{}-signature", source);
+        let signature_header = format!("x-{source}-signature");
         let signature = headers.get(&signature_header).and_then(|h| h.to_str().ok());
         if !verify_hmac_signature(&secret, signature, &body) {
             return StatusCode::UNAUTHORIZED;
@@ -3028,6 +3028,7 @@ fn find_task_for_webhook_source(
     None
 }
 
+#[allow(clippy::match_same_arms)]
 async fn stream_events(socket: WebSocket, state: Arc<ServerState>, query: EventStreamQuery) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -3054,7 +3055,7 @@ async fn stream_events(socket: WebSocket, state: Arc<ServerState>, query: EventS
                         break;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
@@ -3610,6 +3611,7 @@ fn write_local_docker_task_payload(
     Ok(payload_path)
 }
 
+#[allow(clippy::too_many_lines)]
 fn create_task_internal(state: &ServerState, request: CreateTaskRequest) -> Result<Task, AppError> {
     if request.prompt.trim().is_empty() {
         return Err(AppError::bad_request("prompt must not be empty"));
@@ -3783,7 +3785,7 @@ fn bootstrap_task_lane(
         Ok(bootstrap) => {
             context.worker_id = Some(bootstrap.worker_id.clone());
             context.worker_status = Some(bootstrap.worker_status.to_string());
-            context.checkout_root = bootstrap.checkout_root.clone();
+            context.checkout_root.clone_from(&bootstrap.checkout_root);
             context.worker_manifest_file = bootstrap
                 .artifacts
                 .as_ref()
@@ -4015,7 +4017,6 @@ fn map_work_item_source(source: Option<&str>) -> WorkItemSource {
         "github" => WorkItemSource::Github,
         "cron" => WorkItemSource::Cron,
         "webhook" => WorkItemSource::Webhook,
-        "api" => WorkItemSource::Unknown,
         _ => WorkItemSource::Unknown,
     }
 }
@@ -4061,6 +4062,7 @@ fn lane_role_from_plan_kind(plan_kind: Option<&str>) -> Option<LaneRole> {
     }
 }
 
+#[allow(clippy::await_holding_lock, clippy::too_many_lines)]
 fn hosted_subagent_type(role: Option<LaneRole>) -> &'static str {
     match role {
         Some(LaneRole::Planner) => "Plan",
@@ -4476,8 +4478,8 @@ mod tests {
     }
 
     fn write_hosted_agent_manifest(
-        path: &PathBuf,
-        output_path: &PathBuf,
+        path: &std::path::Path,
+        output_path: &std::path::Path,
         status: &str,
         error: Option<&str>,
     ) {
@@ -4550,6 +4552,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn create_task_persists_and_gets_exposed() {
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
@@ -4720,6 +4723,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn local_docker_transport_prepares_checkout_workspace_for_task() {
         let dir = temp_test_dir("orbit-server-local-docker");
         let source_repo = init_git_repo(dir.join("source"));
@@ -5075,6 +5079,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn update_task_github_persists_pr_metadata() {
         let dir = temp_test_dir("orbit-server-github-update");
         let state_file = dir.join("state.json");
@@ -6014,8 +6019,7 @@ mod tests {
         let green_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::LaneGreen)
-            .last()
+            .rfind(|event| event.event == HostedEventName::LaneGreen)
             .expect("reconciled lane green event should be emitted");
         assert_eq!(green_event.status, HostedEventStatus::Completed);
         assert_eq!(green_event.repo_id.as_deref(), Some("repo-hosted-green"));
@@ -6107,8 +6111,7 @@ mod tests {
         let failed_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::LaneFailed)
-            .last()
+            .rfind(|event| event.event == HostedEventName::LaneFailed)
             .expect("reconciled lane failed event should be emitted");
         assert_eq!(failed_event.status, HostedEventStatus::Failed);
         assert_eq!(failed_event.repo_id.as_deref(), Some("repo-hosted-red"));
@@ -6125,6 +6128,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn reconcile_endpoint_marks_orphaned_hosted_agent_as_blocked() {
         let dir = temp_test_dir("orbit-server-reconcile-orphaned");
         let manifest_file = dir.join("agent.json");
@@ -6191,8 +6195,7 @@ mod tests {
         let blocked_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::LaneBlocked)
-            .last()
+            .rfind(|event| event.event == HostedEventName::LaneBlocked)
             .expect("reconciled lane blocked event should be emitted");
         assert_eq!(blocked_event.status, HostedEventStatus::Blocked);
         assert_eq!(
@@ -6228,8 +6231,7 @@ mod tests {
         let approval_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ApprovalRequested)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ApprovalRequested)
             .expect("approval requested event should be emitted");
         assert_eq!(approval_event.status, HostedEventStatus::Pending);
         assert_eq!(
@@ -6266,6 +6268,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn orphaned_hosted_agent_waits_for_approval_delay_and_does_not_duplicate_requests() {
         let dir = temp_test_dir("orbit-server-orphan-delay");
         let manifest_file = dir.join("agent.json");
@@ -6457,8 +6460,7 @@ mod tests {
         let cancelled_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::TaskCancelled)
-            .last()
+            .rfind(|event| event.event == HostedEventName::TaskCancelled)
             .expect("auto-cancelled task event should be emitted");
         assert_eq!(cancelled_event.status, HostedEventStatus::Cancelled);
         assert!(cancelled_event
@@ -6661,6 +6663,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn repo_scoped_orphan_policy_rule_overrides_global_defaults() {
         let dir = temp_test_dir("orbit-server-orphan-policy-rule");
         let manifest_file = dir.join("agent.json");
@@ -6755,8 +6758,7 @@ mod tests {
         let blocked_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::LaneBlocked)
-            .last()
+            .rfind(|event| event.event == HostedEventName::LaneBlocked)
             .expect("repo-scoped orphan policy should emit a blocked event");
         assert_eq!(
             blocked_event
@@ -6790,6 +6792,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn resolve_orphaned_hosted_agent_approval_cancels_task() {
         let dir = temp_test_dir("orbit-server-approval-orphaned");
         let manifest_file = dir.join("agent.json");
@@ -6878,8 +6881,7 @@ mod tests {
         let resolved_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ApprovalResolved)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ApprovalResolved)
             .expect("approval resolved event should be emitted");
         assert_eq!(resolved_event.status, HostedEventStatus::Completed);
         assert_eq!(
@@ -6981,8 +6983,7 @@ mod tests {
         let resolved_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ApprovalResolved)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ApprovalResolved)
             .expect("approval resolved event should be emitted");
         assert_eq!(resolved_event.status, HostedEventStatus::Completed);
         assert_eq!(resolved_event.repo_id.as_deref(), Some("repo-hosted-retry"));
@@ -7130,6 +7131,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn github_webhook_route_correlates_pull_request_event_to_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
@@ -7206,8 +7208,7 @@ mod tests {
         let connector_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ConnectorEventReceived)
             .expect("github webhook event should be emitted");
         assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(connector_event.repo_id.as_deref(), Some("acme/payments"));
@@ -7261,6 +7262,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn github_webhook_route_persists_closed_merge_state_for_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
@@ -7362,8 +7364,7 @@ mod tests {
         let connector_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ConnectorEventReceived)
             .expect("github webhook event should be emitted");
         assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(
@@ -7379,6 +7380,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn github_review_webhook_requests_followup_for_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
@@ -7473,8 +7475,7 @@ mod tests {
         let connector_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ConnectorEventReceived)
             .expect("github review webhook event should be emitted");
         assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(
@@ -7488,6 +7489,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn github_review_approval_webhook_clears_followup_for_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
@@ -7594,8 +7596,7 @@ mod tests {
         let connector_event = state
             .replay_events()
             .into_iter()
-            .filter(|event| event.event == HostedEventName::ConnectorEventReceived)
-            .last()
+            .rfind(|event| event.event == HostedEventName::ConnectorEventReceived)
             .expect("github review approval webhook event should be emitted");
         assert_eq!(connector_event.task_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(
@@ -7609,6 +7610,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn github_webhook_route_emits_unmatched_event_without_task_binding() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
@@ -7674,6 +7676,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn linear_webhook_rejects_invalid_signature_when_secret_set() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", Some("secret"));
@@ -7715,6 +7718,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn graphite_webhook_rejects_invalid_signature_when_secret_set() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", Some("secret"));
@@ -7756,6 +7760,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn linear_webhook_matches_task_and_updates_context() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
@@ -7833,6 +7838,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn linear_webhook_no_match_returns_accepted() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
@@ -7860,6 +7866,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn graphite_webhook_matches_task_and_updates_context() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
@@ -7933,6 +7940,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn graphite_webhook_no_match_returns_accepted() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
@@ -7960,6 +7968,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn github_webhook_rejects_invalid_signature_when_secret_set() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some("secret"));
@@ -8021,6 +8030,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn webhook_routes_remain_public_when_control_plane_api_key_is_configured() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
@@ -8339,6 +8349,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     fn replay_events_filtered_matches_task_context_and_event_fields() {
         let state = ServerState::default();
         state.record_context(
@@ -8669,6 +8680,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn state_file_reconciles_hosted_task_during_server_restart() {
         let dir = temp_test_dir("orbit-server-startup-reconcile");
         let state_file = dir.join("server-state.json");
