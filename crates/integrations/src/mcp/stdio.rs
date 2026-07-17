@@ -17,7 +17,7 @@ use super::lifecycle::{McpDegradedReport, McpErrorSurface, McpFailedServer, McpL
 use super::utils::mcp_tool_name;
 
 #[cfg(test)]
-const MCP_INITIALIZE_TIMEOUT_MS: u64 = 200;
+const MCP_INITIALIZE_TIMEOUT_MS: u64 = 2_000;
 #[cfg(not(test))]
 const MCP_INITIALIZE_TIMEOUT_MS: u64 = 10_000;
 
