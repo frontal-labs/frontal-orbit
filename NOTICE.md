@@ -1,74 +1,73 @@
-# Notice
+Copyright 2026 Frontal Labs, Inc.
 
-## Attribution Notice
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file or visit:
+https://www.apache.org/licenses/LICENSE-2.0
 
-This software is based on concepts and implementations from various sources:
+ATTRIBUTION
 
-### Original Source
-This project is a fork of ultraworkers/claw-code (https://github.com/ultraworkers/claw-code)
+This project is derived from and builds upon work from the open-source
+community.
 
-### Original Inspiration
-- Conceptual framework inspired by modern AI-assisted development tools
-- Architecture patterns from distributed systems and autonomous agents
-- Development workflows from software engineering best practices
+Original project:
+- ultraworkers/claw-code
+  https://github.com/ultraworkers/claw-code
 
-### Third-party Dependencies
-This software includes and relies upon numerous open-source libraries and tools:
-- Rust ecosystem packages (crates.io)
-- Container technologies (Docker, Kubernetes)
-- Database systems (PostgreSQL, Redis, Pinecone, Neo4j)
-- AI provider APIs (Anthropic, Frontal, AWS Bedrock, Azure, OpenAI, xAI)
+This project also draws inspiration from modern AI-assisted development tools,
+distributed systems, autonomous agent architectures, and established software
+engineering practices.
 
-### Community Contributions
-This project incorporates contributions from the open-source community:
-- Code contributions from individual developers
-- Documentation and testing improvements
-- Bug reports and feature suggestions
-- Community feedback and validation
+THIRD-PARTY SOFTWARE
 
-## Disclaimer
+Orbit depends on numerous third-party open-source libraries and services,
+including but not limited to:
 
-This software is provided "as is" without warranty of any kind. The authors and
-copyright holders make no warranties, express or implied, including but not
-limited to the warranties of merchantability, fitness for a particular purpose
-and noninfringement.
+- Rust ecosystem crates
+- Docker and Kubernetes
+- PostgreSQL
+- Redis
+- Pinecone
+- Neo4j
+- AI provider APIs, including Anthropic, Frontal, AWS Bedrock, Azure OpenAI,
+  OpenAI, and xAI
 
-In no event shall the authors or copyright holders be liable for any claim,
-damages or other liability, whether in an action of contract, tort or otherwise,
-arising from, out of or in connection with the software or the use or other
-dealings in the software.
+Each dependency remains subject to its own license terms.
 
-## Trademark Notice
+COMMUNITY CONTRIBUTIONS
 
-Orbit and related marks are trademarks of Frontal Labs. Other product
-and company names mentioned herein may be trademarks of their respective owners.
+This software incorporates contributions from the open-source community,
+including code, documentation, testing, bug reports, feature requests,
+and other improvements.
 
-## Compliance
+TRADEMARK NOTICE
 
-This license does not grant you the right to use the trademarks, service marks,
-or logos of Frontal Labs or any third party. You must not use any such marks
-without prior written consent from the appropriate trademark holder.
+Orbit and Frontal Labs are trademarks or registered trademarks of
+Frontal Labs, Inc.
 
-## Privacy
+All other trademarks, service marks, and product names are the property of
+their respective owners. This license does not grant permission to use the
+trademarks, logos, or branding of Frontal Labs or any third party except as
+required for reasonable attribution or as otherwise permitted by law.
 
-This software may collect and process data in accordance with applicable
-privacy laws and regulations. Users are responsible for ensuring compliance with
-their local privacy requirements when using this software.
+PRIVACY AND COMPLIANCE
 
-## Export Control
+Users are responsible for complying with all applicable privacy, security,
+and data protection laws when using this software.
 
-This software may be subject to export controls and regulations. Users are
-responsible for compliance with all applicable export laws and regulations.
+Users are also responsible for complying with all applicable export control
+laws and regulations.
 
-## Contact
+DISCLAIMER
 
-For questions about this license or the software, please contact:
+Unless required by applicable law or agreed to in writing, this software is
+distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+either express or implied.
+
+CONTACT
 
 Frontal Labs
-Email: legal@frontal.dev
-Website: https://frontal.dev
+https://frontal.dev
+legal@frontal.dev
 
----
-
-*This notice applies to all code, documentation, and other materials in this
-repository unless otherwise specified in individual files.*
+This NOTICE applies to all source code, documentation, and other materials in
+this repository unless otherwise stated.
