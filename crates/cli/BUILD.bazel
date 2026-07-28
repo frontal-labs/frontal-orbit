@@ -1,0 +1,62 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        ["**/*.rs"],
+        exclude = ["**/target/**"],
+    ) + ["Cargo.toml"],
+)
+
+filegroup(
+    name = "test_srcs",
+    srcs = glob(["tests/**/*.rs"]),
+)
+
+sh_binary(
+    name = "orbit",
+    srcs = ["//tools:crate.sh"],
+    args = [
+        "orbit-cli",
+        "run",
+    ],
+)
+
+sh_test(
+    name = "test",
+    srcs = ["//tools:crate.sh"],
+    args = [
+        "orbit-cli",
+        "test",
+    ],
+    tags = [
+        "rust",
+        "test",
+    ],
+)
+
+sh_test(
+    name = "fmt",
+    srcs = ["//tools:crate.sh"],
+    args = [
+        "orbit-cli",
+        "fmt-check",
+    ],
+    tags = [
+        "fmt",
+        "rust",
+    ],
+)
+
+sh_test(
+    name = "lint",
+    srcs = ["//tools:crate.sh"],
+    args = [
+        "orbit-cli",
+        "clippy",
+    ],
+    tags = [
+        "lint",
+        "rust",
+    ],
+)

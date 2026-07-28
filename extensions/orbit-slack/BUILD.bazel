@@ -1,0 +1,68 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        [
+            "src/**/*",
+            "tests/**/*",
+        ],
+        exclude = [
+            "node_modules/**",
+            "dist/**",
+            "coverage/**",
+            "BUILD.bazel",
+        ],
+    ),
+)
+
+filegroup(
+    name = "config_srcs",
+    srcs = [
+        "biome.json",
+        "bun.lock",
+        "bunfig.toml",
+        "package.json",
+        "tsconfig.json",
+        "vitest.config.ts",
+    ],
+)
+
+sh_test(
+    name = "lint",
+    srcs = ["//tools:extension.sh"],
+    args = [
+        "extensions/orbit-slack",
+        "lint",
+    ],
+    tags = [
+        "lint",
+        "typescript",
+    ],
+)
+
+sh_test(
+    name = "build",
+    srcs = ["//tools:extension.sh"],
+    args = [
+        "extensions/orbit-slack",
+        "build",
+    ],
+    tags = [
+        "build",
+        "typescript",
+    ],
+)
+
+sh_test(
+    name = "test",
+    srcs = ["//tools:extension.sh"],
+    args = [
+        "extensions/orbit-slack",
+        "test",
+    ],
+    tags = [
+        "test",
+        "typescript",
+    ],
+)

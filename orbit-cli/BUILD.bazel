@@ -1,0 +1,47 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        [
+            "bin/**",
+            "lib/**",
+            "scripts/**",
+        ],
+        exclude = [
+            "node_modules/**",
+            "vendor/**",
+            "BUILD.bazel",
+        ],
+    ) + ["package.json"],
+)
+
+sh_test(
+    name = "test",
+    srcs = ["//tools:cli.sh"],
+    args = ["test"],
+    tags = [
+        "test",
+        "typescript",
+    ],
+)
+
+sh_test(
+    name = "lint",
+    srcs = ["//tools:cli.sh"],
+    args = ["lint"],
+    tags = [
+        "lint",
+        "typescript",
+    ],
+)
+
+sh_test(
+    name = "build",
+    srcs = ["//tools:cli.sh"],
+    args = ["build"],
+    tags = [
+        "build",
+        "typescript",
+    ],
+)

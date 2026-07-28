@@ -1,0 +1,27 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        ["**/*"],
+        exclude = [
+            "**/target/**",
+            "BUILD.bazel",
+        ],
+    ),
+)
+
+sh_test(
+    name = "core_config_example",
+    srcs = ["//tools:crate.sh"],
+    args = [
+        "orbit-core",
+        "run",
+        "--example",
+        "core_config_example",
+    ],
+    tags = [
+        "example",
+        "rust",
+    ],
+)

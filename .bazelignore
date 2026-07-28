@@ -8,6 +8,10 @@ __pycache__
 # Node
 node_modules
 
+# Build outputs
+dist/
+vendor/
+
 # Rust build artifacts
 target/
 rust/target

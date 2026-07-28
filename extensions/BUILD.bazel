@@ -1,0 +1,9 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all_extensions",
+    srcs = [
+        "//extensions/orbit-ide:srcs",
+        "//extensions/orbit-slack:srcs",
+    ],
+)

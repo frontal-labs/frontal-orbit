@@ -1,0 +1,30 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all_crates",
+    srcs = [
+        "//crates/agents:srcs",
+        "//crates/api:srcs",
+        "//crates/cli:srcs",
+        "//crates/commands:srcs",
+        "//crates/core:srcs",
+        "//crates/embeddings:srcs",
+        "//crates/events:srcs",
+        "//crates/harness:srcs",
+        "//crates/indexer:srcs",
+        "//crates/integrations:srcs",
+        "//crates/memory:srcs",
+        "//crates/observability:srcs",
+        "//crates/orchestrator:srcs",
+        "//crates/plugins:srcs",
+        "//crates/providers:srcs",
+        "//crates/repo:srcs",
+        "//crates/runtime:srcs",
+        "//crates/sandbox:srcs",
+        "//crates/server:srcs",
+        "//crates/telemetry:srcs",
+        "//crates/tools:srcs",
+        "//crates/training:srcs",
+        "//crates/webhooks:srcs",
+    ],
+)

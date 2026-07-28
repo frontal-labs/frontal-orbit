@@ -4,6 +4,9 @@ package(default_visibility = ["//visibility:public"])
 # It execs `cargo run -p tools-<name>` from the workspace checkout.
 exports_files([
     "cargo_run.sh",
+    "crate.sh",
+    "extension.sh",
+    "cli.sh",
     "format.sh",
     "lint.sh",
     "lint.bzl",

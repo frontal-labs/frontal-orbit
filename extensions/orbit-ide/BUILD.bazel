@@ -1,0 +1,39 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        ["**/*"],
+        exclude = [
+            "node_modules/**",
+            ".git/**",
+            "BUILD.bazel",
+        ],
+    ),
+)
+
+sh_test(
+    name = "lint",
+    srcs = ["//tools:extension.sh"],
+    args = [
+        "extensions/orbit-ide",
+        "lint",
+    ],
+    tags = [
+        "lint",
+        "typescript",
+    ],
+)
+
+sh_test(
+    name = "build",
+    srcs = ["//tools:extension.sh"],
+    args = [
+        "extensions/orbit-ide",
+        "build",
+    ],
+    tags = [
+        "build",
+        "typescript",
+    ],
+)
