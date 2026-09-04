@@ -10,7 +10,7 @@
     "changeset:version": "changeset version",
     "changeset:publish": "changeset publish"
   },
-  "packages": [
+  "workspaces": [
     "sdk/typescript",
     "orbit-cli"
   ]
