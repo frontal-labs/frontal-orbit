@@ -624,11 +624,16 @@ mod tests {
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should move forward")
             .as_nanos();
-        std::env::temp_dir().join(format!("orbit-native-{name}-{unique}"))
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("orbit-native-{name}-{unique}-{pid}-{serial}"))
     }
 
     #[test]

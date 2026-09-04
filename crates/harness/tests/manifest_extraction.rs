@@ -246,8 +246,13 @@ fn upstream_paths_equality() {
 }
 
 fn temp_dir() -> PathBuf {
+    // Timestamp alone collides when parallel tests read the same instant.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let pid = std::process::id();
+    let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "orbit-harness-test-{}",
+        "orbit-harness-test-{}-{pid}-{serial}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

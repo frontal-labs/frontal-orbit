@@ -4023,7 +4023,7 @@ fn parse_skill_frontmatter_value(contents: &str, key: &str) -> Option<String> {
     None
 }
 
-const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_AGENT_MODEL: &str = "claude-opus-5";
 const DEFAULT_AGENT_SYSTEM_DATE: &str = "2026-03-31";
 const DEFAULT_AGENT_MAX_ITERATIONS: usize = 32;
 
@@ -6519,11 +6519,16 @@ mod tests {
     }
 
     fn temp_path(name: &str) -> PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        std::env::temp_dir().join(format!("orbit-tools-{unique}-{name}"))
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("orbit-tools-{pid}-{unique}-{serial}-{name}"))
     }
 
     struct EnvRestoreGuard {
@@ -7951,7 +7956,7 @@ mod tests {
             name: "status-terminal".to_string(),
             description: "terminal status test".to_string(),
             subagent_type: Some("Explore".to_string()),
-            model: Some("claude-opus-4-6".to_string()),
+            model: Some("claude-opus-5".to_string()),
             status: "completed".to_string(),
             output_file: dir.join("agent-status-terminal.md").display().to_string(),
             manifest_file: dir.join("agent-status-terminal.json").display().to_string(),
@@ -8000,7 +8005,7 @@ mod tests {
             name: "cancel-fallback".to_string(),
             description: "cancel fallback test".to_string(),
             subagent_type: Some("Explore".to_string()),
-            model: Some("claude-opus-4-6".to_string()),
+            model: Some("claude-opus-5".to_string()),
             status: "running".to_string(),
             output_file: dir.join("agent-cancel-fallback.md").display().to_string(),
             manifest_file: dir.join("agent-cancel-fallback.json").display().to_string(),
@@ -8318,7 +8323,7 @@ mod tests {
             name: "cancel-test".to_string(),
             description: "cancel test".to_string(),
             subagent_type: Some("Explore".to_string()),
-            model: Some("claude-opus-4-6".to_string()),
+            model: Some("claude-opus-5".to_string()),
             status: "running".to_string(),
             output_file: "cancel-test.md".to_string(),
             manifest_file: "cancel-test.json".to_string(),
@@ -9332,7 +9337,10 @@ mod tests {
     fn repl_executes_python_code() {
         let result = execute_tool(
             "REPL",
-            &json!({"language": "python", "code": "print(1 + 1)", "timeout_ms": 500}),
+            // Generous timeout: this asserts the REPL plumbing, not latency, and
+            // interpreter startup can take well over half a second when the rest
+            // of the suite is running in parallel.
+            &json!({"language": "python", "code": "print(1 + 1)", "timeout_ms": 30_000}),
         )
         .expect("REPL should succeed");
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
