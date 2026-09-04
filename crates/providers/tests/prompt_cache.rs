@@ -50,28 +50,24 @@ fn cache_break_event_construction() {
 #[test]
 fn prompt_cache_new() {
     let cache = PromptCache::new("test-session");
-    assert!(
-        cache
-            .paths()
-            .session_dir
-            .to_str()
-            .unwrap_or("")
-            .contains("test-session")
-    );
+    assert!(cache
+        .paths()
+        .session_dir
+        .to_str()
+        .unwrap_or("")
+        .contains("test-session"));
 }
 
 #[test]
 fn prompt_cache_new_with_config() {
     let config = PromptCacheConfig::new("configured-session");
     let cache = PromptCache::with_config(config);
-    assert!(
-        cache
-            .paths()
-            .session_dir
-            .to_str()
-            .unwrap_or("")
-            .contains("configured-session")
-    );
+    assert!(cache
+        .paths()
+        .session_dir
+        .to_str()
+        .unwrap_or("")
+        .contains("configured-session"));
 }
 
 #[test]

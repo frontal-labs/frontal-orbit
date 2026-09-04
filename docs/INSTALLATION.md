@@ -166,7 +166,7 @@ Once installed, you can start using Orbit:
 
 ```bash
 # Interactive REPL
-orbit --model claude-opus-4-6
+orbit --model claude-opus-5
 
 # One-shot prompt
 orbit prompt "explain this codebase"

@@ -94,7 +94,7 @@ pub struct ThreadOptions {
   pub skip_git_repo_check: bool,
   /// Provider override (e.g. `anthropic`, `frontal`).
   pub provider: Option<String>,
-  /// Model override (e.g. `opus`, `claude-opus-4-6`).
+  /// Model override (e.g. `opus`, `claude-opus-5`).
   pub model: Option<String>,
   /// Permission mode override.
   pub permission_mode: Option<String>,

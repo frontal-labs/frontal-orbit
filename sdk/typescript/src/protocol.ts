@@ -74,7 +74,7 @@ export interface ThreadOptions {
   skipGitRepoCheck?: boolean;
   /** Provider override (e.g. `anthropic`, `frontal`). */
   provider?: string;
-  /** Model override (e.g. `opus`, `claude-opus-4-6`). */
+  /** Model override (e.g. `opus`, `claude-opus-5`). */
   model?: string;
   /** Permission mode override. */
   permissionMode?: string;

@@ -82,7 +82,7 @@ orbit benchmark --compare baseline
 ```json
 {
   "models": {
-    "claude-opus-4-6": {
+    "claude-opus-5": {
       "max_tokens": 4096,
       "temperature": 0.7,
       "top_p": 0.9,
@@ -98,7 +98,7 @@ orbit benchmark --compare baseline
       "timeout": 180,
       "cache_enabled": true
     },
-    "claude-haiku-4-5-20251213": {
+    "claude-haiku-4-5": {
       "max_tokens": 4096,
       "temperature": 0.7,
       "top_p": 0.9,
@@ -588,7 +588,7 @@ orbit recommend performance
 {
   "profile": "development",
   "models": {
-    "default": "claude-haiku-4-5-20251213",
+    "default": "claude-haiku-4-5",
     "max_tokens": 2048
   },
   "caching": {
@@ -636,7 +636,7 @@ orbit recommend performance
 {
   "profile": "high_performance",
   "models": {
-    "default": "claude-opus-4-6",
+    "default": "claude-opus-5",
     "max_tokens": 8192
   },
   "concurrency": {

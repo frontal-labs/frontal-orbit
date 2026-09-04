@@ -55,7 +55,7 @@ The main binary is named `orbit` and can be used in multiple ways:
 orbit
 
 # Start with specific model
-orbit --model claude-opus-4-6
+orbit --model claude-opus-5
 
 # Start with specific permissions
 orbit --permission-mode workspace-write
@@ -167,9 +167,9 @@ The REPL provides 50+ slash commands organized by category:
 
 ## Model Aliases
 
-- `opus` - `claude-opus-4-6`
+- `opus` - `claude-opus-5`
 - `sonnet` - `claude-sonnet-4-6`
-- `haiku` - `claude-haiku-4-5-20251213`
+- `haiku` - `claude-haiku-4-5`
 
 ## Development
 

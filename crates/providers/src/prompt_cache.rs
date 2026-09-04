@@ -697,7 +697,7 @@ mod tests {
 
     fn sample_request(text: &str) -> MessageRequest {
         MessageRequest {
-            model: "claude-3-7-sonnet-latest".to_string(),
+            model: "claude-sonnet-5".to_string(),
             max_tokens: 64,
             messages: vec![InputMessage::user_text(text)],
             system: Some("system".to_string()),
@@ -719,7 +719,7 @@ mod tests {
             content: vec![OutputContentBlock::Text {
                 text: text.to_string(),
             }],
-            model: "claude-3-7-sonnet-latest".to_string(),
+            model: "claude-sonnet-5".to_string(),
             stop_reason: Some("end_turn".to_string()),
             stop_sequence: None,
             usage: Usage {
