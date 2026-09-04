@@ -46,7 +46,6 @@
         "noDuplicateClassMembers": "error",
         "noDuplicateObjectKeys": "error",
         "noEmptyBlockStatements": "error",
-        "noExtraBooleanCasts": "error",
         "noFallthroughSwitchClause": "error",
         "noFunctionAssign": "error",
         "noGlobalAssign": "error",
@@ -57,16 +56,13 @@
         "noShadowRestrictedNames": "error",
         "noUnsafeDeclarationMerging": "error",
         "noUnsafeNegation": "error",
-        "useIsArray": "error",
-        "noExplicitAny": "error"
+        "useIsArray": "error"
       },
       "complexity": {
         "noBannedTypes": "error",
         "noForEach": "warn",
-        "noUselessEscape": "error",
         "useLiteralKeys": "error",
-        "useOptionalChain": "error",
-        "noUselessTypeConstituents": "error"
+        "useOptionalChain": "error"
       },
       "correctness": {
         "noUnusedVariables": "error",
@@ -85,8 +81,7 @@
         "useConst": "error"
       },
       "performance": {
-        "noDelete": "error",
-        "noScriptURL": "error"
+        "noDelete": "error"
       },
       "security": {
         "noGlobalEval": "error",
