@@ -326,13 +326,20 @@ mod tests {
     };
 
     fn temp_dir() -> PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
         let unique_id = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("runtime-mcp-tool-bridge-{nanos}-{unique_id}"))
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "runtime-mcp-tool-bridge-{nanos}-{unique_id}-{pid}-{serial}"
+        ))
     }
 
     fn cleanup_script(script_path: &Path) {

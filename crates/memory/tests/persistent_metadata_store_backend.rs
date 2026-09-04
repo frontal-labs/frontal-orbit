@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use orbit_memory::{MemoryMetadata, MemoryMetadataStore, MemoryScope};
@@ -10,11 +11,16 @@ mod persistent_metadata_store;
 use persistent_metadata_store::PersistentFileMetadataStore;
 
 fn temp_file_path(label: &str) -> PathBuf {
+    // Timestamp alone collides when parallel tests read the same instant.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    std::env::temp_dir().join(format!("orbit-memory-{label}-{stamp}.tsv"))
+    let pid = std::process::id();
+    let serial = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("orbit-memory-{label}-{pid}-{stamp}-{serial}.tsv"))
 }
 
 #[test]

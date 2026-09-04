@@ -2278,11 +2278,16 @@ mod tests {
     use super::*;
 
     fn temp_dir(label: &str) -> PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("plugins-{label}-{nanos}"))
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("plugins-{label}-{pid}-{nanos}-{serial}"))
     }
 
     fn write_file(path: &Path, contents: &str) {

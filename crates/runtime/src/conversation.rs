@@ -1446,11 +1446,18 @@ mod tests {
     }
 
     fn temp_session_path(label: &str) -> PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("runtime-conversation-{label}-{nanos}.json"))
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "runtime-conversation-{label}-{nanos}-{pid}-{serial}.json"
+        ))
     }
 
     #[cfg(windows)]

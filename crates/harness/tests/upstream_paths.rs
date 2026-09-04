@@ -76,8 +76,13 @@ fn paths_from_workspace_dir_uses_parent_for_repo_root() {
 }
 
 fn temp_dir() -> PathBuf {
+    // Timestamp alone collides when parallel tests read the same instant.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let pid = std::process::id();
+    let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "orbit-upstream-paths-test-{}",
+        "orbit-upstream-paths-test-{}-{pid}-{serial}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
