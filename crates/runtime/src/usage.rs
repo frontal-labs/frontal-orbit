@@ -1,9 +1,11 @@
 use crate::session::Session;
 
-const DEFAULT_INPUT_COST_PER_MILLION: f64 = 15.0;
-const DEFAULT_OUTPUT_COST_PER_MILLION: f64 = 75.0;
-const DEFAULT_CACHE_CREATION_COST_PER_MILLION: f64 = 18.75;
-const DEFAULT_CACHE_READ_COST_PER_MILLION: f64 = 1.5;
+// Sonnet-tier list pricing, in US dollars per million tokens. Cache writes are
+// 1.25x the input rate and cache reads 0.1x, per the published cache pricing.
+const DEFAULT_INPUT_COST_PER_MILLION: f64 = 3.0;
+const DEFAULT_OUTPUT_COST_PER_MILLION: f64 = 15.0;
+const DEFAULT_CACHE_CREATION_COST_PER_MILLION: f64 = 3.75;
+const DEFAULT_CACHE_READ_COST_PER_MILLION: f64 = 0.3;
 
 /// Per-million-token pricing used for cost estimation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,11 +69,13 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
         });
     }
     if normalized.contains("opus") {
+        // Opus has been $5/$25 per million since the 4.x generation; cache
+        // writes are 1.25x input and cache reads 0.1x input.
         return Some(ModelPricing {
-            input_cost_per_million: 15.0,
-            output_cost_per_million: 75.0,
-            cache_creation_cost_per_million: 18.75,
-            cache_read_cost_per_million: 1.5,
+            input_cost_per_million: 5.0,
+            output_cost_per_million: 25.0,
+            cache_creation_cost_per_million: 6.25,
+            cache_read_cost_per_million: 0.5,
         });
     }
     if normalized.contains("sonnet") {
@@ -253,12 +257,12 @@ mod tests {
         };
 
         let cost = usage.estimate_cost_usd();
-        assert_eq!(format_usd(cost.input_cost_usd), "$15.0000");
-        assert_eq!(format_usd(cost.output_cost_usd), "$37.5000");
+        assert_eq!(format_usd(cost.input_cost_usd), "$3.0000");
+        assert_eq!(format_usd(cost.output_cost_usd), "$7.5000");
         let lines = usage.summary_lines_for_model("usage", Some("claude-sonnet-4-20250514"));
-        assert!(lines[0].contains("estimated_cost=$54.6750"));
+        assert!(lines[0].contains("estimated_cost=$10.9350"));
         assert!(lines[0].contains("model=claude-sonnet-4-20250514"));
-        assert!(lines[1].contains("cache_read=$0.3000"));
+        assert!(lines[1].contains("cache_read=$0.0600"));
     }
 
     #[test]
@@ -271,11 +275,11 @@ mod tests {
         };
 
         let haiku = pricing_for_model("claude-haiku-4-5-20251001").expect("haiku pricing");
-        let opus = pricing_for_model("claude-opus-4-6").expect("opus pricing");
+        let opus = pricing_for_model("claude-opus-5").expect("opus pricing");
         let haiku_cost = usage.estimate_cost_usd_with_pricing(haiku);
         let opus_cost = usage.estimate_cost_usd_with_pricing(opus);
         assert_eq!(format_usd(haiku_cost.total_cost_usd()), "$3.5000");
-        assert_eq!(format_usd(opus_cost.total_cost_usd()), "$52.5000");
+        assert_eq!(format_usd(opus_cost.total_cost_usd()), "$17.5000");
     }
 
     #[test]
