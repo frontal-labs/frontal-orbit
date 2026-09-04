@@ -9,7 +9,6 @@
 # Core CLI and API
 crates/cli/ @frontal-labs @gabrielvfonseca
 crates/api/ @frontal-labs
-crates/agents/ @frontal-labs
 
 # Documentation
 docs/ @frontal-labs
