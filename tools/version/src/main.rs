@@ -133,7 +133,11 @@ fn main() -> Result<()> {
         Cmd::Set { version } => {
             Version::parse(version).with_context(|| format!("parsing {version}"))?
         }
-        Cmd::Changeset => todo!(),
+        Cmd::Changeset => anyhow::bail!(
+            "`version changeset` is not implemented yet.\n\
+             Run `bun changeset version` to update the npm package versions, then \
+             `version set <version>` to sync Cargo.toml and MODULE.bazel."
+        ),
     };
 
     println!("{cur} -> {next}");
