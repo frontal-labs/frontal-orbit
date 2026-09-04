@@ -1577,7 +1577,50 @@ pub fn app(state: Arc<ServerState>) -> Router {
         .with_state(state)
 }
 
+/// Environment variable that lets an operator deliberately run the control
+/// plane with no API key (local development, or a trusted private network).
+const ALLOW_ANONYMOUS_ENV: &str = "ORBIT_SERVER_ALLOW_ANONYMOUS";
+
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Refuse to start an unauthenticated control plane unless the operator has
+/// explicitly opted in.
+///
+/// Every route behind [`require_control_plane_auth`] mutates task state —
+/// creating, cancelling and completing agent work — so an unset API key must
+/// be a deliberate choice rather than a silent default.
+fn check_auth_posture(config: &ServerConfig) -> Result<(), String> {
+    if config.api_key.is_some() {
+        return Ok(());
+    }
+
+    let allowed = env::var(ALLOW_ANONYMOUS_ENV).is_ok_and(|value| is_truthy(&value));
+    if !allowed {
+        return Err(format!(
+            "refusing to start: ORBIT_SERVER_API_KEY is not set, so every control-plane \
+             route (task create/cancel/complete/approval, connector events, the event \
+             stream) would accept unauthenticated requests.\n\
+             Set ORBIT_SERVER_API_KEY to a secret, or set {ALLOW_ANONYMOUS_ENV}=1 to \
+             accept an open control plane on a trusted network."
+        ));
+    }
+
+    eprintln!(
+        "warning: {ALLOW_ANONYMOUS_ENV} is set and ORBIT_SERVER_API_KEY is not — the \
+         control plane will accept unauthenticated requests on {}",
+        config.bind_addr
+    );
+    Ok(())
+}
+
 pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    check_auth_posture(&config)?;
+
     let state = Arc::new(
         ServerState::new_with_transport_kind_state_file_policy_and_workspace_root(
             config.event_replay_limit,
@@ -2912,19 +2955,43 @@ fn verify_hmac_signature(secret: &str, signature_header: Option<&str>, body: &[u
     mac.verify_slice(&expected).is_ok()
 }
 
+/// Webhook sources map onto `ORBIT_<SOURCE>_WEBHOOK_SECRET`, so restrict them to
+/// a shape that can only name a variable an operator deliberately created.
+fn is_valid_webhook_source(source: &str) -> bool {
+    !source.is_empty()
+        && source.len() <= 64
+        && source
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 async fn integration_webhook(
     Path(source): Path<String>,
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    // `source` is a caller-controlled path segment that we turn into an
+    // environment variable name, so constrain it before looking anything up.
+    if !is_valid_webhook_source(&source) {
+        return StatusCode::NOT_FOUND;
+    }
+
+    // This route sits outside the control-plane auth layer, so the signature is
+    // the only thing standing between an anonymous POST and task-state
+    // mutation. An unconfigured secret is a rejection, never a bypass.
     let secret_env = format!("ORBIT_{}_WEBHOOK_SECRET", source.to_uppercase());
-    if let Ok(secret) = env::var(&secret_env) {
-        let signature_header = format!("x-{source}-signature");
-        let signature = headers.get(&signature_header).and_then(|h| h.to_str().ok());
-        if !verify_hmac_signature(&secret, signature, &body) {
-            return StatusCode::UNAUTHORIZED;
-        }
+    let Ok(secret) = env::var(&secret_env) else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    if secret.trim().is_empty() {
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let signature_header = format!("x-{source}-signature");
+    let signature = headers.get(&signature_header).and_then(|h| h.to_str().ok());
+    if !verify_hmac_signature(&secret, signature, &body) {
+        return StatusCode::UNAUTHORIZED;
     }
 
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
@@ -4129,6 +4196,37 @@ mod tests {
     use std::path::PathBuf;
     use tower::util::ServiceExt;
 
+    const TEST_WEBHOOK_SECRET: &str = "test-webhook-secret";
+
+    fn sign_webhook_body(secret: &str, body: &[u8]) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("hmac accepts key");
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// Build a correctly signed webhook request for `source`.
+    fn webhook_request(
+        source: &str,
+        extra_headers: &[(&str, &str)],
+        payload: &serde_json::Value,
+    ) -> Request<Body> {
+        let body = serde_json::to_vec(payload).expect("payload should serialize");
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/webhooks/{source}"))
+            .header("content-type", "application/json")
+            .header(
+                format!("x-{source}-signature"),
+                sign_webhook_body(TEST_WEBHOOK_SECRET, &body),
+            );
+        for (key, value) in extra_headers {
+            builder = builder.header(*key, *value);
+        }
+        builder
+            .body(Body::from(body))
+            .expect("request should build")
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<std::ffi::OsString>,
@@ -4431,11 +4529,16 @@ mod tests {
     }
 
     fn temp_test_dir(prefix: &str) -> PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("{prefix}-{unique}-{pid}-{serial}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -4493,7 +4596,7 @@ mod tests {
                 "name": "test-agent",
                 "description": "test hosted agent artifact",
                 "subagentType": "Explore",
-                "model": "claude-opus-4-6",
+                "model": "claude-opus-5",
                 "status": status,
                 "outputFile": output_path.display().to_string(),
                 "manifestFile": path.display().to_string(),
@@ -7134,7 +7237,7 @@ mod tests {
     #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn github_webhook_route_correlates_pull_request_event_to_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7168,39 +7271,32 @@ mod tests {
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
         let webhook_response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/github")
-                    .header("content-type", "application/json")
-                    .header("x-github-event", "pull_request")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "action": "synchronize",
-                            "task_id": task_id,
-                            "repository": {
-                                "full_name": "acme/payments"
-                            },
-                            "pull_request": {
-                                "number": 42,
-                                "state": "open",
-                                "html_url": "https://github.com/acme/payments/pull/42",
-                                "head": {
-                                    "ref": "orbit/fix-flake",
-                                    "sha": "abc123def456"
-                                },
-                                "base": {
-                                    "ref": "main"
-                                }
-                            },
-                            "sender": {
-                                "login": "octocat"
-                            }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "pull_request")],
+                &json!({
+                    "action": "synchronize",
+                    "task_id": task_id,
+                    "repository": {
+                        "full_name": "acme/payments"
+                    },
+                    "pull_request": {
+                        "number": 42,
+                        "state": "open",
+                        "html_url": "https://github.com/acme/payments/pull/42",
+                        "head": {
+                            "ref": "orbit/fix-flake",
+                            "sha": "abc123def456"
+                        },
+                        "base": {
+                            "ref": "main"
+                        }
+                    },
+                    "sender": {
+                        "login": "octocat"
+                    }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
@@ -7265,7 +7361,7 @@ mod tests {
     #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn github_webhook_route_persists_closed_merge_state_for_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7296,35 +7392,28 @@ mod tests {
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
         let webhook_response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/github")
-                    .header("content-type", "application/json")
-                    .header("x-github-event", "pull_request")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "action": "closed",
-                            "task_id": task_id,
-                            "repository": {
-                                "full_name": "acme/payments"
-                            },
-                            "pull_request": {
-                                "number": 42,
-                                "state": "closed",
-                                "merged": true,
-                                "merged_at": "2026-04-09T12:00:00Z",
-                                "closed_at": "2026-04-09T12:00:00Z",
-                                "html_url": "https://github.com/acme/payments/pull/42"
-                            },
-                            "sender": {
-                                "login": "octocat"
-                            }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "pull_request")],
+                &json!({
+                    "action": "closed",
+                    "task_id": task_id,
+                    "repository": {
+                        "full_name": "acme/payments"
+                    },
+                    "pull_request": {
+                        "number": 42,
+                        "state": "closed",
+                        "merged": true,
+                        "merged_at": "2026-04-09T12:00:00Z",
+                        "closed_at": "2026-04-09T12:00:00Z",
+                        "html_url": "https://github.com/acme/payments/pull/42"
+                    },
+                    "sender": {
+                        "login": "octocat"
+                    }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
@@ -7383,7 +7472,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn github_review_webhook_requests_followup_for_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7414,35 +7503,28 @@ mod tests {
         let task_id = created["task_id"].as_str().unwrap().to_string();
 
         let webhook_response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/github")
-                    .header("content-type", "application/json")
-                    .header("x-github-event", "pull_request_review")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "action": "submitted",
-                            "task_id": task_id,
-                            "repository": {
-                                "full_name": "acme/payments"
-                            },
-                            "pull_request": {
-                                "number": 42,
-                                "html_url": "https://github.com/acme/payments/pull/42"
-                            },
-                            "review": {
-                                "state": "changes_requested",
-                                "body": "Please add more tests"
-                            },
-                            "sender": {
-                                "login": "reviewer"
-                            }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "pull_request_review")],
+                &json!({
+                    "action": "submitted",
+                    "task_id": task_id,
+                    "repository": {
+                        "full_name": "acme/payments"
+                    },
+                    "pull_request": {
+                        "number": 42,
+                        "html_url": "https://github.com/acme/payments/pull/42"
+                    },
+                    "review": {
+                        "state": "changes_requested",
+                        "body": "Please add more tests"
+                    },
+                    "sender": {
+                        "login": "reviewer"
+                    }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
@@ -7492,7 +7574,7 @@ mod tests {
     #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
     async fn github_review_approval_webhook_clears_followup_for_hosted_task() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7535,35 +7617,28 @@ mod tests {
         );
 
         let webhook_response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/github")
-                    .header("content-type", "application/json")
-                    .header("x-github-event", "pull_request_review")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "action": "submitted",
-                            "task_id": task_id,
-                            "repository": {
-                                "full_name": "acme/payments"
-                            },
-                            "pull_request": {
-                                "number": 42,
-                                "html_url": "https://github.com/acme/payments/pull/42"
-                            },
-                            "review": {
-                                "state": "approved",
-                                "body": "Looks good"
-                            },
-                            "sender": {
-                                "login": "reviewer"
-                            }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "pull_request_review")],
+                &json!({
+                    "action": "submitted",
+                    "task_id": task_id,
+                    "repository": {
+                        "full_name": "acme/payments"
+                    },
+                    "pull_request": {
+                        "number": 42,
+                        "html_url": "https://github.com/acme/payments/pull/42"
+                    },
+                    "review": {
+                        "state": "approved",
+                        "body": "Looks good"
+                    },
+                    "sender": {
+                        "login": "reviewer"
+                    }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
@@ -7613,37 +7688,30 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn github_webhook_route_emits_unmatched_event_without_task_binding() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
         let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/github")
-                    .header("content-type", "application/json")
-                    .header("x-github-event", "issue_comment")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "action": "created",
-                            "repository": {
-                                "full_name": "acme/unmatched"
-                            },
-                            "issue": {
-                                "number": 7
-                            },
-                            "comment": {
-                                "body": "Looks good to me"
-                            },
-                            "sender": {
-                                "login": "reviewer"
-                            }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "issue_comment")],
+                &json!({
+                    "action": "created",
+                    "repository": {
+                        "full_name": "acme/unmatched"
+                    },
+                    "issue": {
+                        "number": 7
+                    },
+                    "comment": {
+                        "body": "Looks good to me"
+                    },
+                    "sender": {
+                        "login": "reviewer"
+                    }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -7763,7 +7831,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn linear_webhook_matches_task_and_updates_context() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7799,26 +7867,20 @@ mod tests {
 
         let webhook_response = router
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/linear")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "type": "issue.updated",
-                            "issue": {
-                                "id": "iss_test_42",
-                                "identifier": "LIN-42",
-                                "url": "https://linear.app/acme/issue/LIN-42",
-                                "state": "in_progress"
-                            },
-                            "actor": { "id": "user-1" }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "linear",
+                &[],
+                &json!({
+                    "type": "issue.updated",
+                    "issue": {
+                        "id": "iss_test_42",
+                        "identifier": "LIN-42",
+                        "url": "https://linear.app/acme/issue/LIN-42",
+                        "state": "in_progress"
+                    },
+                    "actor": { "id": "user-1" }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
@@ -7841,25 +7903,19 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn linear_webhook_no_match_returns_accepted() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_LINEAR_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
         let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/linear")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "type": "issue.updated",
-                            "issue": { "id": "iss_nonexistent", "identifier": "LIN-99" }
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "linear",
+                &[],
+                &json!({
+                    "type": "issue.updated",
+                    "issue": { "id": "iss_nonexistent", "identifier": "LIN-99" }
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -7869,7 +7925,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn graphite_webhook_matches_task_and_updates_context() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
@@ -7904,23 +7960,17 @@ mod tests {
 
         let webhook_response = router
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/graphite")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "type": "stack.updated",
-                            "stack_id": "stack_test_7",
-                            "head_branch": "feature/graphite-test",
-                            "base_branch": "main",
-                            "actor": "user-1"
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "graphite",
+                &[],
+                &json!({
+                    "type": "stack.updated",
+                    "stack_id": "stack_test_7",
+                    "head_branch": "feature/graphite-test",
+                    "base_branch": "main",
+                    "actor": "user-1"
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(webhook_response.status(), StatusCode::ACCEPTED);
@@ -7943,25 +7993,19 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn graphite_webhook_no_match_returns_accepted() {
         let _lock = CONNECTOR_WEBHOOK_ENV_LOCK.lock().unwrap();
-        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", None);
+        let _secret = EnvVarGuard::set("ORBIT_GRAPHITE_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(ServerState::default());
         let router = app(state.clone());
 
         let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/graphite")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "type": "stack.updated",
-                            "stack_id": "stack_nonexistent"
-                        }))
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "graphite",
+                &[],
+                &json!({
+                    "type": "stack.updated",
+                    "stack_id": "stack_nonexistent"
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -8031,9 +8075,92 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn webhook_routes_remain_public_when_control_plane_api_key_is_configured() {
+    async fn webhook_rejects_delivery_when_no_secret_is_configured() {
         let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
         let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", None);
+        let router = app(Arc::new(ServerState::default()));
+
+        let response = router
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "pull_request")],
+                &json!({ "action": "opened" }),
+            ))
+            .await
+            .unwrap();
+
+        // Without a configured secret there is nothing to verify against, so
+        // the delivery must be refused rather than trusted.
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn webhook_rejects_delivery_when_secret_is_blank() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some("   "));
+        let router = app(Arc::new(ServerState::default()));
+
+        let response = router
+            .oneshot(webhook_request(
+                "github",
+                &[],
+                &json!({ "action": "opened" }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn webhook_source_rejects_names_outside_the_allowed_shape() {
+        assert!(is_valid_webhook_source("github"));
+        assert!(is_valid_webhook_source("my-source_2"));
+
+        assert!(!is_valid_webhook_source(""));
+        assert!(!is_valid_webhook_source("git hub"));
+        assert!(!is_valid_webhook_source("../etc"));
+        assert!(!is_valid_webhook_source("a".repeat(65).as_str()));
+    }
+
+    #[test]
+    fn serve_refuses_an_unauthenticated_control_plane_by_default() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _allow = EnvVarGuard::set(ALLOW_ANONYMOUS_ENV, None);
+
+        let config = ServerConfig::default();
+        assert!(config.api_key.is_none());
+
+        let error = check_auth_posture(&config).expect_err("missing API key should be refused");
+        assert!(error.contains("ORBIT_SERVER_API_KEY"));
+    }
+
+    #[test]
+    fn serve_allows_an_unauthenticated_control_plane_when_explicitly_opted_in() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _allow = EnvVarGuard::set(ALLOW_ANONYMOUS_ENV, Some("1"));
+
+        check_auth_posture(&ServerConfig::default()).expect("explicit opt-in should be honoured");
+    }
+
+    #[test]
+    fn serve_accepts_a_configured_api_key_without_the_opt_in() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _allow = EnvVarGuard::set(ALLOW_ANONYMOUS_ENV, None);
+
+        let config = ServerConfig {
+            api_key: Some("secret".to_string()),
+            ..ServerConfig::default()
+        };
+        check_auth_posture(&config).expect("a configured key needs no opt-in");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn webhook_routes_remain_public_when_control_plane_api_key_is_configured() {
+        let _lock = GITHUB_WEBHOOK_ENV_LOCK.lock().unwrap();
+        let _secret = EnvVarGuard::set("ORBIT_GITHUB_WEBHOOK_SECRET", Some(TEST_WEBHOOK_SECRET));
         let state = Arc::new(
             ServerState::new(10).with_control_plane_api_key(Some("top-secret".to_string())),
         );
@@ -8045,18 +8172,17 @@ mod tests {
         });
 
         let response = super::app(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/webhooks/github")
-                    .header("content-type", "application/json")
-                    .header("x-github-event", "pull_request")
-                    .body(Body::from(payload.to_string()))
-                    .unwrap(),
-            )
+            .oneshot(webhook_request(
+                "github",
+                &[("x-github-event", "pull_request")],
+                &payload,
+            ))
             .await
             .unwrap();
 
+        // No control-plane API key is presented, so this asserts the webhook
+        // route stays outside that auth layer — it is gated by its own
+        // signature check instead.
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
 
