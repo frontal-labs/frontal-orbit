@@ -3,12 +3,13 @@
 use reqwest::StatusCode;
 use serde_json::Value;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, ChildStdout, Command};
 
 struct TestServer {
     base_url: String,
@@ -24,20 +25,25 @@ impl TestServer {
     async fn start_with_env(extra_env: &[(&str, &str)]) -> Self {
         let temp_dir = make_temp_dir();
         let cli_bin = write_mock_cli(&temp_dir);
-        let port = reserve_port();
         let api_bin = env!("CARGO_BIN_EXE_orbit-api");
 
+        // Bind port 0 and let the server tell us where it landed. Reserving a
+        // port up front and handing the number to the child races: the socket
+        // has to be closed before the child can bind it, and a sibling test can
+        // take it in between.
         let mut command = Command::new(api_bin);
         command
             .env("ORBIT_CLI_BIN", &cli_bin)
             .env("ORBIT_API_HOST", "127.0.0.1")
-            .env("ORBIT_API_PORT", port.to_string());
+            .env("ORBIT_API_PORT", "0")
+            .stdout(Stdio::piped());
         for (key, value) in extra_env {
             command.env(key, value);
         }
-        let child = command.spawn().expect("failed to spawn orbit-api");
+        let mut child = command.spawn().expect("failed to spawn orbit-api");
 
-        let base_url = format!("http://127.0.0.1:{port}");
+        let stdout = child.stdout.take().expect("stdout should be piped");
+        let base_url = read_listening_url(stdout).await;
         wait_for_health(&base_url).await;
 
         Self {
@@ -272,15 +278,33 @@ async fn cli_run_respects_allowed_commands() {
     server.shutdown().await;
 }
 
-fn reserve_port() -> u16 {
-    let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-        .expect("should reserve port");
-    let port = listener
-        .local_addr()
-        .expect("should read local addr")
-        .port();
-    drop(listener);
-    port
+/// Read the server's startup banner and return the base URL it bound to.
+///
+/// The banner looks like `orbit-api listening on http://127.0.0.1:54321 (cli: ...)`.
+async fn read_listening_url(stdout: ChildStdout) -> String {
+    let mut lines = BufReader::new(stdout).lines();
+
+    let deadline = Duration::from_secs(30);
+    let found = tokio::time::timeout(deadline, async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(rest) = line.split_once("listening on ") {
+                let url = rest.1.split_whitespace().next().unwrap_or_default();
+                if !url.is_empty() {
+                    return Some(url.to_string());
+                }
+            }
+        }
+        None
+    })
+    .await;
+
+    match found {
+        Ok(Some(url)) => url,
+        Ok(None) => panic!("orbit-api exited before reporting a listening address"),
+        Err(elapsed) => {
+            panic!("orbit-api did not report a listening address within {deadline:?}: {elapsed}")
+        }
+    }
 }
 
 fn make_temp_dir() -> PathBuf {
