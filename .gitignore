@@ -37,6 +37,5 @@ coverage/
 bazel-bin
 bazel-out
 bazel-testlogs
-bazel-frontal-orbit
-bazel-<module>
+bazel-orbit
 
