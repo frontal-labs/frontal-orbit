@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(config.runtime.default_provider, "frontal");
         assert_eq!(config.runtime.max_concurrent_requests, 10);
         assert_eq!(config.runtime.request_timeout_seconds, 30);
-        assert_eq!(config.runtime.permission_mode, "permissive");
+        assert_eq!(config.runtime.permission_mode, "workspace-write");
         assert_eq!(config.runtime.log_level, "info");
 
         // Test feature flags

@@ -265,7 +265,9 @@ fn resumed_status_command_emits_structured_json_when_requested() {
         serde_json::from_str(stdout.trim()).expect("resume status output should be json");
     assert_eq!(parsed["kind"], "status");
     assert_eq!(parsed["model"], "restored-session");
-    assert_eq!(parsed["permission_mode"], "danger-full-access");
+    // Falls back to `config/project.json`, which ships `workspace-write`.
+    // Nothing here sets RUSTY_CLAUDE_PERMISSION_MODE or a settings file.
+    assert_eq!(parsed["permission_mode"], "workspace-write");
     assert_eq!(parsed["usage"]["messages"], 1);
     assert!(parsed["usage"]["turns"].is_number());
     assert!(parsed["workspace"]["cwd"].as_str().is_some());
