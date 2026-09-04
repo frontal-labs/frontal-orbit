@@ -19,7 +19,7 @@ brew install --HEAD ./homebrew/orbit.rb
 orbit --help
 
 # Run the interactive REPL
-orbit --model claude-opus-4-6
+orbit --model claude-opus-5
 
 # One-shot prompt
 orbit prompt "explain this codebase"
@@ -184,9 +184,9 @@ Short names resolve to the latest model versions:
 
 | Alias | Resolves To |
 |-------|------------|
-| `opus` | `claude-opus-4-6` |
+| `opus` | `claude-opus-5` |
 | `sonnet` | `claude-sonnet-4-6` |
-| `haiku` | `claude-haiku-4-5-20251213` |
+| `haiku` | `claude-haiku-4-5` |
 
 ## CLI Flags and Commands
 
@@ -313,7 +313,7 @@ See [`./USAGE.md`](./USAGE.md) for usage examples and run `cargo run -p orbit-cl
 - **~89K lines** of Rust
 - **21 crates** in workspace
 - **Binary name:** `orbit`
-- **Default model:** `claude-opus-4-6`
+- **Default model:** `claude-opus-5`
 - **Default permissions:** `danger-full-access`
 
 ## Attribution

@@ -44,7 +44,7 @@ export ORBIT_DATA_DIR="$HOME/.orbit/data"
 
 # Provider selection
 export ORBIT_DEFAULT_PROVIDER="anthropic"  # anthropic, openai, xai
-export ORBIT_DEFAULT_MODEL="claude-opus-4-6"
+export ORBIT_DEFAULT_MODEL="claude-opus-5"
 
 # Permission settings
 export ORBIT_PERMISSION_MODE="danger-full-access"  # danger-full-access, safe-mode, ask-permissions
@@ -71,22 +71,22 @@ The `.orbit.json` config file uses JSON format with the following structure:
     "anthropic": {
       "api_key": "${ORBIT_API_KEY}",
       "base_url": "https://api.anthropic.com",
-      "default_model": "claude-opus-4-6"
+      "default_model": "claude-opus-5"
     },
     "openai": {
       "api_key": "${OPENAI_API_KEY}",
       "base_url": "https://api.openai.com/v1",
-      "default_model": "gpt-4"
+      "default_model": "gpt-5"
     },
     "xai": {
       "api_key": "${XAI_API_KEY}",
       "base_url": "https://api.x.ai/v1",
-      "default_model": "grok-beta"
+      "default_model": "grok-3"
     }
   },
   "runtime": {
     "default_provider": "frontal",
-    "default_model": "claude-opus-4-6",
+    "default_model": "claude-opus-5",
     "permission_mode": "danger-full-access",
     "allowed_tools": ["bash", "read", "write", "edit", "grep", "glob", "web_search", "web_fetch"],
     "max_tokens": 4096,
@@ -149,21 +149,21 @@ Options:
 
 ```bash
 # Full model names
-orbit --model claude-opus-4-6
+orbit --model claude-opus-5
 orbit --model claude-sonnet-4-6
-orbit --model claude-haiku-4-5-20251213
+orbit --model claude-haiku-4-5
 
 # Model aliases
-orbit --model opus      # claude-opus-4-6
+orbit --model opus      # claude-opus-5
 orbit --model sonnet     # claude-sonnet-4-6
-orbit --model haiku      # claude-haiku-4-5-20251213
+orbit --model haiku      # claude-haiku-4-5
 
 # OpenAI models
 orbit --provider openai --model gpt-4
 orbit --provider openai --model gpt-4-turbo
 
 # xAI models
-orbit --provider xai --model grok-beta
+orbit --provider xai --model grok-3
 ```
 
 ## Permission Modes

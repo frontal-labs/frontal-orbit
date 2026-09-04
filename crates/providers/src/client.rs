@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn resolves_existing_and_grok_aliases() {
-        assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
+        assert_eq!(resolve_model_alias("opus"), "claude-opus-5");
         assert_eq!(resolve_model_alias("grok"), "grok-3");
         assert_eq!(resolve_model_alias("grok-mini"), "grok-3-mini");
         assert_eq!(resolve_model_alias("frontal"), "frontal");

@@ -31,18 +31,18 @@ The main configuration file is `config/project.json`:
     "providers": {
       "anthropic": {
         "enabled": true,
-        "default_model": "claude-3-5-sonnet-20241022"
+        "default_model": "claude-opus-5"
       },
       "openai": {
         "enabled": true,
-        "default_model": "gpt-4"
+        "default_model": "gpt-5"
       },
       "xai": {
         "enabled": true,
-        "default_model": "grok-beta"
+        "default_model": "grok-3"
       }
     },
-    "permission_mode": "permissive",
+    "permission_mode": "workspace-write",
     "log_level": "info",
     "max_concurrent_requests": 10,
     "request_timeout_seconds": 30
@@ -71,15 +71,6 @@ The main configuration file is `config/project.json`:
     "confirm_dangerous_operations": true
   },
   "services": {
-    "database": {
-      "connection_pool_size": 10,
-      "connection_timeout_seconds": 30,
-      "max_connections": 20
-    },
-    "redis": {
-      "connection_pool_size": 10,
-      "connection_timeout_seconds": 10
-    },
     "memory": {
       "cache_size_mb": 512,
       "namespace": "default"
@@ -108,7 +99,7 @@ The main configuration file is `config/project.json`:
 #### Runtime
 - `default_provider`: Default AI provider (`anthropic`, `openai`, `xai`, `frontal`)
 - `providers`: Provider-specific configurations
-- `permission_mode`: Permission mode (`permissive`, `read-only`, `restricted`)
+- `permission_mode`: Permission mode — one of `read-only`, `workspace-write`, `danger-full-access`. Overridden by `RUSTY_CLAUDE_PERMISSION_MODE` and by the runtime settings files; an unrecognised value is ignored rather than treated as permissive.
 - `log_level`: Logging level (`debug`, `info`, `warn`, `error`)
 - `max_concurrent_requests`: Maximum concurrent API requests
 - `request_timeout_seconds`: Request timeout in seconds
@@ -137,8 +128,6 @@ The main configuration file is `config/project.json`:
 - `confirm_dangerous_operations`: Confirm dangerous operations
 
 #### Services
-- `database`: Database connection settings
-- `redis`: Redis connection settings
 - `memory`: Memory cache settings
 
 #### Sandbox
@@ -179,7 +168,6 @@ if config.is_provider_enabled("anthropic") {
 }
 
 // Access nested configuration
-let db_pool_size = config.services.database.connection_pool_size;
 let cache_size = config.services.memory.cache_size_mb;
 ```
 
@@ -203,7 +191,6 @@ if manager.is_telemetry_enabled() {
 
 // Access service configuration
 let services = manager.service_config();
-println!("DB pool size: {}", services.database.connection_pool_size);
 ```
 
 ## Environment Variables
@@ -214,7 +201,7 @@ Environment variables override configuration file settings:
 ```bash
 # Runtime settings
 export ORBIT_DEFAULT_PROVIDER="openai"
-export ORBIT_PERMISSION_MODE="restricted"
+export RUSTY_CLAUDE_PERMISSION_MODE="workspace-write"
 export ORBIT_LOG_LEVEL="debug"
 
 # Feature flags
@@ -250,12 +237,6 @@ export FRONTAL_BASE_URL="https://ai.frontal.dev/v1"
 
 ### Service Variables
 ```bash
-# Database
-export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
-
-# Redis
-export REDIS_URL="redis://localhost:6379"
-
 # Memory/Pinecone
 export ORBIT_MEMORY_PINECONE_URL="https://index.pinecone.io"
 export ORBIT_MEMORY_PINECONE_API_KEY="..."
@@ -331,7 +312,7 @@ if enabled_providers == 0 {
   "runtime": {
     "default_provider": "frontal",
     "log_level": "debug",
-    "permission_mode": "permissive"
+    "permission_mode": "workspace-write"
   },
   "features": {
     "enable_telemetry": false,
@@ -352,7 +333,7 @@ if enabled_providers == 0 {
   "runtime": {
     "default_provider": "frontal",
     "log_level": "info",
-    "permission_mode": "restricted",
+    "permission_mode": "read-only",
     "max_concurrent_requests": 5,
     "request_timeout_seconds": 60
   },
@@ -362,9 +343,9 @@ if enabled_providers == 0 {
     "enable_hot_reload": false
   },
   "services": {
-    "database": {
-      "connection_pool_size": 20,
-      "max_connections": 50
+    "memory": {
+      "cache_size_mb": 1024,
+      "namespace": "production"
     }
   }
 }

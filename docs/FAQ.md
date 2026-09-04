@@ -88,9 +88,9 @@ orbit --model claude-sonnet-4-6
 orbit config set runtime.default_model "claude-sonnet-4-6"
 
 # Use model aliases
-orbit --model opus  # claude-opus-4-6
+orbit --model opus  # claude-opus-5
 orbit --model sonnet # claude-sonnet-4-6
-orbit --model haiku  # claude-haiku-4-5-20251213
+orbit --model haiku  # claude-haiku-4-5
 ```
 
 ### Can I use different AI providers?
@@ -105,7 +105,7 @@ orbit --provider anthropic
 orbit --provider openai --model gpt-4
 
 # xAI
-orbit --provider xai --model grok-beta
+orbit --provider xai --model grok-3
 
 # Frontal (API gateway)
 orbit --provider frontal

@@ -1211,7 +1211,7 @@ mod tests {
     #[test]
     fn message_request_stream_helper_sets_stream_true() {
         let request = MessageRequest {
-            model: "claude-opus-4-6".to_string(),
+            model: "claude-opus-5".to_string(),
             max_tokens: 64,
             messages: vec![],
             system: None,

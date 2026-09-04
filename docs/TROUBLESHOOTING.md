@@ -167,7 +167,7 @@ sleep 60
 orbit prompt "test message"
 
 # Use different model
-orbit --model claude-haiku-4-5-20251213 prompt "test"
+orbit --model claude-haiku-4-5 prompt "test"
 
 # Configure rate limiting
 orbit config set rate_limiting.requests_per_minute 30

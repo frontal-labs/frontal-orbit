@@ -18,7 +18,7 @@ These options can be used with any Orbit command:
 
 | Option | Short | Description | Default |
 |--------|--------|-------------|---------|
-| `--model` | `-m` | AI model to use | `claude-opus-4-6` |
+| `--model` | `-m` | AI model to use | `claude-opus-5` |
 | `--provider` | `-p` | AI provider (anthropic, openai, xai) | `anthropic` |
 | `--output-format` | `-o` | Output format (text, json) | `text` |
 | `--permission-mode` | `-P` | Permission mode (danger-full-access, safe-mode, ask-permissions) | `danger-full-access` |
@@ -36,18 +36,18 @@ These options can be used with any Orbit command:
 
 ```bash
 # Full model names
-orbit --model claude-opus-4-6
+orbit --model claude-opus-5
 orbit --model claude-sonnet-4-6
-orbit --model claude-haiku-4-5-20251213
+orbit --model claude-haiku-4-5
 
 # Model aliases
-orbit --model opus      # claude-opus-4-6
+orbit --model opus      # claude-opus-5
 orbit --model sonnet     # claude-sonnet-4-6
-orbit --model haiku      # claude-haiku-4-5-20251213
+orbit --model haiku      # claude-haiku-4-5
 
 # Provider-specific models
 orbit --provider openai --model gpt-4
-orbit --provider xai --model grok-beta
+orbit --provider xai --model grok-3
 ```
 
 ### Provider Selection
@@ -60,7 +60,7 @@ orbit --provider anthropic
 orbit --provider openai --model gpt-4-turbo
 
 # xAI
-orbit --provider xai --model grok-beta
+orbit --provider xai --model grok-3
 
 # Frontal (API gateway)
 orbit --provider frontal
@@ -530,9 +530,9 @@ Model aliases provide convenient shortcuts for full model names:
 
 | Alias | Full Name | Description |
 |-------|------------|-------------|
-| `opus` | `claude-opus-4-6` | Most capable model, best for complex tasks |
+| `opus` | `claude-opus-5` | Most capable model, best for complex tasks |
 | `sonnet` | `claude-sonnet-4-6` | Balanced model, good for most tasks |
-| `haiku` | `claude-haiku-4-5-20251213` | Fastest model, good for simple tasks |
+| `haiku` | `claude-haiku-4-5` | Fastest model, good for simple tasks |
 
 ### Usage Examples
 
@@ -705,7 +705,7 @@ Location: `.orbit.json` (project root)
 ```json
 {
   "runtime": {
-    "default_model": "claude-opus-4-6",
+    "default_model": "claude-opus-5",
     "permission_mode": "danger-full-access"
   },
   "tools": {

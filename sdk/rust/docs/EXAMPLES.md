@@ -186,7 +186,7 @@ let result = thread.run(
         config_overrides: {
             let mut m = HashMap::new();
             m.insert("temperature".into(), json!(0.1));
-            m.insert("model".into(), json!("gpt-4"));
+            m.insert("model".into(), json!("gpt-5"));
             m
         },
         ..Default::default()

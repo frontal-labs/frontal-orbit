@@ -171,9 +171,9 @@ Supported permission modes:
 
 Model aliases currently supported by the CLI:
 
-- `opus` → `claude-opus-4-6`
+- `opus` → `claude-opus-5`
 - `sonnet` → `claude-sonnet-4-6`
-- `haiku` → `claude-haiku-4-5-20251213`
+- `haiku` → `claude-haiku-4-5`
 
 ## Provider Selection
 

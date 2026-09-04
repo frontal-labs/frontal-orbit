@@ -241,7 +241,7 @@ GET /v1/config
 PATCH /v1/config
 {
   "runtime": {
-    "default_model": "claude-opus-4-6"
+    "default_model": "claude-opus-5"
   }
 }
 ```
