@@ -74,7 +74,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WebSocketMessage};
 
-const DEFAULT_MODEL: &str = "claude-opus-4-6";
+const DEFAULT_MODEL: &str = "claude-opus-5";
 const DEFAULT_HOSTED_SERVER_URL: &str = "http://127.0.0.1:8788";
 const HOSTED_SERVER_TIMEOUT_SECS: u64 = 30;
 fn max_tokens_for_model(model: &str) -> u32 {
@@ -1767,9 +1767,9 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 
 fn resolve_model_alias(model: &str) -> &str {
     match model {
-        "opus" => "claude-opus-4-6",
+        "opus" => "claude-opus-5",
         "sonnet" => "claude-sonnet-4-6",
-        "haiku" => "claude-haiku-4-5-20251213",
+        "haiku" => "claude-haiku-4-5",
         _ => model,
     }
 }
@@ -1825,6 +1825,9 @@ fn permission_mode_from_resolved(mode: ResolvedPermissionMode) -> PermissionMode
     }
 }
 
+/// Resolve the permission mode, most specific source first:
+/// `RUSTY_CLAUDE_PERMISSION_MODE`, then the runtime settings files, then
+/// `config/project.json`, then the built-in fallback.
 fn default_permission_mode() -> PermissionMode {
     env::var("RUSTY_CLAUDE_PERMISSION_MODE")
         .ok()
@@ -1832,7 +1835,20 @@ fn default_permission_mode() -> PermissionMode {
         .and_then(normalize_permission_mode)
         .map(permission_mode_from_label)
         .or_else(config_permission_mode_for_current_dir)
+        .or_else(project_config_permission_mode)
         .unwrap_or(PermissionMode::DangerFullAccess)
+}
+
+/// Permission mode declared in the core `project.json` configuration.
+///
+/// Returns `None` when the file declares no mode or declares one the runtime
+/// does not recognise, so an unparseable value falls through to the next
+/// source instead of being silently treated as permissive.
+fn project_config_permission_mode() -> Option<PermissionMode> {
+    let configured = orbit_core::config::ProjectConfig::load_or_default()
+        .runtime
+        .permission_mode;
+    normalize_permission_mode(&configured).map(permission_mode_from_label)
 }
 
 fn config_permission_mode_for_current_dir() -> Option<PermissionMode> {
@@ -11185,7 +11201,7 @@ mod tests {
                 model: DEFAULT_MODEL.to_string(),
                 provider: None,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
@@ -11275,7 +11291,7 @@ mod tests {
                 provider: None,
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
@@ -11299,7 +11315,7 @@ mod tests {
                 provider: None,
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
@@ -11318,20 +11334,20 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "explain this".to_string(),
-                model: "claude-opus-4-6".to_string(),
+                model: "claude-opus-5".to_string(),
                 provider: None,
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
 
     #[test]
     fn resolves_known_model_aliases() {
-        assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
+        assert_eq!(resolve_model_alias("opus"), "claude-opus-5");
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
+        assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5");
         assert_eq!(resolve_model_alias("claude-opus"), "claude-opus");
     }
 
@@ -11348,7 +11364,7 @@ mod tests {
                 provider: Some("ollama".to_string()),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
@@ -11366,11 +11382,11 @@ mod tests {
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
                 prompt: "hello world".to_string(),
-                model: "claude-opus-4-6".to_string(),
+                model: "claude-opus-5".to_string(),
                 provider: Some("anthropic".to_string()),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
@@ -11425,7 +11441,7 @@ mod tests {
                         .map(str::to_string)
                         .collect()
                 ),
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
@@ -11458,6 +11474,10 @@ mod tests {
 
     #[test]
     fn parses_doctor_init_and_supporting_subcommands() {
+        // Compares against `default_permission_mode()`, which reads the
+        // environment that sibling tests mutate.
+        let _guard = env_lock();
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
         assert_eq!(
             parse_args(&["doctor".to_string()]).expect("doctor should parse"),
             CliAction::Doctor {
@@ -12203,13 +12223,18 @@ mod tests {
                 provider: None,
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
-                permission_mode: PermissionMode::DangerFullAccess,
+                permission_mode: crate::default_permission_mode(),
             }
         );
     }
 
     #[test]
     fn parses_direct_agents_mcp_and_skills_slash_commands() {
+        // Some assertions below compare against `default_permission_mode()`,
+        // which reads RUSTY_CLAUDE_PERMISSION_MODE. Sibling tests mutate that
+        // variable, so hold the env lock for the whole test.
+        let _guard = env_lock();
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
         assert_eq!(
             parse_args(&["/agents".to_string()]).expect("/agents should parse"),
             CliAction::Agents {
@@ -13625,11 +13650,16 @@ UU conflicted.rs",
     }
 
     fn temp_workspace(label: &str) -> PathBuf {
+        // Timestamp alone collides when parallel tests read the same instant.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("orbit-cli-{label}-{nanos}"))
+        let pid = std::process::id();
+        let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("orbit-cli-{label}-{nanos}-{pid}-{serial}"))
     }
 
     #[test]
@@ -13901,7 +13931,7 @@ UU conflicted.rs",
             MessageResponse {
                 id: "msg-1".to_string(),
                 kind: "message".to_string(),
-                model: "claude-opus-4-6".to_string(),
+                model: "claude-opus-5".to_string(),
                 role: "assistant".to_string(),
                 content: vec![OutputContentBlock::ToolUse {
                     id: "tool-1".to_string(),
@@ -13936,7 +13966,7 @@ UU conflicted.rs",
             MessageResponse {
                 id: "msg-2".to_string(),
                 kind: "message".to_string(),
-                model: "claude-opus-4-6".to_string(),
+                model: "claude-opus-5".to_string(),
                 role: "assistant".to_string(),
                 content: vec![OutputContentBlock::ToolUse {
                     id: "tool-2".to_string(),
@@ -13971,7 +14001,7 @@ UU conflicted.rs",
             MessageResponse {
                 id: "msg-3".to_string(),
                 kind: "message".to_string(),
-                model: "claude-opus-4-6".to_string(),
+                model: "claude-opus-5".to_string(),
                 role: "assistant".to_string(),
                 content: vec![
                     OutputContentBlock::Thinking {
