@@ -165,7 +165,8 @@ repos:
 
       - id: devtools-version-sync
         name: version sync (Cargo.toml <-> MODULE.bazel)
-        entry: bash -c 'v=$(cargo run -q -p tools-version -- show); m=$(grep -m1 "version" MODULE.bazel | grep -oE "[0-9.]+"); [ "$v" = "$m" ] || { echo "version mismatch: Cargo.toml ($v) != MODULE.bazel ($m)"; exit 1; }'
+        entry: |-
+          bash -c 'v=$(cargo run -q -p tools-version -- show); m=$(grep -m1 "version" MODULE.bazel | grep -oE "[0-9.]+"); [ "$v" = "$m" ] || { echo "version mismatch: Cargo.toml ($v) != MODULE.bazel ($m)"; exit 1; }'
         language: system
         pass_filenames: false
         files: '^(Cargo\.toml|MODULE\.bazel)$'
