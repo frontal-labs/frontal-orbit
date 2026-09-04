@@ -36,14 +36,6 @@ pub fn load_and_use_config() {
 
     // Access service configurations
     println!(
-        "Database connection pool size: {}",
-        config.services.database.connection_pool_size
-    );
-    println!(
-        "Redis connection pool size: {}",
-        config.services.redis.connection_pool_size
-    );
-    println!(
         "Memory cache size: {} MB",
         config.services.memory.cache_size_mb
     );
