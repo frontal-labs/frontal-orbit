@@ -266,10 +266,10 @@ pub async fn serve(
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    println!(
-        "orbit-api listening on http://{} (cli: {display_cli_bin})",
-        config.bind_addr
-    );
+    // Report the address the OS actually assigned, not the requested one, so
+    // that binding port 0 still tells the operator where the server landed.
+    let local_addr = listener.local_addr()?;
+    println!("orbit-api listening on http://{local_addr} (cli: {display_cli_bin})");
     axum::serve(listener, app).await?;
     Ok(())
 }
