@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use orbit_core::config::{
-    PathConfig,
-    ProjectConfig, ProviderDetails,
-};
+use orbit_core::config::{PathConfig, ProjectConfig, ProviderDetails};
 
 #[test]
 fn default_config_has_expected_values() {
@@ -11,7 +8,7 @@ fn default_config_has_expected_values() {
     assert_eq!(config.project.name, "Orbit");
     assert_eq!(config.project.version, "0.1.0");
     assert_eq!(config.runtime.default_provider, "frontal");
-    assert_eq!(config.runtime.permission_mode, "permissive");
+    assert_eq!(config.runtime.permission_mode, "workspace-write");
     assert_eq!(config.runtime.max_concurrent_requests, 10);
     assert_eq!(config.runtime.request_timeout_seconds, 30);
 }
@@ -37,19 +34,16 @@ fn default_model_per_provider() {
     let config = ProjectConfig::default();
     assert_eq!(
         config.get_default_model("anthropic"),
-        Some("claude-3-5-sonnet-20241022".to_string())
+        Some("claude-opus-5".to_string())
     );
     assert_eq!(
         config.get_default_model("openai"),
-        Some("gpt-4".to_string())
+        Some("gpt-5".to_string())
     );
-    assert_eq!(
-        config.get_default_model("xai"),
-        Some("grok-beta".to_string())
-    );
+    assert_eq!(config.get_default_model("xai"), Some("grok-3".to_string()));
     assert_eq!(
         config.get_default_model("frontal"),
-        Some("claude-3-5-sonnet-20241022".to_string())
+        Some("claude-opus-5".to_string())
     );
     assert_eq!(config.get_default_model("unknown"), None);
 }
@@ -249,8 +243,6 @@ fn ui_config_defaults() {
 #[test]
 fn service_config_defaults() {
     let config = ProjectConfig::default();
-    assert_eq!(config.services.database.connection_pool_size, 10);
-    assert_eq!(config.services.redis.connection_pool_size, 10);
     assert_eq!(config.services.memory.cache_size_mb, 512);
     assert_eq!(config.services.memory.namespace, "default");
 }
@@ -302,5 +294,37 @@ fn get_provider_config_returns_correct_details() {
     let config = ProjectConfig::default();
     let anthropic = config.get_provider_config("anthropic").unwrap();
     assert!(anthropic.enabled);
-    assert_eq!(anthropic.default_model, "claude-3-5-sonnet-20241022");
+    assert_eq!(anthropic.default_model, "claude-opus-5");
+}
+
+/// The runtime only accepts these three permission-mode labels. A value outside
+/// the set (`"permissive"` shipped here for a long time) is silently ignored at
+/// resolution time, which reads as "no restrictions configured".
+#[test]
+fn default_permission_mode_is_one_the_runtime_accepts() {
+    const ACCEPTED: [&str; 3] = ["read-only", "workspace-write", "danger-full-access"];
+    let configured = ProjectConfig::default().runtime.permission_mode;
+    assert!(
+        ACCEPTED.contains(&configured.as_str()),
+        "permission_mode {configured:?} is not one of {ACCEPTED:?}"
+    );
+}
+
+/// The checked-in `config/project.json` must agree with the same set, since it
+/// is what ships to users.
+#[test]
+fn shipped_project_json_permission_mode_is_accepted() {
+    const ACCEPTED: [&str; 3] = ["read-only", "workspace-write", "danger-full-access"];
+    let raw = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/project.json"),
+    )
+    .expect("config/project.json should be readable");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+    let mode = parsed["runtime"]["permission_mode"]
+        .as_str()
+        .expect("runtime.permission_mode should be a string");
+    assert!(
+        ACCEPTED.contains(&mode),
+        "config/project.json permission_mode {mode:?} is not one of {ACCEPTED:?}"
+    );
 }

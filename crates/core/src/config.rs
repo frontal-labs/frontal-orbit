@@ -67,22 +67,7 @@ pub struct SandboxConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
-    pub database: DatabaseConfig,
-    pub redis: RedisConfig,
     pub memory: MemoryConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub connection_pool_size: u32,
-    pub connection_timeout_seconds: u32,
-    pub max_connections: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RedisConfig {
-    pub connection_pool_size: u32,
-    pub connection_timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,22 +125,22 @@ impl Default for ProjectConfig {
                 providers: ProviderConfig {
                     anthropic: ProviderDetails {
                         enabled: true,
-                        default_model: "claude-3-5-sonnet-20241022".to_string(),
+                        default_model: "claude-opus-5".to_string(),
                     },
                     openai: ProviderDetails {
                         enabled: true,
-                        default_model: "gpt-4".to_string(),
+                        default_model: "gpt-5".to_string(),
                     },
                     xai: ProviderDetails {
                         enabled: true,
-                        default_model: "grok-beta".to_string(),
+                        default_model: "grok-3".to_string(),
                     },
                     frontal: ProviderDetails {
                         enabled: true,
-                        default_model: "claude-3-5-sonnet-20241022".to_string(),
+                        default_model: "claude-opus-5".to_string(),
                     },
                 },
-                permission_mode: "permissive".to_string(),
+                permission_mode: "workspace-write".to_string(),
                 log_level: "info".to_string(),
                 max_concurrent_requests: 10,
                 request_timeout_seconds: 30,
@@ -175,15 +160,6 @@ impl Default for ProjectConfig {
                 max_execution_time_seconds: 300,
             },
             services: ServiceConfig {
-                database: DatabaseConfig {
-                    connection_pool_size: 10,
-                    connection_timeout_seconds: 30,
-                    max_connections: 20,
-                },
-                redis: RedisConfig {
-                    connection_pool_size: 10,
-                    connection_timeout_seconds: 10,
-                },
                 memory: MemoryConfig {
                     cache_size_mb: 512,
                     namespace: "default".to_string(),
@@ -375,12 +351,12 @@ mod tests {
         assert!(config.is_provider_enabled("anthropic"));
         assert_eq!(
             config.get_default_model("anthropic"),
-            Some("claude-3-5-sonnet-20241022".to_string())
+            Some("claude-opus-5".to_string())
         );
         assert!(config.is_provider_enabled("frontal"));
         assert_eq!(
             config.get_default_model("frontal"),
-            Some("claude-3-5-sonnet-20241022".to_string())
+            Some("claude-opus-5".to_string())
         );
         assert!(!config.is_provider_enabled("unknown"));
     }
