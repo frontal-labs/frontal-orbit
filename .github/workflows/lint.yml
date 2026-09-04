@@ -58,9 +58,8 @@ jobs:
         with:
           node-version: "22"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install pinned Rust toolchain
+        run: rustup show
 
       - name: Install pre-commit
         run: pip install pre-commit
