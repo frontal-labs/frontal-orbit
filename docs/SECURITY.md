@@ -12,6 +12,43 @@ Orbit is designed with security as a primary concern, implementing multiple laye
 - **Data Protection** - Encryption and secure storage
 - **Audit Logging** - Comprehensive activity tracking
 
+## Server Authentication
+
+`orbit-server` exposes a control plane that creates, cancels and completes agent
+tasks. Both of its authentication boundaries are closed by default.
+
+### Control plane
+
+Set `ORBIT_SERVER_API_KEY` before starting the server. Clients present it as
+either `x-api-key: <key>` or `Authorization: Bearer <key>`; the comparison is
+constant-time.
+
+If the variable is unset, the server **refuses to start** rather than serving an
+open control plane. To run without a key on a trusted network — local
+development, or a host reachable only from inside your own perimeter — opt in
+explicitly:
+
+```bash
+ORBIT_SERVER_ALLOW_ANONYMOUS=1 orbit-server
+```
+
+That path logs a warning naming the bind address on every start.
+
+### Integration webhooks
+
+`POST /v1/webhooks/<source>` sits outside the control-plane auth layer, so its
+HMAC signature is the only thing protecting it. Each source needs its own
+secret, named `ORBIT_<SOURCE>_WEBHOOK_SECRET`:
+
+```bash
+export ORBIT_GITHUB_WEBHOOK_SECRET="..."
+```
+
+A delivery is rejected with `401` when the secret is missing or blank, when the
+`x-<source>-signature` header is absent, or when the HMAC does not match. There
+is no unsigned fallback. Source names are restricted to letters, digits, `-` and
+`_`, so an unrecognised path returns `404` instead of probing your environment.
+
 ## Permission System
 
 ### Permission Modes
