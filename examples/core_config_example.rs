@@ -184,18 +184,6 @@ fn print_configuration_manager(config_manager: &ConfigurationManager) {
     println!("  Service Configuration:");
     let services = config_manager.service_config();
     println!(
-        "    Database Connection Pool Size: {}",
-        services.database.connection_pool_size
-    );
-    println!(
-        "    Database Connection Timeout: {}s",
-        services.database.connection_timeout_seconds
-    );
-    println!(
-        "    Redis Connection Pool Size: {}",
-        services.redis.connection_pool_size
-    );
-    println!(
         "    Memory Cache Size: {} MB",
         services.memory.cache_size_mb
     );
