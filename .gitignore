@@ -4,6 +4,7 @@ archive/
 .orbit-agents/
 .orbit/settings.local.json
 .orbit/sessions/
+.orbit/extensions/
 target/
 
 # Environment files
