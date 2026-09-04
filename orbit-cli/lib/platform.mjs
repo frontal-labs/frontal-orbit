@@ -9,7 +9,7 @@ export class UnsupportedPlatformError extends Error {
   constructor(platform, arch) {
     super(
       `Unsupported platform "${platform}/${arch}". ` +
-        `Orbit supports: macos-arm64, macos-x64, linux-x64, windows-x64.`,
+        `Orbit supports: macos-arm64, macos-x64, linux-x64, linux-arm64, windows-x64.`,
     );
     this.name = "UnsupportedPlatformError";
     this.platform = platform;
@@ -24,6 +24,7 @@ const TARGETS = {
   "darwin/arm64": { target: "macos-arm64", ext: "tar.gz" },
   "darwin/x64": { target: "macos-x64", ext: "tar.gz" },
   "linux/x64": { target: "linux-x64", ext: "tar.gz" },
+  "linux/arm64": { target: "linux-arm64", ext: "tar.gz" },
   "win32/x64": { target: "windows-x64", ext: "exe" },
 };
 

@@ -75,18 +75,22 @@ async function downloadTo({ version, destDir, log = () => {} }) {
   log(`Downloading ${assetName} (${target}) from ${url}`);
   const buf = await fetchUrl(url);
 
-  // Windows ships a raw .exe with no sha sidecar.
-  if (ext !== "exe") {
-    const expected = await fetchSha256(version, assetName);
-    if (expected) {
-      if (!verifySha256(buf, expected)) {
-        throw new Error(`SHA-256 mismatch for ${assetName}`);
-      }
-      log(`Verified SHA-256 for ${assetName}`);
-    } else {
-      log(`No SHA-256 sidecar published for ${assetName}; skipping verify`);
-    }
+  // Every published asset — including the raw Windows .exe — ships a .sha256
+  // sidecar. A missing one means the release is incomplete or the download was
+  // tampered with, so refuse rather than installing an unverified binary.
+  const expected = await fetchSha256(version, assetName);
+  if (!expected) {
+    throw new Error(
+      `No SHA-256 sidecar published for ${assetName}. Refusing to install an ` +
+        `unverified binary. If this is a genuine release, report it as a ` +
+        `packaging bug; otherwise build from source with ` +
+        `\`cargo build --release -p orbit-cli\`.`,
+    );
   }
+  if (!verifySha256(buf, expected)) {
+    throw new Error(`SHA-256 mismatch for ${assetName}`);
+  }
+  log(`Verified SHA-256 for ${assetName}`);
 
   if (ext === "exe") {
     const binDir = join(destDir, "vendor", target, "bin");

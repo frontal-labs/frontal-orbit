@@ -29,6 +29,9 @@ jobs:
           - name: linux-x64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - name: macos-arm64
             os: macos-14
             target: aarch64-apple-darwin
@@ -45,9 +48,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Add cross-compilation target
+        run: rustup target add ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -80,6 +85,8 @@ jobs:
 
           if [[ -n "${{ matrix.ext }}" ]]; then
             cp "dist/package/bin/${bin}" "dist/orbit-${{ matrix.name }}${{ matrix.ext }}"
+            shasum -a 256 "dist/orbit-${{ matrix.name }}${{ matrix.ext }}" \
+              > "dist/orbit-${{ matrix.name }}${{ matrix.ext }}.sha256"
           else
             chmod +x "dist/package/bin/${bin}"
             tar -C dist/package -czf "dist/orbit-${{ matrix.name }}.tar.gz" .
