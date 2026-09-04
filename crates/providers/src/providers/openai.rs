@@ -31,6 +31,10 @@ pub struct OpenAiCompatConfig {
     pub base_url_env: &'static str,
     pub default_base_url: &'static str,
     pub auth_scheme: AuthScheme,
+    /// True when `default_base_url` is only a template and the provider cannot
+    /// be reached without `base_url_env` being set (e.g. `Azure OpenAI`, whose
+    /// endpoint is per-resource).
+    pub requires_base_url: bool,
 }
 
 impl OpenAiCompatConfig {
@@ -48,6 +52,7 @@ impl OpenAiCompatConfig {
             base_url_env: "XAI_BASE_URL",
             default_base_url: "https://api.x.ai/v1",
             auth_scheme: AuthScheme::Bearer,
+            requires_base_url: false,
         }
     }
 }
@@ -67,6 +72,7 @@ pub const fn config() -> OpenAiCompatConfig {
         base_url_env: "OPENAI_BASE_URL",
         default_base_url: DEFAULT_BASE_URL,
         auth_scheme: AuthScheme::Bearer,
+        requires_base_url: false,
     }
 }
 
@@ -105,6 +111,12 @@ impl OpenAiCompatClient {
                 config.credential_env_vars,
             ));
         };
+        if config.requires_base_url && read_env_non_empty(config.base_url_env)?.is_none() {
+            return Err(ApiError::MissingBaseUrl {
+                provider: config.provider_name,
+                env_var: config.base_url_env,
+            });
+        }
         Ok(Self::new(api_key, config))
     }
 

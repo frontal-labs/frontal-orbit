@@ -23,6 +23,12 @@ pub enum ApiError {
         provider: &'static str,
         env_vars: &'static [&'static str],
     },
+    /// A provider with no usable default endpoint was selected without its base
+    /// URL being configured (`Azure OpenAI`, whose endpoint is per-resource).
+    MissingBaseUrl {
+        provider: &'static str,
+        env_var: &'static str,
+    },
     ContextWindowExceeded {
         model: String,
         estimated_input_tokens: u32,
@@ -71,6 +77,7 @@ impl ApiError {
             Self::Api { retryable, .. } => *retryable,
             Self::RetriesExhausted { last_error, .. } => last_error.is_retryable(),
             Self::MissingCredentials { .. }
+            | Self::MissingBaseUrl { .. }
             | Self::ContextWindowExceeded { .. }
             | Self::ExpiredOAuthToken
             | Self::Auth(_)
@@ -88,6 +95,7 @@ impl ApiError {
             Self::Api { request_id, .. } => request_id.as_deref(),
             Self::RetriesExhausted { last_error, .. } => last_error.request_id(),
             Self::MissingCredentials { .. }
+            | Self::MissingBaseUrl { .. }
             | Self::ContextWindowExceeded { .. }
             | Self::ExpiredOAuthToken
             | Self::Auth(_)
@@ -108,9 +116,10 @@ impl ApiError {
                 "provider_retry_exhausted"
             }
             Self::RetriesExhausted { last_error, .. } => last_error.safe_failure_class(),
-            Self::MissingCredentials { .. } | Self::ExpiredOAuthToken | Self::Auth(_) => {
-                "provider_auth"
-            }
+            Self::MissingCredentials { .. }
+            | Self::MissingBaseUrl { .. }
+            | Self::ExpiredOAuthToken
+            | Self::Auth(_) => "provider_auth",
             Self::Api { status, .. } if matches!(status.as_u16(), 401 | 403) => "provider_auth",
             Self::ContextWindowExceeded { .. } => "context_window",
             Self::Api { .. } if self.is_context_window_failure() => "context_window",
@@ -135,6 +144,7 @@ impl ApiError {
             }
             Self::RetriesExhausted { last_error, .. } => last_error.is_generic_fatal_wrapper(),
             Self::MissingCredentials { .. }
+            | Self::MissingBaseUrl { .. }
             | Self::ContextWindowExceeded { .. }
             | Self::ExpiredOAuthToken
             | Self::Auth(_)
@@ -165,6 +175,7 @@ impl ApiError {
             }
             Self::RetriesExhausted { last_error, .. } => last_error.is_context_window_failure(),
             Self::MissingCredentials { .. }
+            | Self::MissingBaseUrl { .. }
             | Self::ExpiredOAuthToken
             | Self::Auth(_)
             | Self::InvalidApiKeyEnv(_)
@@ -184,6 +195,10 @@ impl Display for ApiError {
                 f,
                 "missing {provider} credentials; export {} before calling the {provider} API",
                 env_vars.join(" or ")
+            ),
+            Self::MissingBaseUrl { provider, env_var } => write!(
+                f,
+                "missing {provider} endpoint; {provider} has no shared default URL, so export {env_var} with your resource's endpoint before calling it"
             ),
             Self::ContextWindowExceeded {
                 model,

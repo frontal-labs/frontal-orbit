@@ -12,5 +12,6 @@ pub const fn config() -> OpenAiCompatConfig {
         base_url_env: "BEDROCK_BASE_URL",
         default_base_url: DEFAULT_BASE_URL,
         auth_scheme: AuthScheme::Bearer,
+        requires_base_url: false,
     }
 }
