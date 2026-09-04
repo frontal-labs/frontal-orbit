@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned so that `cargo fmt --check` and `cargo clippy -- -D warnings` give the
+# same answer locally and in CI. Bump deliberately: a rustfmt change between
+# versions reformats the tree, and a new clippy lint can fail the build.
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
