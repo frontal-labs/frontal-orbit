@@ -9382,6 +9382,9 @@ mod tests {
 
     #[test]
     fn powershell_runs_via_mock_shell() {
+        // Mutates the process-global PATH to shadow `pwsh` with a mock, and
+        // powershell_errors_when_shell_is_missing does the same. Without the
+        // shared lock the two race and this one sees the other's PATH.
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
