@@ -168,9 +168,9 @@ pub fn resolve_model_alias(model: &str) -> String {
         .find_map(|(alias, metadata)| {
             (*alias == lower).then_some(match metadata.provider {
                 ProviderKind::Anthropic => match *alias {
-                    "opus" => "claude-opus-4-6",
-                    "sonnet" => "claude-sonnet-4-6",
-                    "haiku" => "claude-haiku-4-5-20251213",
+                    "opus" => "claude-opus-5",
+                    "sonnet" => "claude-sonnet-5",
+                    "haiku" => "claude-haiku-4-5",
                     _ => trimmed,
                 },
                 ProviderKind::Xai => match *alias {
@@ -318,11 +318,14 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
 pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
     let canonical = resolve_model_alias(model);
     match canonical.as_str() {
-        "claude-opus-4-6" => Some(ModelTokenLimit {
-            max_output_tokens: 32_000,
-            context_window_tokens: 200_000,
+        // The Claude 5 family and the 4.6/4.7/4.8 Opus and Sonnet tiers all ship
+        // a 1M-token context window and a 128K output ceiling.
+        "claude-opus-5" | "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6"
+        | "claude-sonnet-5" | "claude-sonnet-4-6" => Some(ModelTokenLimit {
+            max_output_tokens: 128_000,
+            context_window_tokens: 1_000_000,
         }),
-        "claude-sonnet-4-6" | "claude-haiku-4-5-20251213" => Some(ModelTokenLimit {
+        "claude-haiku-4-5" => Some(ModelTokenLimit {
             max_output_tokens: 64_000,
             context_window_tokens: 200_000,
         }),
@@ -412,7 +415,7 @@ mod tests {
 
     #[test]
     fn keeps_existing_max_token_heuristic() {
-        assert_eq!(max_tokens_for_model("opus"), 32_000);
+        assert_eq!(max_tokens_for_model("opus"), 128_000);
         assert_eq!(max_tokens_for_model("grok-3"), 64_000);
     }
 
@@ -421,6 +424,12 @@ mod tests {
         assert_eq!(
             model_token_limit("claude-sonnet-4-6")
                 .expect("claude-sonnet-4-6 should be registered")
+                .context_window_tokens,
+            1_000_000
+        );
+        assert_eq!(
+            model_token_limit("haiku")
+                .expect("haiku should resolve to a registered model")
                 .context_window_tokens,
             200_000
         );
@@ -440,7 +449,7 @@ mod tests {
             messages: vec![InputMessage {
                 role: "user".to_string(),
                 content: vec![InputContentBlock::Text {
-                    text: "x".repeat(600_000),
+                    text: "x".repeat(6_000_000),
                 }],
             }],
             system: Some("Keep the answer short.".to_string()),
@@ -468,10 +477,10 @@ mod tests {
                 context_window_tokens,
             } => {
                 assert_eq!(model, "claude-sonnet-4-6");
-                assert!(estimated_input_tokens > 136_000);
+                assert!(estimated_input_tokens > 1_000_000);
                 assert_eq!(requested_output_tokens, 64_000);
                 assert!(estimated_total_tokens > context_window_tokens);
-                assert_eq!(context_window_tokens, 200_000);
+                assert_eq!(context_window_tokens, 1_000_000);
             }
             other => panic!("expected context-window preflight failure, got {other:?}"),
         }
@@ -485,7 +494,7 @@ mod tests {
             messages: vec![InputMessage {
                 role: "user".to_string(),
                 content: vec![InputContentBlock::Text {
-                    text: "x".repeat(600_000),
+                    text: "x".repeat(6_000_000),
                 }],
             }],
             system: None,

@@ -47,7 +47,7 @@ async fn send_message_posts_json_and_parses_response() {
         "\"type\":\"message\",",
         "\"role\":\"assistant\",",
         "\"content\":[{\"type\":\"text\",\"text\":\"Hello from Claude\"}],",
-        "\"model\":\"claude-3-7-sonnet-latest\",",
+        "\"model\":\"claude-sonnet-4-5\",",
         "\"stop_reason\":\"end_turn\",",
         "\"stop_sequence\":null,",
         "\"usage\":{\"input_tokens\":12,\"output_tokens\":4},",
@@ -108,7 +108,7 @@ async fn send_message_posts_json_and_parses_response() {
         serde_json::from_str(&request.body).expect("request body should be json");
     assert_eq!(
         body.get("model").and_then(serde_json::Value::as_str),
-        Some("claude-3-7-sonnet-latest")
+        Some("claude-sonnet-4-5")
     );
     assert!(body.get("stream").is_none());
     assert_eq!(body["tools"][0]["name"], json!("get_weather"));
@@ -131,7 +131,7 @@ async fn send_message_blocks_oversized_requests_before_the_http_call() {
         vec![http_response(
             "200 OK",
             "application/json",
-            r#"{"input_tokens":250000}"#,
+            r#"{"input_tokens":1000000}"#,
         )],
     )
     .await;
@@ -183,7 +183,7 @@ async fn send_message_applies_request_profile_and_records_telemetry() {
                 "\"type\":\"message\",",
                 "\"role\":\"assistant\",",
                 "\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],",
-                "\"model\":\"claude-3-7-sonnet-latest\",",
+                "\"model\":\"claude-sonnet-4-5\",",
                 "\"stop_reason\":\"end_turn\",",
                 "\"stop_sequence\":null,",
                 "\"usage\":{\"input_tokens\":1,\"cache_creation_input_tokens\":2,\"cache_read_input_tokens\":3,\"output_tokens\":1}",
@@ -266,7 +266,7 @@ async fn send_message_applies_request_profile_and_records_telemetry() {
                 && event.action == "message_usage"
                 && event.properties.get("request_id") == Some(&json!("req_profile_123"))
                 && event.properties.get("total_tokens") == Some(&json!(7))
-                && event.properties.get("estimated_cost_usd") == Some(&json!("$0.0001"))
+                && event.properties.get("estimated_cost_usd") == Some(&json!("$0.0000"))
     ));
     assert!(matches!(
         &events[5],
@@ -287,7 +287,7 @@ async fn send_message_parses_prompt_cache_token_usage_from_response() {
         "\"type\":\"message\",",
         "\"role\":\"assistant\",",
         "\"content\":[{\"type\":\"text\",\"text\":\"Cache tokens\"}],",
-        "\"model\":\"claude-3-7-sonnet-latest\",",
+        "\"model\":\"claude-sonnet-4-5\",",
         "\"stop_reason\":\"end_turn\",",
         "\"stop_sequence\":null,",
         "\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":321,\"cache_read_input_tokens\":654,\"output_tokens\":4}",
@@ -331,7 +331,7 @@ async fn stream_message_parses_sse_events_with_tool_use() {
     let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
     let sse = concat!(
         "event: message_start\n",
-        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-3-7-sonnet-latest\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":8,\"cache_creation_input_tokens\":13,\"cache_read_input_tokens\":21,\"output_tokens\":0}}}\n\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-5\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":8,\"cache_creation_input_tokens\":13,\"cache_read_input_tokens\":21,\"output_tokens\":0}}}\n\n",
         "event: content_block_start\n",
         "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"get_weather\",\"input\":{}}}\n\n",
         "event: content_block_delta\n",
@@ -455,7 +455,7 @@ async fn retries_retryable_failures_before_succeeding() {
             http_response(
                 "200 OK",
                 "application/json",
-                "{\"id\":\"msg_retry\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Recovered\"}],\"model\":\"claude-3-7-sonnet-latest\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}",
+                "{\"id\":\"msg_retry\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Recovered\"}],\"model\":\"claude-sonnet-4-5\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}",
             ),
         ],
     )
@@ -486,7 +486,7 @@ async fn provider_client_dispatches_anthropic_requests() {
         vec![http_response(
             "200 OK",
             "application/json",
-            "{\"id\":\"msg_provider\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Dispatched\"}],\"model\":\"claude-3-7-sonnet-latest\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}",
+            "{\"id\":\"msg_provider\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Dispatched\"}],\"model\":\"claude-sonnet-4-5\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}",
         )],
     )
     .await;
@@ -595,7 +595,7 @@ async fn send_message_reuses_recent_completion_cache_entries() {
         vec![http_response(
             "200 OK",
             "application/json",
-            "{\"id\":\"msg_cached\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Cached once\"}],\"model\":\"claude-3-7-sonnet-latest\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":4000,\"output_tokens\":2}}",
+            "{\"id\":\"msg_cached\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Cached once\"}],\"model\":\"claude-sonnet-4-5\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":4000,\"output_tokens\":2}}",
         )],
     )
     .await;
@@ -652,12 +652,12 @@ async fn send_message_tracks_unexpected_prompt_cache_breaks() {
             http_response(
                 "200 OK",
                 "application/json",
-                "{\"id\":\"msg_one\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"One\"}],\"model\":\"claude-3-7-sonnet-latest\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":6000,\"output_tokens\":2}}",
+                "{\"id\":\"msg_one\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"One\"}],\"model\":\"claude-sonnet-4-5\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":6000,\"output_tokens\":2}}",
             ),
             http_response(
                 "200 OK",
                 "application/json",
-                "{\"id\":\"msg_two\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Two\"}],\"model\":\"claude-3-7-sonnet-latest\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":1000,\"output_tokens\":2}}",
+                "{\"id\":\"msg_two\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Two\"}],\"model\":\"claude-sonnet-4-5\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":1000,\"output_tokens\":2}}",
             ),
         ],
     )
@@ -707,8 +707,7 @@ async fn live_stream_smoke_test() {
     };
     let mut stream = client
         .stream_message(&MessageRequest {
-            model: std::env::var("ORBIT_MODEL")
-                .unwrap_or_else(|_| "claude-3-7-sonnet-latest".to_string()),
+            model: std::env::var("ORBIT_MODEL").unwrap_or_else(|_| "claude-sonnet-4-5".to_string()),
             max_tokens: 32,
             messages: vec![InputMessage::user_text(
                 "Reply with exactly: hello from rust",
@@ -868,7 +867,7 @@ fn http_response_with_headers(
 
 fn sample_request(stream: bool) -> MessageRequest {
     MessageRequest {
-        model: "claude-3-7-sonnet-latest".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
         max_tokens: 64,
         messages: vec![InputMessage {
             role: "user".to_string(),
